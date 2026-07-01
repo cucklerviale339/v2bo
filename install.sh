@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_REPO_URL="${FOREST_REPO_URL:-https://github.com/jiasu9527/v2b-private.git}"
+DEFAULT_REPO_URL="${FOREST_REPO_URL:-https://github.com/cucklerviale339/v2bo.git}"
 DEFAULT_BRANCH="${FOREST_BRANCH:-master}"
 
 normalize_yes_no_answer() {

@@ -59,7 +59,7 @@ func TestV2nodeInstallCommandUsesRepoDefaultInstaller(t *testing.T) {
 	if strings.Contains(command, "your-node-installer.example") {
 		t.Fatalf("expected default installer placeholder to be removed, got %q", command)
 	}
-	if strings.Contains(command, "jiasu9527/v2b-private") {
+	if strings.Contains(command, "cucklerviale339/v2bo") {
 		t.Fatalf("expected node install command to avoid panel repo, got %q", command)
 	}
 	if !strings.HasPrefix(command, "wget -N https://raw.githubusercontent.com/jiasu9527/v2node/main/script/install.sh && bash install.sh") {

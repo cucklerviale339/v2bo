@@ -24,13 +24,13 @@
 ## 一行命令安装
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh | bash
 ```
 
 如果你的仓库后来又改回私有，GitHub raw 会返回 `404`，那就改用 `git clone` 安装。

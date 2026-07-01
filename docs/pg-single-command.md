@@ -3,8 +3,8 @@
 This repository now uses a unified Go runtime entrypoint:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
-wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh)
+wget -qO- https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh | bash
 ./menu.sh
 ./scripts/appctl install-link
 forest
@@ -52,19 +52,19 @@ Fast path:
 - While the repository is still private, use the clone flow below instead
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh)
 ```
 
 Or:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh | bash
 ```
 
 Private GitHub repo flow:
 
 ```bash
-git clone https://github.com/jiasu9527/v2b-private.git forest
+git clone https://github.com/cucklerviale339/v2bo.git forest
 cd forest
 bash install.sh
 ```
