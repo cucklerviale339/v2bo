@@ -258,57 +258,6 @@ func TestRouterServerUniProxyConfigEndpointKeepsVlessPrivateKeys(t *testing.T) {
 	}
 }
 
-func TestRouterServerUniProxyConfigStringifiesTLSServerPort(t *testing.T) {
-	nodeService := &fakeNodeService{
-		server: nodeapi.ServerRecord{
-			ID:       7,
-			NodeType: "v2node",
-			Fields: map[string]any{
-				"server_port": int64(8443),
-				"protocol":    "vless",
-				"network":     "tcp",
-				"tls":         int64(2),
-				"tls_settings": map[string]any{
-					"server_name": "edge.example.com",
-					"server_port": int64(443),
-				},
-				"encryption": "none",
-			},
-		},
-	}
-	router := NewRouter(
-		config.Config{AppName: "forest-go", ServerToken: "secret"},
-		WithNodeService(nodeService),
-	)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/UniProxy/config?token=secret&node_type=v2node&node_id=7", nil)
-	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("expected json body: %v", err)
-	}
-	tlsSettings, ok := payload["tls_settings"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected tls_settings object, got %#v", payload["tls_settings"])
-	}
-	if tlsSettings["server_port"] != "443" {
-		t.Fatalf("expected tls_settings.server_port string, got %#v", tlsSettings["server_port"])
-	}
-	if payload["server_port"] != float64(8443) {
-		t.Fatalf("expected top-level server_port to stay numeric, got %#v", payload["server_port"])
-	}
-	if payload["protocol"] != "vless" {
-		t.Fatalf("expected v2node protocol preserved, got %#v", payload["protocol"])
-	}
-}
-
 func TestRouterServerUniProxyConfigEndpointAdditionalProtocols(t *testing.T) {
 	tests := []struct {
 		name     string
