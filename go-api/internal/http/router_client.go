@@ -570,7 +570,7 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		"network_settings":        fieldMap(server, "network_settings"),
 		"protocol":                protocol,
 		"tls":                     fieldInt64(server, "tls"),
-		"tls_settings":            stringifyTLSServerPort(fieldMap(server, "tls_settings")),
+		"tls_settings":            normalizeV2TLSettings(fieldMap(server, "tls_settings")),
 		"encryption":              fieldString(server, "encryption"),
 		"encryption_settings":     fieldMap(server, "encryption_settings"),
 		"flow":                    fieldString(server, "flow"),
@@ -633,15 +633,15 @@ func defaultInt64(value, fallback int64) int64 {
 	return value
 }
 
-func stringifyTLSServerPort(values map[string]any) map[string]any {
+func normalizeV2TLSettings(values map[string]any) map[string]any {
 	if len(values) == 0 {
 		return values
 	}
-	value, ok := values["server_port"]
-	if !ok || value == nil {
-		return values
-	}
 	next := cloneMap(values)
-	next["server_port"] = strings.TrimSpace(fmt.Sprint(value))
+	for _, key := range []string{"server_port", "xver"} {
+		if value, ok := next[key]; ok && value != nil {
+			next[key] = strings.TrimSpace(fmt.Sprint(value))
+		}
+	}
 	return next
 }

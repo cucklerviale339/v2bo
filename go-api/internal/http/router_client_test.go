@@ -1805,6 +1805,7 @@ func TestRouterServerV2ConfigEndpointStringifiesTLSServerPort(t *testing.T) {
 				"tls_settings": map[string]any{
 					"server_name": "buylite.music.apple.com",
 					"server_port": int64(443),
+					"xver":        int64(0),
 				},
 			},
 		},
@@ -1832,6 +1833,9 @@ func TestRouterServerV2ConfigEndpointStringifiesTLSServerPort(t *testing.T) {
 	}
 	if tlsSettings["server_port"] != "443" {
 		t.Fatalf("expected tls_settings.server_port string, got %#v", tlsSettings["server_port"])
+	}
+	if tlsSettings["xver"] != "0" {
+		t.Fatalf("expected tls_settings.xver string, got %#v", tlsSettings["xver"])
 	}
 	if payload["server_port"] != float64(23130) {
 		t.Fatalf("expected top-level server_port to stay numeric, got %#v", payload["server_port"])
