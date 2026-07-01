@@ -140,6 +140,41 @@ func TestLoadAdminJSONFallbacksFromProjectRootWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadAdminJSONPrefersProjectRootWhenRunningFromGoAPI(t *testing.T) {
+	dir := t.TempDir()
+	rootConfig := filepath.Join(dir, "config")
+	goAPIConfig := filepath.Join(dir, "go-api", "config")
+	if err := os.MkdirAll(rootConfig, 0o755); err != nil {
+		t.Fatalf("mkdir root config: %v", err)
+	}
+	if err := os.MkdirAll(goAPIConfig, 0o755); err != nil {
+		t.Fatalf("mkdir go-api config: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(rootConfig, "admin.json"), []byte(`{"secure_path":"rootadmin"}`), 0o644); err != nil {
+		t.Fatalf("write root admin json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(goAPIConfig, "admin.json"), []byte(`{"secure_path":"nestedadmin"}`), 0o644); err != nil {
+		t.Fatalf("write nested admin json: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(filepath.Join(dir, "go-api")); err != nil {
+		t.Fatalf("chdir go-api: %v", err)
+	}
+
+	cfg := Load()
+	if cfg.AdminPath != "rootadmin" {
+		t.Fatalf("expected project-root config to win, got %q", cfg.AdminPath)
+	}
+}
+
 func TestResolveLegacyPHPConfigPathAutoDetectsGenericPHPFile(t *testing.T) {
 	dir := t.TempDir()
 	configRoot := filepath.Join(dir, "config")

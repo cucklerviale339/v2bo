@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1400,11 +1399,21 @@ func smtpContentType(body string) string {
 }
 
 func detectPassportProjectRoot() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "."
+	adminConfig := config.ResolveProjectConfigPath("admin.json")
+	if strings.TrimSpace(adminConfig) != "" {
+		return filepath.Dir(filepath.Dir(adminConfig))
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	legacyConfig := config.ResolveLegacyPHPConfigPath()
+	if strings.TrimSpace(legacyConfig) != "" {
+		return filepath.Dir(filepath.Dir(legacyConfig))
+	}
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		if filepath.Base(cwd) == "go-api" {
+			return filepath.Clean(filepath.Join(cwd, ".."))
+		}
+		return filepath.Clean(cwd)
+	}
+	return "."
 }
 
 func loadPassportAdminJSONValues() (map[string]any, error) {
