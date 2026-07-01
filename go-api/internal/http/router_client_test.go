@@ -1791,6 +1791,53 @@ func TestRouterServerV2ConfigEndpointKeepsPrivateKeys(t *testing.T) {
 	}
 }
 
+func TestRouterServerV2ConfigEndpointStringifiesTLSServerPort(t *testing.T) {
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       9,
+			NodeType: "v2node",
+			Fields: map[string]any{
+				"listen_ip":   "0.0.0.0",
+				"server_port": int64(23130),
+				"network":     "tcp",
+				"protocol":    "anytls",
+				"tls":         int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "buylite.music.apple.com",
+					"server_port": int64(443),
+				},
+			},
+		},
+	}
+	cfg := config.Load()
+	cfg.ServerToken = "secret"
+	router := NewRouter(cfg, WithNodeService(nodeService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=secret&node_id=9&node_type=v2node", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	tlsSettings, ok := payload["tls_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tls_settings object, got %#v", payload["tls_settings"])
+	}
+	if tlsSettings["server_port"] != "443" {
+		t.Fatalf("expected tls_settings.server_port string, got %#v", tlsSettings["server_port"])
+	}
+	if payload["server_port"] != float64(23130) {
+		t.Fatalf("expected top-level server_port to stay numeric, got %#v", payload["server_port"])
+	}
+}
+
 func TestRouterServerV2ConfigEndpointMissingTokenKeepsLegacyFailureShape(t *testing.T) {
 	router := NewRouter(config.Config{AppName: "forest-go"}, WithNodeService(&fakeNodeService{}))
 
