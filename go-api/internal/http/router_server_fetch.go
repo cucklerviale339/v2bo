@@ -309,7 +309,7 @@ func lookupNodeServer(w http.ResponseWriter, r *http.Request, cfg config.Config,
 
 func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes []map[string]any) map[string]any {
 	payload := map[string]any{}
-	switch server.NodeType {
+	switch uniProxyConfigProtocol(server) {
 	case "shadowsocks":
 		payload["server_port"] = fieldInt64(server, "server_port")
 		payload["cipher"] = fieldString(server, "cipher")
@@ -333,7 +333,7 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		payload["networkSettings"] = fieldMap(server, "network_settings")
 		payload["tls"] = fieldInt64(server, "tls")
 		payload["flow"] = fieldString(server, "flow")
-		payload["tls_settings"] = fieldMap(server, "tls_settings")
+		payload["tls_settings"] = normalizeNodeTLSSettings(fieldMap(server, "tls_settings"))
 		payload["encryption"] = fieldString(server, "encryption")
 		payload["encryption_settings"] = fieldMap(server, "encryption_settings")
 	case "trojan":
@@ -367,6 +367,21 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		payload["server_name"] = fieldString(server, "server_name")
 		payload["padding_scheme"] = server.Fields["padding_scheme"]
 	}
+	if server.NodeType == "v2node" {
+		payload["protocol"] = fieldString(server, "protocol")
+		payload["listen_ip"] = fieldString(server, "listen_ip")
+		payload["send_through"] = fieldString(server, "send_through")
+		payload["disable_sni"] = fieldBool(server, "disable_sni")
+		payload["udp_relay_mode"] = fieldString(server, "udp_relay_mode")
+		payload["zero_rtt_handshake"] = fieldBool(server, "zero_rtt_handshake")
+		payload["congestion_control"] = fieldString(server, "congestion_control")
+		payload["cipher"] = fieldString(server, "cipher")
+		payload["padding_scheme"] = server.Fields["padding_scheme"]
+		payload["ddns_settings"] = fieldMap(server, "ddns_settings")
+		if tlsSettings := fieldMap(server, "tls_settings"); len(tlsSettings) > 0 {
+			payload["tls_settings"] = normalizeNodeTLSSettings(tlsSettings)
+		}
+	}
 
 	pushInterval := cfg.ServerPushInterval
 	if pushInterval <= 0 {
@@ -385,6 +400,20 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		payload["routes"] = routes
 	}
 	return payload
+}
+
+func uniProxyConfigProtocol(server nodeapi.ServerRecord) string {
+	if server.NodeType != "v2node" {
+		return server.NodeType
+	}
+	protocol := strings.ToLower(strings.TrimSpace(fieldString(server, "protocol")))
+	if protocol == "" {
+		return "vless"
+	}
+	if protocol == "hysteria2" {
+		return "hysteria"
+	}
+	return protocol
 }
 
 func buildSensitiveAuditConfig(cfg config.Config) map[string]any {
@@ -777,6 +806,17 @@ func fieldMapValue(values map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func normalizeNodeTLSSettings(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return values
+	}
+	normalized := cloneMap(values)
+	if value, ok := normalized["server_port"]; ok && value != nil {
+		normalized["server_port"] = strings.TrimSpace(fmt.Sprint(value))
+	}
+	return normalized
 }
 
 func mapValueInt64(value any) int64 {
