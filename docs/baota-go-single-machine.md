@@ -28,13 +28,13 @@
 最省事的方式是一行命令直接拉起安装：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh | bash
 ```
 
 脚本会自动安装全局 `forest` 命令，后续就不需要再进入站点目录。

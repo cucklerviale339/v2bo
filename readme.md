@@ -18,13 +18,13 @@
 在线一键安装:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/cucklerviale339/v2bo/master/install.sh | bash
 ```
 
 本地仓库安装:
