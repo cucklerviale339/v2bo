@@ -424,15 +424,26 @@ func projectConfigCandidates(fileName string) []string {
 	}
 
 	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
-		add(filepath.Join(cwd, "config", fileName))
-		add(filepath.Join(cwd, "..", "config", fileName))
+		if filepath.Base(cwd) == "go-api" {
+			add(filepath.Join(cwd, "..", "config", fileName))
+			add(filepath.Join(cwd, "config", fileName))
+		} else {
+			add(filepath.Join(cwd, "config", fileName))
+			add(filepath.Join(cwd, "..", "config", fileName))
+		}
 	}
 
 	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
 		exeDir := filepath.Dir(exePath)
-		add(filepath.Join(exeDir, "config", fileName))
-		add(filepath.Join(exeDir, "..", "config", fileName))
-		add(filepath.Join(exeDir, "..", "..", "config", fileName))
+		if filepath.Base(filepath.Dir(exeDir)) == "go-api" {
+			add(filepath.Join(exeDir, "..", "..", "config", fileName))
+			add(filepath.Join(exeDir, "..", "config", fileName))
+			add(filepath.Join(exeDir, "config", fileName))
+		} else {
+			add(filepath.Join(exeDir, "config", fileName))
+			add(filepath.Join(exeDir, "..", "config", fileName))
+			add(filepath.Join(exeDir, "..", "..", "config", fileName))
+		}
 	}
 
 	add(filepath.Join("config", fileName))
