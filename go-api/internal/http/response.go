@@ -7,12 +7,15 @@ import (
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
+	disableResponseCache(w)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(localizeResponsePayload(status, payload))
 }
 
 func disableResponseCache(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Cache-Control", "no-store, no-cache, private, must-revalidate, max-age=0")
+	w.Header().Set("CDN-Cache-Control", "no-store")
+	w.Header().Set("Surrogate-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 }

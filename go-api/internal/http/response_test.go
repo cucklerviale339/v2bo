@@ -106,3 +106,25 @@ func TestRenderHTMLLocalizesTemplateExecutionError(t *testing.T) {
 		t.Fatalf("expected localized html error body, got %q", rec.Body.String())
 	}
 }
+
+func TestWriteJSONDisablesResponseCache(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	writeJSON(rec, http.StatusOK, map[string]any{"data": true})
+
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+		t.Fatalf("expected no-store cache control, got %q", rec.Header().Get("Cache-Control"))
+	}
+	if rec.Header().Get("CDN-Cache-Control") != "no-store" {
+		t.Fatalf("expected CDN cache to be disabled, got %q", rec.Header().Get("CDN-Cache-Control"))
+	}
+	if rec.Header().Get("Surrogate-Control") != "no-store" {
+		t.Fatalf("expected surrogate cache to be disabled, got %q", rec.Header().Get("Surrogate-Control"))
+	}
+	if rec.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("expected Pragma no-cache, got %q", rec.Header().Get("Pragma"))
+	}
+	if rec.Header().Get("Expires") != "0" {
+		t.Fatalf("expected Expires 0, got %q", rec.Header().Get("Expires"))
+	}
+}

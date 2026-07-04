@@ -33,6 +33,32 @@ func TestWithMiddlewareDisablesAccessLogByDefault(t *testing.T) {
 	}
 }
 
+func TestWithMiddlewareDisablesCacheForAPIRoutes(t *testing.T) {
+	handler := withMiddleware(config.Config{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/info", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+		t.Fatalf("expected API response to disable cache, got %q", rec.Header().Get("Cache-Control"))
+	}
+	if rec.Header().Get("CDN-Cache-Control") != "no-store" {
+		t.Fatalf("expected CDN cache to be disabled, got %q", rec.Header().Get("CDN-Cache-Control"))
+	}
+	if rec.Header().Get("Surrogate-Control") != "no-store" {
+		t.Fatalf("expected surrogate cache to be disabled, got %q", rec.Header().Get("Surrogate-Control"))
+	}
+	if rec.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("expected Pragma no-cache, got %q", rec.Header().Get("Pragma"))
+	}
+	if rec.Header().Get("Expires") != "0" {
+		t.Fatalf("expected Expires 0, got %q", rec.Header().Get("Expires"))
+	}
+}
+
 func TestWithMiddlewareLogsSlowRequests(t *testing.T) {
 	var buf bytes.Buffer
 	restore := swapLoggerOutput(&buf)

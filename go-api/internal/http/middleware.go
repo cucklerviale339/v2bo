@@ -4,13 +4,23 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"forest/go-api/internal/config"
 )
 
 func withMiddleware(cfg config.Config, next http.Handler) http.Handler {
-	return recoverMiddleware(requestLoggingMiddleware(cfg, next))
+	return recoverMiddleware(noStoreAPIMiddleware(requestLoggingMiddleware(cfg, next)))
+}
+
+func noStoreAPIMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			disableResponseCache(w)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requestLoggingMiddleware(cfg config.Config, next http.Handler) http.Handler {
