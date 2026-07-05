@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
@@ -801,8 +802,18 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		if err := validateOptionalURL(value, "LOGO URL格式不正确，必须携带https(s)://"); err != nil {
 			return err
 		}
+		if err := validatePublicURLHost(value, "LOGO URL域名不正确"); err != nil {
+			return err
+		}
 	case "app_url":
 		if err := validateOptionalURL(value, "站点URL格式不正确，必须携带http(s)://"); err != nil {
+			return err
+		}
+		if err := validatePublicURLHost(value, "站点URL域名不正确"); err != nil {
+			return err
+		}
+	case "subscribe_url":
+		if err := validateOptionalMultiURLHost(value, "订阅URL域名不正确"); err != nil {
 			return err
 		}
 	case "tos_url":
@@ -816,6 +827,14 @@ func validateConfigValue(key string, value phpConfigValue) error {
 	case "telegram_discuss_link":
 		if err := validateOptionalURL(value, "Telegram群组地址必须为URL格式，必须携带http(s)://"); err != nil {
 			return err
+		}
+	case "app_name":
+		if raw := strings.TrimSpace(valueToString(value)); raw != "" && isPlaceholderScalar(raw) {
+			return errors.New("站点名称不能保存为占位数字")
+		}
+	case "app_description":
+		if raw := strings.TrimSpace(valueToString(value)); raw != "" && isPlaceholderScalar(raw) {
+			return errors.New("站点描述不能保存为占位数字")
 		}
 	case "subscribe_path":
 		if raw := strings.TrimSpace(valueToString(value)); raw != "" && !strings.HasPrefix(raw, "/") {
@@ -946,6 +965,56 @@ func validateOptionalURL(value phpConfigValue, message string) error {
 		return errors.New(message)
 	}
 	return nil
+}
+
+func validateOptionalMultiURLHost(value phpConfigValue, message string) error {
+	for _, raw := range strings.Split(valueToString(value), ",") {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		if err := validatePublicURLHost(phpConfigValue{kind: phpConfigScalar, scalar: item}, message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePublicURLHost(value phpConfigValue, message string) error {
+	raw := strings.TrimSpace(valueToString(value))
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New(message)
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), ".")
+	if host == "" || isPlaceholderScalar(host) {
+		return errors.New(message)
+	}
+	if net.ParseIP(host) != nil || host == "localhost" {
+		return nil
+	}
+	if !strings.Contains(host, ".") {
+		return errors.New(message)
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return errors.New(message)
+		}
+	}
+	return nil
+}
+
+func isPlaceholderScalar(raw string) bool {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(value, 64)
+	return err == nil
 }
 
 func (f *phpConfigFile) stringValue(key, fallback string) string {

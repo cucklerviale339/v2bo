@@ -318,6 +318,52 @@ func TestDBServiceSaveConfigKeepsExistingSensitiveValueWhenSubmittedEmpty(t *tes
 	}
 }
 
+func TestDBServiceSaveConfigRejectsPlaceholderSiteValues(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"app_name":      "破晓",
+		"app_url":       "https://xn--1jvw11b.com",
+		"logo":          "https://new.mao2api.com/assets/brand/logo-poxiao.png",
+		"subscribe_url": "https://guangmingyinpin.poxiao888.com",
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{AdminPath: "localadmin"}}
+	badCases := []map[string]any{
+		{"app_name": "1"},
+		{"app_description": "1"},
+		{"app_url": "https://1"},
+		{"logo": "https://1"},
+		{"subscribe_url": "https://1"},
+	}
+	for _, values := range badCases {
+		if _, err := service.SaveConfig(context.Background(), values); err == nil {
+			t.Fatalf("expected placeholder config rejected for %#v", values)
+		}
+	}
+
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if cfg.stringValue("app_name", "") != "破晓" {
+		t.Fatalf("expected app_name preserved, got %q", cfg.stringValue("app_name", ""))
+	}
+	if cfg.stringValue("app_url", "") != "https://xn--1jvw11b.com" {
+		t.Fatalf("expected app_url preserved, got %q", cfg.stringValue("app_url", ""))
+	}
+	if _, err := service.SaveConfig(context.Background(), map[string]any{
+		"app_url":       "https://poxiao688.com",
+		"logo":          "https://new.mao2api.com/assets/brand/logo-poxiao.png",
+		"subscribe_url": "https://guangmingyinpin.poxiao888.com,https://poxiao688.com",
+	}); err != nil {
+		t.Fatalf("expected valid site urls accepted: %v", err)
+	}
+}
+
 func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{

@@ -291,11 +291,32 @@ function normalizeConfig(values: any) {
   return out;
 }
 
+function normalizedEqual(left: any, right: any) {
+  const normalize = (value: any) => {
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    if (typeof value === 'string' && value.includes('\n')) return value.split('\n').map((item) => item.trim()).filter(Boolean);
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    return value ?? '';
+  };
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
 function valuesForGroup(values: any, groupKey: string) {
   const allowed = new Set(fieldOrders[groupKey] || []);
   const out: any = {};
   Object.entries(values || {}).forEach(([key, value]) => {
     if (allowed.has(key)) out[key] = value;
+  });
+  return out;
+}
+
+function changedValuesForGroup(values: any, source: any, groupKey: string) {
+  const groupValues = valuesForGroup(values, groupKey);
+  const original = source?.[groupKey] || {};
+  const out: any = {};
+  Object.entries(groupValues).forEach(([key, value]) => {
+    if (!normalizedEqual(value, original[key])) out[key] = value;
   });
   return out;
 }
@@ -355,7 +376,11 @@ export default function ConfigPage() {
   const save = async () => {
     setSaving(true);
     try {
-      const values = normalizeConfig(valuesForGroup(form.getFieldsValue(), activeGroup));
+      const values = normalizeConfig(changedValuesForGroup(form.getFieldsValue(), data, activeGroup));
+      if (Object.keys(values).length === 0) {
+        message.info('没有需要保存的变更');
+        return;
+      }
       const previousPath = String(data?.safe?.secure_path || data?.secure_path || '').replace(/^\/+|\/+$/g, '');
       const nextPath = String(values.secure_path || '').replace(/^\/+|\/+$/g, '');
       await apiPost('/config/save', values);
@@ -384,11 +409,13 @@ export default function ConfigPage() {
         if (!res.ok) throw new Error(payload?.message || '检测失败');
         message.success(`机器人正常：@${payload?.data?.username || payload?.username || 'unknown'}`);
       } else if (action === 'webhook') {
-        const values = valuesForGroup(form.getFieldsValue(), 'telegram');
-        await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
+        const values = changedValuesForGroup(form.getFieldsValue(), data, 'telegram');
+        if (Object.keys(values).length > 0) {
+          await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
+        }
         await apiPost('/config/setTelegramWebhook', {
           telegram_bot_token: token,
-          telegram_webhook_url: values.telegram_webhook_url,
+          telegram_webhook_url: form.getFieldValue('telegram_webhook_url'),
         }, { form: true, keepEmpty: true });
         message.success('Telegram 配置已保存，Webhook 设置成功');
         await load();
