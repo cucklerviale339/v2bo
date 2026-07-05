@@ -112,7 +112,7 @@ func TestWriteJSONDisablesResponseCache(t *testing.T) {
 
 	writeJSON(rec, http.StatusOK, map[string]any{"data": true})
 
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected no-store cache control, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if rec.Header().Get("CDN-Cache-Control") != "no-store" {

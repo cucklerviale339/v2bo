@@ -85,6 +85,7 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 		template:            strings.TrimSpace(valueToString(cfg.values["email_template"])),
 		appName:             strings.TrimSpace(valueToString(cfg.values["app_name"])),
 		appURL:              strings.TrimSpace(valueToString(cfg.values["app_url"])),
+		logo:                strings.TrimSpace(valueToString(cfg.values["logo"])),
 		bulkIntervalSeconds: cfg.int64Value("email_bulk_interval", 0),
 	}
 
@@ -120,6 +121,9 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 	}
 	if mailConfig.appURL == "" {
 		mailConfig.appURL = strings.TrimSpace(runtimeCfg.AppURL)
+	}
+	if mailConfig.logo == "" {
+		mailConfig.logo = strings.TrimSpace(runtimeCfg.Logo)
 	}
 	if mailConfig.template == "" {
 		mailConfig.template = "default"

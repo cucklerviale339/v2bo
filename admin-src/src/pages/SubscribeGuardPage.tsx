@@ -130,11 +130,15 @@ function textToArray(value: any) {
     .filter(Boolean);
 }
 
+function switchChecked(value: any) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
 function normalizeValues(values: any) {
   const next: any = {};
   Object.entries(values).forEach(([key, value]) => {
     if (textListFields.includes(key)) next[key] = textToArray(value);
-    else if (switchFields.includes(key)) next[key] = value ? 1 : 0;
+    else if (switchFields.includes(key)) next[key] = switchChecked(value) ? 1 : 0;
     else next[key] = value ?? 0;
   });
   return next;
@@ -193,7 +197,9 @@ export default function SubscribeGuardPage() {
       const data = unwrapData(res)?.subscribe_guard || {};
       const values: any = {};
       Object.entries(data).forEach(([key, value]) => {
-        values[key] = textListFields.includes(key) ? arrayToText(value) : value;
+        if (textListFields.includes(key)) values[key] = arrayToText(value);
+        else if (switchFields.includes(key)) values[key] = switchChecked(value);
+        else values[key] = value;
       });
       form.setFieldsValue(values);
     } catch (e: any) {

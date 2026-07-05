@@ -232,6 +232,12 @@ func TestSendSMTPUsesSSLEncryption(t *testing.T) {
 	if !strings.Contains(server.Message(), "Subject: SSL Subject") {
 		t.Fatalf("expected ssl message subject, got %q", server.Message())
 	}
+	if !strings.Contains(server.Message(), "Date: ") {
+		t.Fatalf("expected ssl message date header, got %q", server.Message())
+	}
+	if !strings.Contains(server.Message(), "Message-ID: <") || !strings.Contains(server.Message(), "@example.com>") {
+		t.Fatalf("expected ssl message id header with sender domain, got %q", server.Message())
+	}
 }
 
 func TestSendSMTPAllowsLegacyPlainAuthWithoutTLS(t *testing.T) {

@@ -34,14 +34,11 @@ func buildShadowrocketDoHModule(cfg config.Config) string {
 	if appName == "" {
 		appName = "Forest"
 	}
-	const dohServer = "https://38.207.164.191:8080/dns-query"
 	return strings.Join([]string{
 		"#!name=" + appName + " DoH Module",
-		"#!desc=Shadowrocket has no node-only DNS override, so apt-hcloud.dev uses global Host DoH.",
+		"#!desc=Private DoH override is disabled.",
 		"",
 		"[Host]",
-		"apt-hcloud.dev = server:" + dohServer,
-		"*.apt-hcloud.dev = server:" + dohServer,
 		"",
 	}, "\n")
 }
@@ -542,9 +539,6 @@ func buildSingBoxOutbound(userUUID string, server map[string]any) (map[string]an
 }
 
 func singBoxNodeDomainResolver(server map[string]any) string {
-	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(serverString(server, "host"))), ".apt-hcloud.dev") || strings.EqualFold(strings.TrimSpace(serverString(server, "host")), "apt-hcloud.dev") {
-		return "apt-hcloud-doh"
-	}
 	return "local"
 }
 

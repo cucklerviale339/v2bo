@@ -1186,6 +1186,21 @@ func (s *DBService) sendEmailBestEffort(ctx context.Context, email, subject, tem
 	runJob := func(jobCtx context.Context) error {
 		sendBody := body
 		settings := s.runtimeMailSettings()
+		if templateValues == nil {
+			templateValues = map[string]string{}
+		}
+		if _, ok := templateValues["name"]; !ok {
+			templateValues["name"] = settings.AppName
+		}
+		if _, ok := templateValues["url"]; !ok {
+			templateValues["url"] = settings.AppURL
+		}
+		if _, ok := templateValues["logo"]; !ok {
+			templateValues["logo"] = settings.Logo
+		}
+		if _, ok := templateValues["content"]; !ok {
+			templateValues["content"] = body
+		}
 		if rendered, htmlBody, err := mailtmpl.Render(passportProjectRoot, settings.Template, templateName, templateValues); err == nil {
 			sendBody = rendered
 			if htmlBody {
@@ -1233,6 +1248,8 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	msg.WriteString(fmt.Sprintf("From: %s\r\n", headerFrom))
 	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	msg.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
+	msg.WriteString(fmt.Sprintf("Message-ID: <%s>\r\n", newSMTPMessageID(from)))
 	msg.WriteString("MIME-Version: 1.0\r\n")
 	msg.WriteString("Content-Type: " + smtpContentType(body) + "\r\n")
 	msg.WriteString("\r\n")
@@ -1283,6 +1300,24 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg.String()))
 }
 
+func newSMTPMessageID(from string) string {
+	domain := "localhost"
+	if address, err := mail.ParseAddress(from); err == nil {
+		if _, host, ok := strings.Cut(address.Address, "@"); ok && strings.TrimSpace(host) != "" {
+			domain = strings.TrimSpace(host)
+		}
+	} else if _, host, ok := strings.Cut(strings.TrimSpace(from), "@"); ok && strings.TrimSpace(host) != "" {
+		domain = strings.TrimSpace(host)
+	}
+
+	random := make([]byte, 16)
+	if _, err := crand.Read(random); err != nil {
+		fallback := md5.Sum([]byte(fmt.Sprintf("%d:%s", time.Now().UnixNano(), domain)))
+		return fmt.Sprintf("%s@%s", hex.EncodeToString(fallback[:]), domain)
+	}
+	return fmt.Sprintf("%s@%s", hex.EncodeToString(random), domain)
+}
+
 func (s *DBService) smtpSender() func(to, subject, body string) error {
 	if s.mailSender != nil {
 		return s.mailSender
@@ -1313,6 +1348,7 @@ type runtimeMailSettings struct {
 	Template   string
 	AppName    string
 	AppURL     string
+	Logo       string
 }
 
 func (s *DBService) runtimeMailSettings() runtimeMailSettings {
@@ -1332,6 +1368,7 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		Template:   template,
 		AppName:    strings.TrimSpace(cfg.AppName),
 		AppURL:     strings.TrimSpace(cfg.AppURL),
+		Logo:       strings.TrimSpace(cfg.Logo),
 	}
 
 	if values, err := loadPassportAdminJSONValues(); err == nil {
@@ -1364,6 +1401,9 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		}
 		if appURL := strings.TrimSpace(passportStringValue(values["app_url"])); appURL != "" {
 			settings.AppURL = appURL
+		}
+		if logo := strings.TrimSpace(passportStringValue(values["logo"])); logo != "" {
+			settings.Logo = logo
 		}
 	}
 

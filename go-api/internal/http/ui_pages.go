@@ -128,6 +128,7 @@ func loadUISiteSettings(cfg config.Config) uiSiteSettings {
 
 func renderHTML(w http.ResponseWriter, tmpl *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	disableResponseCache(w)
 	if err := tmpl.Execute(w, data); err != nil {
 		writePlainText(w, http.StatusInternalServerError, err.Error())
 	}

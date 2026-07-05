@@ -17,6 +17,9 @@ func renderAdminMailBody(cfg bulkMailConfig, templateName, fallbackBody string, 
 	if _, ok := values["url"]; !ok {
 		values["url"] = cfg.appURL
 	}
+	if _, ok := values["logo"]; !ok {
+		values["logo"] = cfg.logo
+	}
 	if _, ok := values["content"]; !ok {
 		values["content"] = fallbackBody
 	}

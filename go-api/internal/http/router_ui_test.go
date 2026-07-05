@@ -81,6 +81,9 @@ func TestRouterServesAdminShellAndCatchAll(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 for %s, got %d", path, rec.Code)
 		}
+		if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
+			t.Fatalf("expected admin shell to disable cache, got %q", rec.Header().Get("Cache-Control"))
+		}
 		body := rec.Body.String()
 		for _, needle := range []string{
 			`/assets/admin-new/admin.js`,
@@ -92,6 +95,30 @@ func TestRouterServesAdminShellAndCatchAll(t *testing.T) {
 				t.Fatalf("expected admin shell for %s to contain %q, body=%s", path, needle, body)
 			}
 		}
+	}
+}
+
+func TestRouterDisablesCacheForAdminNewAssets(t *testing.T) {
+	root := t.TempDir()
+	writeUIFixture(t, root)
+
+	router := NewRouter(config.Config{
+		AdminPath: "localadmin",
+		PublicDir: filepath.Join(root, "public"),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/admin-new/admin.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected admin asset 200, got %d", rec.Code)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
+		t.Fatalf("expected admin asset to disable cache, got %q", rec.Header().Get("Cache-Control"))
+	}
+	if rec.Header().Get("CDN-Cache-Control") != "no-store" {
+		t.Fatalf("expected CDN cache disabled for admin asset, got %q", rec.Header().Get("CDN-Cache-Control"))
 	}
 }
 

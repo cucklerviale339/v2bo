@@ -3,13 +3,16 @@ package admin
 import (
 	"context"
 	"crypto/md5"
+	crand "crypto/rand"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -245,6 +248,7 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 		if err != nil {
 			return false, errors.New("参数错误")
 		}
+		normalized = normalizeConfigValueForKey(key, normalized)
 		if err := validateConfigValue(key, normalized); err != nil {
 			return false, err
 		}
@@ -267,6 +271,16 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 
 func (s *DBService) ListThemes(_ context.Context) (map[string]any, error) {
 	return map[string]any{}, nil
+}
+
+func normalizeConfigValueForKey(key string, value phpConfigValue) phpConfigValue {
+	switch key {
+	case "deposit_bounus", "deposit_recharge_bonus":
+		if value.kind == phpConfigScalar && strings.TrimSpace(value.scalar) == "" {
+			return phpConfigValue{kind: phpConfigArray, array: []phpConfigValue{}}
+		}
+	}
+	return value
 }
 
 func (s *DBService) GetThemeConfig(_ context.Context, name string) (map[string]any, error) {
@@ -1095,9 +1109,29 @@ func buildSMTPMessage(from, fromName, to, subject, body string) []byte {
 		"To: " + to,
 		"From: " + buildSMTPHeaderFrom(from, fromName),
 		"Subject: " + subject,
+		"Date: " + time.Now().Format(time.RFC1123Z),
+		"Message-ID: <" + newAdminSMTPMessageID(from) + ">",
 		"MIME-Version: 1.0",
 		"Content-Type: " + adminSMTPContentType(body),
 		"",
 		body,
 	}, "\r\n"))
+}
+
+func newAdminSMTPMessageID(from string) string {
+	domain := "localhost"
+	if address, err := mail.ParseAddress(from); err == nil {
+		if _, host, ok := strings.Cut(address.Address, "@"); ok && strings.TrimSpace(host) != "" {
+			domain = strings.TrimSpace(host)
+		}
+	} else if _, host, ok := strings.Cut(strings.TrimSpace(from), "@"); ok && strings.TrimSpace(host) != "" {
+		domain = strings.TrimSpace(host)
+	}
+
+	random := make([]byte, 16)
+	if _, err := crand.Read(random); err != nil {
+		fallback := md5.Sum([]byte(fmt.Sprintf("%d:%s", time.Now().UnixNano(), domain)))
+		return fmt.Sprintf("%s@%s", hex.EncodeToString(fallback[:]), domain)
+	}
+	return fmt.Sprintf("%s@%s", hex.EncodeToString(random), domain)
 }

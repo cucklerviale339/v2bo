@@ -916,6 +916,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		case maybeServeUIPage(cfg, w, r):
 			return
 		case shouldServeStatic(cfg.PublicDir, r.URL.Path):
+			if isAdminNewAssetPath(r.URL.Path) {
+				disableResponseCache(w)
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		default:
@@ -7340,4 +7343,8 @@ func shouldServeStatic(publicDir, requestPath string) bool {
 
 	_, err := os.Stat(publicDir + "/" + cleanPath)
 	return err == nil
+}
+
+func isAdminNewAssetPath(requestPath string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(requestPath, "/"), "assets/admin-new/")
 }

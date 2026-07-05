@@ -13,7 +13,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func disableResponseCache(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store, no-cache, private, must-revalidate, max-age=0")
+	w.Header().Set("Cache-Control", "no-store, no-cache, private, no-transform, must-revalidate, max-age=0")
 	w.Header().Set("CDN-Cache-Control", "no-store")
 	w.Header().Set("Surrogate-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")

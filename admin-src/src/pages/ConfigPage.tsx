@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd';
-import { apiGet, apiPost, unwrapData } from '../lib/api';
+import { apiGet, apiPost, setAdminPath, unwrapData } from '../lib/api';
 
 const groups = [
   ['site', '站点'], ['safe', '安全'], ['subscribe', '订阅'], ['server', '节点'],
@@ -345,7 +345,16 @@ export default function ConfigPage() {
   const save = async () => {
     setSaving(true);
     try {
-      await apiPost('/config/save', normalizeConfig(form.getFieldsValue()));
+      const values = normalizeConfig(form.getFieldsValue());
+      const previousPath = String(data?.safe?.secure_path || data?.secure_path || '').replace(/^\/+|\/+$/g, '');
+      const nextPath = String(values.secure_path || '').replace(/^\/+|\/+$/g, '');
+      await apiPost('/config/save', values);
+      if (nextPath) {
+        setAdminPath(nextPath);
+        if (previousPath && previousPath !== nextPath) {
+          history.replaceState(null, '', `/${nextPath}/config/system`);
+        }
+      }
       message.success('已保存');
       load();
     } catch (e: any) {

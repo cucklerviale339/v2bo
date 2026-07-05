@@ -24,6 +24,7 @@ docker-compose.yml
 public/clients/*
 go-api/bin/
 go-api/run/
+go-api/internal/storage/logs/
 .local/
 .legacy-config-backup.*
 analysis/admin-bundle/

@@ -42,7 +42,7 @@ func TestWithMiddlewareDisablesCacheForAPIRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected API response to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if rec.Header().Get("CDN-Cache-Control") != "no-store" {

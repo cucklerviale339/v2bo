@@ -14,13 +14,6 @@
                 "type": "udp",
                 "tag": "cn",
                 "server": "223.5.5.5"
-            },
-            {
-                "type": "https",
-                "tag": "apt-hcloud-doh",
-                "server": "38.207.164.191",
-                "server_port": 8080,
-                "path": "/dns-query"
             }
         ],
         "rules": [

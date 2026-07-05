@@ -126,7 +126,7 @@ func TestRouterGuestPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected guest plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 
@@ -2228,7 +2228,7 @@ func TestRouterUserPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected user plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if userService.lastPlanID == nil || *userService.lastPlanID != planID {
@@ -4675,7 +4675,7 @@ func TestRouterStaffPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected staff plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if sessionService.lastRequireAdmin {
@@ -5705,7 +5705,7 @@ func TestRouterAdminPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, must-revalidate, max-age=0" {
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, private, no-transform, must-revalidate, max-age=0" {
 		t.Fatalf("expected admin plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if !strings.Contains(rec.Body.String(), `"Starter"`) {

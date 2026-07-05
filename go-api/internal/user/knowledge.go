@@ -65,13 +65,14 @@ LIMIT 1`, id)
 	var (
 		token          string
 		banned         int64
+		planID         sql.NullInt64
 		transferEnable int64
 		expiredAt      sql.NullInt64
 	)
-	err = s.db.QueryRowContext(ctx, `SELECT token, banned, transfer_enable, expired_at
+	err = s.db.QueryRowContext(ctx, `SELECT token, banned, plan_id, transfer_enable, expired_at
 FROM v2_user
 WHERE id = $1
-LIMIT 1`, userID).Scan(&token, &banned, &transferEnable, &expiredAt)
+LIMIT 1`, userID).Scan(&token, &banned, &planID, &transferEnable, &expiredAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -81,7 +82,7 @@ LIMIT 1`, userID).Scan(&token, &banned, &transferEnable, &expiredAt)
 	expiredAt = normalizeNullableExpiry(expiredAt)
 
 	body := fmt.Sprint(knowledge["body"])
-	if !knowledgeUserAvailable(banned, transferEnable, expiredAt, time.Now().Unix()) {
+	if !knowledgeAccessAvailable(banned, planID, expiredAt, time.Now().Unix()) {
 		body = replaceKnowledgeAccessSections(body)
 	}
 
@@ -140,6 +141,10 @@ ORDER BY category ASC`, language)
 
 func knowledgeUserAvailable(banned, transferEnable int64, expiredAt sql.NullInt64, now int64) bool {
 	return banned == 0 && transferEnable > 0 && (!expiredAt.Valid || expiredAt.Int64 > now)
+}
+
+func knowledgeAccessAvailable(banned int64, planID, expiredAt sql.NullInt64, now int64) bool {
+	return banned == 0 && planID.Valid && planID.Int64 > 0 && (!expiredAt.Valid || expiredAt.Int64 > now)
 }
 
 func replaceKnowledgeAccessSections(body string) string {

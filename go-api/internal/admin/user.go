@@ -1048,6 +1048,7 @@ type bulkMailConfig struct {
 	template            string
 	appName             string
 	appURL              string
+	logo                string
 	bulkIntervalSeconds int64
 }
 
