@@ -118,6 +118,16 @@ const fields = [
   },
 ];
 
+const allowedFieldKeys = new Set(fields.map((field) => field.key));
+
+function valuesForSubscribeGuard(values: any) {
+  const out: any = {};
+  Object.entries(values || {}).forEach(([key, value]) => {
+    if (allowedFieldKeys.has(key)) out[key] = value;
+  });
+  return out;
+}
+
 function arrayToText(value: any) {
   if (Array.isArray(value)) return value.join('\n');
   return value ?? '';
@@ -214,7 +224,7 @@ export default function SubscribeGuardPage() {
   const save = async () => {
     setSaving(true);
     try {
-      await apiPost('/config/save', normalizeValues(form.getFieldsValue()));
+      await apiPost('/config/save', normalizeValues(valuesForSubscribeGuard(form.getFieldsValue())));
       message.success('已保存');
       load();
     } catch (e: any) {
@@ -258,7 +268,7 @@ export default function SubscribeGuardPage() {
     form.setFieldValue(fieldKey, nextText);
     try {
       setSaving(true);
-      await apiPost('/config/save', normalizeValues({ ...form.getFieldsValue(), [fieldKey]: nextText }));
+      await apiPost('/config/save', normalizeValues(valuesForSubscribeGuard({ ...form.getFieldsValue(), [fieldKey]: nextText })));
       message.success('已追加并保存生效');
       load();
     } catch (e: any) {

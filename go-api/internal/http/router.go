@@ -4136,7 +4136,7 @@ func handleAdminConfigSetTelegramWebhook(w http.ResponseWriter, r *http.Request,
 	}
 
 	webhookConfig := map[string]any{}
-	for _, key := range []string{"telegram_webhook_url", "app_url"} {
+	for _, key := range []string{"telegram_webhook_url"} {
 		if value, ok := inputs[key]; ok {
 			webhookConfig[key] = strings.TrimSpace(value)
 		}

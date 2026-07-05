@@ -5067,7 +5067,7 @@ func TestRouterAdminConfigSetTelegramWebhookPersistsSubmittedWebhookURL(t *testi
 		WithAdminService(adminService),
 	)
 
-	body := "auth_data=jwt-admin&telegram_bot_token=abc123&telegram_webhook_url=https%3A%2F%2Fforest666api.com"
+	body := "auth_data=jwt-admin&telegram_bot_token=abc123&telegram_webhook_url=https%3A%2F%2Fforest666api.com&app_url=https%3A%2F%2Fwrong.example"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/config/setTelegramWebhook", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
@@ -5087,6 +5087,9 @@ func TestRouterAdminConfigSetTelegramWebhookPersistsSubmittedWebhookURL(t *testi
 	}
 	if _, ok := adminService.lastConfigSave["telegram_bot_token"]; ok {
 		t.Fatalf("set webhook should not overwrite bot token through config save: %#v", adminService.lastConfigSave)
+	}
+	if _, ok := adminService.lastConfigSave["app_url"]; ok {
+		t.Fatalf("set webhook should not overwrite site url through config save: %#v", adminService.lastConfigSave)
 	}
 }
 

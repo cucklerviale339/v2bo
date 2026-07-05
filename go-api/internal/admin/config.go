@@ -70,13 +70,18 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
+	return s.fetchConfigFromStore(cfg, key), nil
+}
 
+func (s *DBService) fetchConfigFromStore(cfg *phpConfigFile, key string) map[string]any {
 	data := map[string]any{
 		"ticket": map[string]any{
 			"ticket_status": cfg.int64Value("ticket_status", 0),
 		},
 		"deposit": map[string]any{
-			"deposit_bounus": cfg.stringSliceValue("deposit_bounus", []string{}),
+			"deposit_bounus":          cfg.stringSliceValue("deposit_bounus", []string{}),
+			"deposit_recharge_enable": cfg.int64Value("deposit_recharge_enable", 0),
+			"deposit_recharge_bonus":  cfg.stringSliceValue("deposit_recharge_bonus", []string{}),
 		},
 		"invite": map[string]any{
 			"invite_force":                        cfg.int64Value("invite_force", 0),
@@ -226,10 +231,10 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 	key = strings.TrimSpace(key)
 	if key != "" {
 		if item, ok := data[key]; ok {
-			return map[string]any{key: item}, nil
+			return map[string]any{key: item}
 		}
 	}
-	return data, nil
+	return data
 }
 
 func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, error) {
@@ -238,17 +243,24 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 		return false, err
 	}
 
+	allowedKeys := allowedConfigKeys(s, cfg)
 	newKeys := make([]string, 0)
 	for key, value := range values {
 		key = strings.TrimSpace(key)
 		if key == "" || key == "auth_data" {
 			continue
 		}
+		if _, ok := allowedKeys[key]; !ok {
+			return false, fmt.Errorf("unsupported config key: %s", key)
+		}
 		normalized, err := normalizeConfigValue(value)
 		if err != nil {
 			return false, errors.New("参数错误")
 		}
 		normalized = normalizeConfigValueForKey(key, normalized)
+		if shouldSkipEmptySensitiveConfigValue(key, normalized, cfg) {
+			continue
+		}
 		if err := validateConfigValue(key, normalized); err != nil {
 			return false, err
 		}
@@ -267,6 +279,50 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 		s.runtime.Reload()
 	}
 	return true, nil
+}
+
+func allowedConfigKeys(s *DBService, cfg *phpConfigFile) map[string]struct{} {
+	keys := make(map[string]struct{})
+	data := s.fetchConfigFromStore(cfg, "")
+	for _, group := range data {
+		if groupMap, ok := group.(map[string]any); ok {
+			for key := range groupMap {
+				keys[key] = struct{}{}
+			}
+		}
+	}
+	for _, key := range []string{
+		"deposit_recharge_enable",
+		"deposit_recharge_bonus",
+	} {
+		keys[key] = struct{}{}
+	}
+	return keys
+}
+
+func shouldSkipEmptySensitiveConfigValue(key string, value phpConfigValue, cfg *phpConfigFile) bool {
+	if !emptyConfigValue(value) {
+		return false
+	}
+	switch key {
+	case "email_password", "telegram_bot_token", "server_token", "server_cf_api_token", "recaptcha_key":
+		return !emptyConfigValue(cfg.values[key])
+	default:
+		return false
+	}
+}
+
+func emptyConfigValue(value phpConfigValue) bool {
+	switch value.kind {
+	case phpConfigNil:
+		return true
+	case phpConfigScalar:
+		return strings.TrimSpace(value.scalar) == ""
+	case phpConfigArray:
+		return len(value.array) == 0
+	default:
+		return false
+	}
 }
 
 func (s *DBService) ListThemes(_ context.Context) (map[string]any, error) {

@@ -249,6 +249,75 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	}
 }
 
+func TestDBServiceSaveConfigRejectsUnknownKeys(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"secure_path": "localadmin",
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{AdminPath: "localadmin"}}
+	if _, err := service.SaveConfig(context.Background(), map[string]any{
+		"app_name":     "Forest",
+		"unknown_key":  "bad",
+		"another_key":  1,
+	}); err == nil || !strings.Contains(err.Error(), "unsupported config key") {
+		t.Fatalf("expected unsupported config key error, got %v", err)
+	}
+
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if _, exists := cfg.values["unknown_key"]; exists {
+		t.Fatalf("unknown key should not be persisted")
+	}
+}
+
+func TestDBServiceSaveConfigKeepsExistingSensitiveValueWhenSubmittedEmpty(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"email_password":     "smtp-secret",
+		"telegram_bot_token": "bot-secret",
+		"server_token":       "server-secret-long-enough",
+		"app_name":           "Forest",
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{AdminPath: "localadmin"}}
+	if _, err := service.SaveConfig(context.Background(), map[string]any{
+		"email_password":     "",
+		"telegram_bot_token": " ",
+		"server_token":       "",
+		"app_name":           "Poxiao",
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if cfg.stringValue("email_password", "") != "smtp-secret" {
+		t.Fatalf("expected existing email password preserved, got %q", cfg.stringValue("email_password", ""))
+	}
+	if cfg.stringValue("telegram_bot_token", "") != "bot-secret" {
+		t.Fatalf("expected existing telegram token preserved, got %q", cfg.stringValue("telegram_bot_token", ""))
+	}
+	if cfg.stringValue("server_token", "") != "server-secret-long-enough" {
+		t.Fatalf("expected existing server token preserved, got %q", cfg.stringValue("server_token", ""))
+	}
+	if cfg.stringValue("app_name", "") != "Poxiao" {
+		t.Fatalf("expected non-sensitive field saved, got %q", cfg.stringValue("app_name", ""))
+	}
+}
+
 func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{

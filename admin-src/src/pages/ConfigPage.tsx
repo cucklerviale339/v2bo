@@ -291,6 +291,15 @@ function normalizeConfig(values: any) {
   return out;
 }
 
+function valuesForGroup(values: any, groupKey: string) {
+  const allowed = new Set(fieldOrders[groupKey] || []);
+  const out: any = {};
+  Object.entries(values || {}).forEach(([key, value]) => {
+    if (allowed.has(key)) out[key] = value;
+  });
+  return out;
+}
+
 function isBooleanLike(value: any) {
   return typeof value === 'boolean' || value === 0 || value === 1 || value === '0' || value === '1';
 }
@@ -310,6 +319,7 @@ export default function ConfigPage() {
   const [plans, setPlans] = useState<any[]>([]);
   const [telegramStatus, setTelegramStatus] = useState<any>(null);
   const [telegramAction, setTelegramAction] = useState('');
+  const [activeGroup, setActiveGroup] = useState('site');
   const watchedValues = Form.useWatch([], form) || {};
 
   const loadTelegramStatus = async () => {
@@ -345,7 +355,7 @@ export default function ConfigPage() {
   const save = async () => {
     setSaving(true);
     try {
-      const values = normalizeConfig(form.getFieldsValue());
+      const values = normalizeConfig(valuesForGroup(form.getFieldsValue(), activeGroup));
       const previousPath = String(data?.safe?.secure_path || data?.secure_path || '').replace(/^\/+|\/+$/g, '');
       const nextPath = String(values.secure_path || '').replace(/^\/+|\/+$/g, '');
       await apiPost('/config/save', values);
@@ -374,12 +384,11 @@ export default function ConfigPage() {
         if (!res.ok) throw new Error(payload?.message || '检测失败');
         message.success(`机器人正常：@${payload?.data?.username || payload?.username || 'unknown'}`);
       } else if (action === 'webhook') {
-        const values = form.getFieldsValue();
+        const values = valuesForGroup(form.getFieldsValue(), 'telegram');
         await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
         await apiPost('/config/setTelegramWebhook', {
           telegram_bot_token: token,
           telegram_webhook_url: values.telegram_webhook_url,
-          app_url: values.app_url,
         }, { form: true, keepEmpty: true });
         message.success('Telegram 配置已保存，Webhook 设置成功');
         await load();
@@ -470,7 +479,7 @@ export default function ConfigPage() {
     <div className="content-heading">系统配置</div>
     <Card className="block-card">
       <Spin spinning={loading}>
-        <Form form={form} layout="vertical"><Tabs size="large" items={tabItems} /></Form>
+        <Form form={form} layout="vertical"><Tabs size="large" activeKey={activeGroup} onChange={setActiveGroup} items={tabItems} /></Form>
         <div className="config-save-bar"><Button type="primary" loading={saving} onClick={save}>保存配置</Button></div>
       </Spin>
     </Card>
