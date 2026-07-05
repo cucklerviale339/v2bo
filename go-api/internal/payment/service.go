@@ -369,7 +369,7 @@ func (s *DBService) returnURL(requestBaseURL, tradeNo string) string {
 	if base == "" {
 		base = "http://127.0.0.1"
 	}
-	return base + "/#/order/" + tradeNo
+	return base + "/#/payment?trade_no=" + url.QueryEscape(tradeNo)
 }
 
 func normalizePublicBase(raw string) string {

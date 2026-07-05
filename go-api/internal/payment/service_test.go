@@ -290,7 +290,7 @@ func TestDBServiceReturnURLUsesCurrentAccessDomainBeforeAppURL(t *testing.T) {
 	service := NewDBService(config.Config{AppURL: "https://site.example.com"}, nil, nil)
 
 	got := service.returnURL("https://mirror.example.com/path?q=1", "T900")
-	if got != "https://mirror.example.com/#/order/T900" {
+	if got != "https://mirror.example.com/#/payment?trade_no=T900" {
 		t.Fatalf("unexpected return url: %s", got)
 	}
 }
@@ -299,7 +299,7 @@ func TestDBServiceReturnURLFallsBackToAppURLWhenCurrentAccessDomainMissing(t *te
 	service := NewDBService(config.Config{AppURL: "https://site.example.com"}, nil, nil)
 
 	got := service.returnURL("", "T901")
-	if got != "https://site.example.com/#/order/T901" {
+	if got != "https://site.example.com/#/payment?trade_no=T901" {
 		t.Fatalf("unexpected return url: %s", got)
 	}
 }
