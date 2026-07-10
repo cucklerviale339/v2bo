@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	crand "crypto/rand"
@@ -1210,9 +1211,9 @@ func telegramAPIResultMap(client *http.Client, token, method string, params map[
 		return nil, telegramRequestError("读取Telegram响应失败", token, err)
 	}
 	var payload struct {
-		OK          bool           `json:"ok"`
-		Description string         `json:"description"`
-		Result      map[string]any `json:"result"`
+		OK          bool            `json:"ok"`
+		Description string          `json:"description"`
+		Result      json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		detail := strings.TrimSpace(redactTelegramToken(string(body), token))
@@ -1227,10 +1228,14 @@ func telegramAPIResultMap(client *http.Client, token, method string, params map[
 		}
 		return nil, errors.New("来自Telegram的错误：" + payload.Description)
 	}
-	if payload.Result == nil {
-		payload.Result = map[string]any{}
+	if len(bytes.TrimSpace(payload.Result)) == 0 || string(bytes.TrimSpace(payload.Result)) == "null" {
+		return map[string]any{}, nil
 	}
-	return payload.Result, nil
+	result := map[string]any{}
+	if err := json.Unmarshal(payload.Result, &result); err != nil {
+		return map[string]any{}, nil
+	}
+	return result, nil
 }
 
 func telegramRequestError(message, token string, err error) error {

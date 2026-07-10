@@ -214,6 +214,24 @@ func TestTelegramAPIResultMapReturnsTelegramDescription(t *testing.T) {
 	}
 }
 
+func TestTelegramAPIResultMapAcceptsBooleanResult(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true,"description":"Webhook is already set"}`)),
+		}, nil
+	})}
+
+	result, err := telegramAPIResultMap(client, "bot-token", "setWebhook", map[string]string{"url": "https://api.example/webhook"})
+	if err != nil {
+		t.Fatalf("expected boolean result to be accepted, got %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected empty result map, got %#v", result)
+	}
+}
+
 func TestDBServiceSendTelegramTestMessageRequiresBoundAdmin(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
