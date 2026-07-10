@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
+import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
 
@@ -12,11 +12,6 @@ function normalizeRule(rule: any = {}, index = 0) {
   return {
     ...rule,
     match_user_ids: splitList(rule.match_user_ids),
-    match_plan_ids: splitList(rule.match_plan_ids),
-    match_group_ids: splitList(rule.match_group_ids),
-    match_ua_keywords: splitList(rule.match_ua_keywords),
-    exclude_ua_keywords: splitList(rule.exclude_ua_keywords),
-    no_ua: !!rule.no_ua,
     show: rule.show === undefined ? true : !!Number(rule.show),
     sort: rule.sort ?? index,
   };
@@ -37,15 +32,8 @@ function savePayload(values: any) {
     rules: (Array.isArray(values.rules) ? values.rules : []).map((rule: any, index: number) => ({
       ...rule,
       match_user_ids: splitList(rule.match_user_ids),
-      match_plan_ids: splitList(rule.match_plan_ids),
-      match_group_ids: splitList(rule.match_group_ids),
-      match_ua_keywords: splitList(rule.match_ua_keywords),
-      exclude_ua_keywords: splitList(rule.exclude_ua_keywords),
-      no_ua: !!rule.no_ua,
       show: rule.show ? 1 : 0,
       sort: rule.sort ?? index,
-      min_registered_days: rule.min_registered_days ?? undefined,
-      max_registered_days: rule.max_registered_days ?? undefined,
     })),
   };
 }
@@ -53,19 +41,11 @@ function savePayload(values: any) {
 function ruleSummary(rule: any) {
   const parts: string[] = [];
   if (splitList(rule.match_user_ids).length) parts.push('用户');
-  if (splitList(rule.match_plan_ids).length) parts.push('套餐');
-  if (splitList(rule.match_group_ids).length) parts.push('权限组');
-  if (splitList(rule.match_ua_keywords).length) parts.push('客户端');
-  if (splitList(rule.exclude_ua_keywords).length) parts.push('排除客户端');
-  if (rule.no_ua) parts.push('无UA');
-  if (rule.min_registered_days !== undefined || rule.max_registered_days !== undefined) parts.push('注册天数');
   return parts.length ? parts.join(' / ') : '未配置条件';
 }
 
 export default function NodeAddressPage() {
   const [rows, setRows] = useState<any[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
-  const [plans, setPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState<any>(null);
@@ -74,14 +54,8 @@ export default function NodeAddressPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [res, groupRes, planRes] = await Promise.all([
-        apiGet('/server/address/fetch'),
-        apiGet('/server/group/fetch').catch(() => ({ data: [] })),
-        apiGet('/plan/fetch').catch(() => ({ data: [] })),
-      ]);
+      const res = await apiGet('/server/address/fetch');
       setRows(Array.isArray(res.data) ? res.data : []);
-      setGroups(Array.isArray(groupRes.data) ? groupRes.data : []);
-      setPlans(Array.isArray(planRes.data) ? planRes.data : []);
     } catch (e: any) {
       message.error(e.message || '加载失败');
     } finally {
@@ -119,9 +93,6 @@ export default function NodeAddressPage() {
     load();
   };
 
-  const groupOptions = groups.map((group) => ({ label: group.name, value: String(group.id) }));
-  const planOptions = plans.map((plan) => ({ label: plan.name || `#${plan.id}`, value: String(plan.id) }));
-
   const columns: any[] = [
     { title: 'ID', dataIndex: 'id', width: 80 },
     { title: '地址组名称', dataIndex: 'name', width: 180 },
@@ -144,7 +115,7 @@ export default function NodeAddressPage() {
     <Spin spinning={loading}>
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action"><Button icon={<PlusOutlined />} onClick={() => openEditor()}>新建地址组</Button></div>
-        <Table className="forest-table" rowKey="id" tableLayout="auto" columns={columns} dataSource={rows} pagination={false} scroll={{ x: 980 }} />
+        <Table className="forest-table" rowKey="id" tableLayout="auto" columns={columns} dataSource={rows} pagination={false} scroll={{ x: 760 }} />
       </Card>
     </Spin>
 
@@ -171,13 +142,6 @@ export default function NodeAddressPage() {
                 <div className="form-col-3"><Form.Item name={[field.name, 'sort']} label="排序"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'show']} label="显示" valuePropName="checked"><Switch /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="用户ID"><Select mode="tags" placeholder="1 或 1-100" /></Form.Item></div>
-                <div className="form-col-8"><Form.Item name={[field.name, 'match_plan_ids']} label="套餐"><Select mode="tags" placeholder="选择或输入套餐ID" options={planOptions} /></Form.Item></div>
-                <div className="form-col-8"><Form.Item name={[field.name, 'match_group_ids']} label="权限组"><Select mode="tags" placeholder="选择或输入权限组ID" options={groupOptions} /></Form.Item></div>
-                <div className="form-col-12"><Form.Item name={[field.name, 'match_ua_keywords']} label="客户端UA"><Select mode="tags" placeholder="Clash / sing-box" /></Form.Item></div>
-                <div className="form-col-12"><Form.Item name={[field.name, 'exclude_ua_keywords']} label="排除UA"><Select mode="tags" placeholder="V2rayU" /></Form.Item></div>
-                <div className="form-col-6"><Form.Item name={[field.name, 'min_registered_days']} label="注册天数最小值"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></div>
-                <div className="form-col-6"><Form.Item name={[field.name, 'max_registered_days']} label="注册天数最大值"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></div>
-                <div className="form-col-6"><Form.Item name={[field.name, 'no_ua']} valuePropName="checked"><Checkbox>无UA</Checkbox></Form.Item></div>
               </div>
             </div>)}
           </>}

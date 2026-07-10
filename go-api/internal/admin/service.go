@@ -217,22 +217,15 @@ type ServerRouteSaveRequest struct {
 }
 
 type NodeAddressRuleRecord struct {
-	ID                int64    `json:"id"`
-	GroupID           int64    `json:"group_id"`
-	Name              string   `json:"name"`
-	Host              string   `json:"host"`
-	MatchUserIDs      []string `json:"match_user_ids,omitempty"`
-	MatchPlanIDs      []string `json:"match_plan_ids,omitempty"`
-	MatchGroupIDs     []string `json:"match_group_ids,omitempty"`
-	MatchUAKeywords   []string `json:"match_ua_keywords,omitempty"`
-	ExcludeUAKeywords []string `json:"exclude_ua_keywords,omitempty"`
-	NoUA              bool     `json:"no_ua"`
-	MinRegisteredDays *int64   `json:"min_registered_days,omitempty"`
-	MaxRegisteredDays *int64   `json:"max_registered_days,omitempty"`
-	Show              int64    `json:"show"`
-	Sort              *int64   `json:"sort,omitempty"`
-	CreatedAt         int64    `json:"created_at,omitempty"`
-	UpdatedAt         int64    `json:"updated_at,omitempty"`
+	ID           int64    `json:"id"`
+	GroupID      int64    `json:"group_id"`
+	Name         string   `json:"name"`
+	Host         string   `json:"host"`
+	MatchUserIDs []string `json:"match_user_ids,omitempty"`
+	Show         int64    `json:"show"`
+	Sort         *int64   `json:"sort,omitempty"`
+	CreatedAt    int64    `json:"created_at,omitempty"`
+	UpdatedAt    int64    `json:"updated_at,omitempty"`
 }
 
 type NodeAddressBindingRecord struct {
@@ -252,19 +245,12 @@ type NodeAddressGroupRecord struct {
 }
 
 type NodeAddressRuleSaveRequest struct {
-	ID                *int64
-	Name              string
-	Host              string
-	MatchUserIDs      []string
-	MatchPlanIDs      []string
-	MatchGroupIDs     []string
-	MatchUAKeywords   []string
-	ExcludeUAKeywords []string
-	NoUA              bool
-	MinRegisteredDays *int64
-	MaxRegisteredDays *int64
-	Show              *int64
-	Sort              *int64
+	ID           *int64
+	Name         string
+	Host         string
+	MatchUserIDs []string
+	Show         *int64
+	Sort         *int64
 }
 
 type NodeAddressGroupSaveRequest struct {

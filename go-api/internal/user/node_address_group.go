@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,16 +13,9 @@ type nodeAddressSelector struct {
 }
 
 type nodeAddressRule struct {
-	GroupID           int64
-	Host              string
-	MatchUserIDs      []string
-	MatchPlanIDs      []string
-	MatchGroupIDs     []string
-	MatchUAKeywords   []string
-	ExcludeUAKeywords []string
-	NoUA              bool
-	MinRegisteredDays *int64
-	MaxRegisteredDays *int64
+	GroupID      int64
+	Host         string
+	MatchUserIDs []string
 }
 
 func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSelector, error) {
@@ -39,8 +31,7 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 		rules:    make(map[int64][]nodeAddressRule),
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids, r.match_plan_ids, r.match_group_ids,
-r.match_ua_keywords, r.exclude_ua_keywords, r.no_ua, r.min_registered_days, r.max_registered_days
+	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
 WHERE g."show" = 1 AND r."show" = 1
@@ -53,24 +44,10 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 	for rows.Next() {
 		var rule nodeAddressRule
 		var matchUserIDs string
-		var matchPlanIDs string
-		var matchGroupIDs string
-		var matchUAKeywords string
-		var excludeUAKeywords string
-		var noUA int64
-		var minRegisteredDays sql.NullInt64
-		var maxRegisteredDays sql.NullInt64
 		if err := rows.Scan(
 			&rule.GroupID,
 			&rule.Host,
 			&matchUserIDs,
-			&matchPlanIDs,
-			&matchGroupIDs,
-			&matchUAKeywords,
-			&excludeUAKeywords,
-			&noUA,
-			&minRegisteredDays,
-			&maxRegisteredDays,
 		); err != nil {
 			return nil, fmt.Errorf("scan node address rule: %w", err)
 		}
@@ -79,13 +56,6 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 			continue
 		}
 		rule.MatchUserIDs = parseServerStringList(matchUserIDs)
-		rule.MatchPlanIDs = parseServerStringList(matchPlanIDs)
-		rule.MatchGroupIDs = parseServerStringList(matchGroupIDs)
-		rule.MatchUAKeywords = parseServerStringList(matchUAKeywords)
-		rule.ExcludeUAKeywords = parseServerStringList(excludeUAKeywords)
-		rule.NoUA = noUA != 0
-		rule.MinRegisteredDays = nodeAddressNullInt64Ptr(minRegisteredDays)
-		rule.MaxRegisteredDays = nodeAddressNullInt64Ptr(maxRegisteredDays)
 		selector.rules[rule.GroupID] = append(selector.rules[rule.GroupID], rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -120,7 +90,7 @@ ORDER BY b.server_type ASC, b.server_id ASC`)
 	return selector, nil
 }
 
-func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user serverFetchUser, ua string, now int64) (string, bool) {
+func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user serverFetchUser) (string, bool) {
 	if s == nil {
 		return "", false
 	}
@@ -129,61 +99,18 @@ func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user se
 		return "", false
 	}
 	for _, rule := range s.rules[groupID] {
-		if rule.matches(user, ua, now) {
+		if rule.matches(user) {
 			return rule.Host, true
 		}
 	}
 	return "", false
 }
 
-func (r nodeAddressRule) matches(user serverFetchUser, ua string, now int64) bool {
+func (r nodeAddressRule) matches(user serverFetchUser) bool {
 	hasCondition := false
 	if len(r.MatchUserIDs) > 0 {
 		hasCondition = true
 		if !nodeAddressIntTokensMatch(r.MatchUserIDs, user.ID) {
-			return false
-		}
-	}
-	if len(r.MatchPlanIDs) > 0 {
-		hasCondition = true
-		if !nodeAddressIntTokensMatch(r.MatchPlanIDs, user.PlanID) {
-			return false
-		}
-	}
-	if len(r.MatchGroupIDs) > 0 {
-		hasCondition = true
-		if !nodeAddressIntTokensMatch(r.MatchGroupIDs, user.GroupID) {
-			return false
-		}
-	}
-	if len(r.MatchUAKeywords) > 0 {
-		hasCondition = true
-		if !nodeAddressUAAnyMatch(r.MatchUAKeywords, ua) {
-			return false
-		}
-	}
-	if len(r.ExcludeUAKeywords) > 0 {
-		hasCondition = true
-		if nodeAddressUAAnyMatch(r.ExcludeUAKeywords, ua) {
-			return false
-		}
-	}
-	if r.NoUA {
-		hasCondition = true
-		if strings.TrimSpace(ua) != "" {
-			return false
-		}
-	}
-	if r.MinRegisteredDays != nil || r.MaxRegisteredDays != nil {
-		hasCondition = true
-		if user.CreatedAt <= 0 || now < user.CreatedAt {
-			return false
-		}
-		days := (now - user.CreatedAt) / 86400
-		if r.MinRegisteredDays != nil && days < *r.MinRegisteredDays {
-			return false
-		}
-		if r.MaxRegisteredDays != nil && days > *r.MaxRegisteredDays {
 			return false
 		}
 	}
@@ -193,14 +120,6 @@ func (r nodeAddressRule) matches(user serverFetchUser, ua string, now int64) boo
 
 func nodeAddressServerKey(serverType string, serverID int64) string {
 	return fmt.Sprintf("%s-%d", strings.TrimSpace(serverType), serverID)
-}
-
-func nodeAddressNullInt64Ptr(value sql.NullInt64) *int64 {
-	if !value.Valid {
-		return nil
-	}
-	next := value.Int64
-	return &next
 }
 
 func nodeAddressIntTokensMatch(tokens []string, value int64) bool {
@@ -242,27 +161,4 @@ func nodeAddressIntTokenMatch(token string, value int64) bool {
 	}
 	next, err := strconv.ParseInt(token, 10, 64)
 	return err == nil && next == value
-}
-
-func nodeAddressUAAnyMatch(keywords []string, ua string) bool {
-	ua = strings.TrimSpace(ua)
-	lowerUA := strings.ToLower(ua)
-	for _, raw := range keywords {
-		for _, keyword := range strings.Split(raw, "|") {
-			keyword = strings.TrimSpace(keyword)
-			if keyword == "" {
-				continue
-			}
-			if serverFetchMissingUAKeyword(keyword) {
-				if ua == "" {
-					return true
-				}
-				continue
-			}
-			if ua != "" && strings.Contains(lowerUA, strings.ToLower(keyword)) {
-				return true
-			}
-		}
-	}
-	return false
 }

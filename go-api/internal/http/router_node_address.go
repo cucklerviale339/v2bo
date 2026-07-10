@@ -19,19 +19,12 @@ type nodeAddressGroupPayload struct {
 }
 
 type nodeAddressRulePayload struct {
-	ID                *json.Number `json:"id"`
-	Name              string       `json:"name"`
-	Host              string       `json:"host"`
-	MatchUserIDs      []string     `json:"match_user_ids"`
-	MatchPlanIDs      []string     `json:"match_plan_ids"`
-	MatchGroupIDs     []string     `json:"match_group_ids"`
-	MatchUAKeywords   []string     `json:"match_ua_keywords"`
-	ExcludeUAKeywords []string     `json:"exclude_ua_keywords"`
-	NoUA              bool         `json:"no_ua"`
-	MinRegisteredDays *json.Number `json:"min_registered_days"`
-	MaxRegisteredDays *json.Number `json:"max_registered_days"`
-	Show              *json.Number `json:"show"`
-	Sort              *json.Number `json:"sort"`
+	ID           *json.Number `json:"id"`
+	Name         string       `json:"name"`
+	Host         string       `json:"host"`
+	MatchUserIDs []string     `json:"match_user_ids"`
+	Show         *json.Number `json:"show"`
+	Sort         *json.Number `json:"sort"`
 }
 
 func handleAdminNodeAddressGroupFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
@@ -173,16 +166,6 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则格式不正确"})
 		return admin.NodeAddressRuleSaveRequest{}, false
 	}
-	minRegisteredDays, err := jsonNumberToInt64Pointer(item.MinRegisteredDays)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "注册天数格式不正确"})
-		return admin.NodeAddressRuleSaveRequest{}, false
-	}
-	maxRegisteredDays, err := jsonNumberToInt64Pointer(item.MaxRegisteredDays)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "注册天数格式不正确"})
-		return admin.NodeAddressRuleSaveRequest{}, false
-	}
 	show, err := jsonNumberToInt64Pointer(item.Show)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则显示状态格式不正确"})
@@ -195,18 +178,11 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 	}
 
 	return admin.NodeAddressRuleSaveRequest{
-		ID:                id,
-		Name:              item.Name,
-		Host:              item.Host,
-		MatchUserIDs:      item.MatchUserIDs,
-		MatchPlanIDs:      item.MatchPlanIDs,
-		MatchGroupIDs:     item.MatchGroupIDs,
-		MatchUAKeywords:   item.MatchUAKeywords,
-		ExcludeUAKeywords: item.ExcludeUAKeywords,
-		NoUA:              item.NoUA,
-		MinRegisteredDays: minRegisteredDays,
-		MaxRegisteredDays: maxRegisteredDays,
-		Show:              show,
-		Sort:              sortValue,
+		ID:           id,
+		Name:         item.Name,
+		Host:         item.Host,
+		MatchUserIDs: item.MatchUserIDs,
+		Show:         show,
+		Sort:         sortValue,
 	}, true
 }

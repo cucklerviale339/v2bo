@@ -20,22 +20,15 @@ type nodeAddressGroupRow struct {
 }
 
 type nodeAddressRuleRow struct {
-	ID                int64
-	GroupID           int64
-	Name              string
-	Host              string
-	MatchUserIDs      string
-	MatchPlanIDs      string
-	MatchGroupIDs     string
-	MatchUAKeywords   string
-	ExcludeUAKeywords string
-	NoUA              int64
-	MinRegisteredDays sql.NullInt64
-	MaxRegisteredDays sql.NullInt64
-	Show              int64
-	Sort              sql.NullInt64
-	CreatedAt         int64
-	UpdatedAt         int64
+	ID           int64
+	GroupID      int64
+	Name         string
+	Host         string
+	MatchUserIDs string
+	Show         int64
+	Sort         sql.NullInt64
+	CreatedAt    int64
+	UpdatedAt    int64
 }
 
 func (s *DBService) ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error) {
@@ -152,21 +145,12 @@ WHERE id = $1`, groupID, normalized.Name, normalized.Description, show, now)
 			ruleShow = *rule.Show
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
-group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
-match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
-"show", sort, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+group_id, name, host, match_user_ids, "show", sort, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			groupID,
 			rule.Name,
 			rule.Host,
 			encodeNodeAddressStringList(rule.MatchUserIDs),
-			encodeNodeAddressStringList(rule.MatchPlanIDs),
-			encodeNodeAddressStringList(rule.MatchGroupIDs),
-			encodeNodeAddressStringList(rule.MatchUAKeywords),
-			encodeNodeAddressStringList(rule.ExcludeUAKeywords),
-			boolToSmallInt(rule.NoUA),
-			nullableInt64(rule.MinRegisteredDays),
-			nullableInt64(rule.MaxRegisteredDays),
 			ruleShow,
 			nullableInt64(sortValue),
 			now,
@@ -305,9 +289,7 @@ func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return result, nil
 	}
-	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
-match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
-"show", sort, created_at, updated_at
+	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, "show", sort, created_at, updated_at
 FROM v2_node_address_rule
 WHERE group_id IN (%s)
 ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
@@ -374,21 +356,8 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 			return req, errors.New("规则地址不能为空")
 		}
 		rule.MatchUserIDs = normalizeNodeAddressStringList(rule.MatchUserIDs)
-		rule.MatchPlanIDs = normalizeNodeAddressStringList(rule.MatchPlanIDs)
-		rule.MatchGroupIDs = normalizeNodeAddressStringList(rule.MatchGroupIDs)
-		rule.MatchUAKeywords = normalizeNodeAddressStringList(rule.MatchUAKeywords)
-		rule.ExcludeUAKeywords = normalizeNodeAddressStringList(rule.ExcludeUAKeywords)
 		if rule.Show != nil && (*rule.Show < 0 || *rule.Show > 1) {
 			return req, errors.New("规则显示状态格式不正确")
-		}
-		if rule.MinRegisteredDays != nil && *rule.MinRegisteredDays < 0 {
-			return req, errors.New("注册天数格式不正确")
-		}
-		if rule.MaxRegisteredDays != nil && *rule.MaxRegisteredDays < 0 {
-			return req, errors.New("注册天数格式不正确")
-		}
-		if rule.MinRegisteredDays != nil && rule.MaxRegisteredDays != nil && *rule.MinRegisteredDays > *rule.MaxRegisteredDays {
-			return req, errors.New("注册天数范围不正确")
 		}
 		if !nodeAddressRuleHasCondition(*rule) {
 			return req, errors.New("地址规则至少需要一个匹配条件")
@@ -413,13 +382,6 @@ func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddres
 		&row.Name,
 		&row.Host,
 		&row.MatchUserIDs,
-		&row.MatchPlanIDs,
-		&row.MatchGroupIDs,
-		&row.MatchUAKeywords,
-		&row.ExcludeUAKeywords,
-		&row.NoUA,
-		&row.MinRegisteredDays,
-		&row.MaxRegisteredDays,
 		&row.Show,
 		&row.Sort,
 		&row.CreatedAt,
@@ -445,34 +407,20 @@ func nodeAddressGroupRecord(row nodeAddressGroupRow) NodeAddressGroupRecord {
 
 func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
 	return NodeAddressRuleRecord{
-		ID:                row.ID,
-		GroupID:           row.GroupID,
-		Name:              row.Name,
-		Host:              row.Host,
-		MatchUserIDs:      parseServerStringList(row.MatchUserIDs),
-		MatchPlanIDs:      parseServerStringList(row.MatchPlanIDs),
-		MatchGroupIDs:     parseServerStringList(row.MatchGroupIDs),
-		MatchUAKeywords:   parseServerStringList(row.MatchUAKeywords),
-		ExcludeUAKeywords: parseServerStringList(row.ExcludeUAKeywords),
-		NoUA:              row.NoUA != 0,
-		MinRegisteredDays: nullInt64Ptr(row.MinRegisteredDays),
-		MaxRegisteredDays: nullInt64Ptr(row.MaxRegisteredDays),
-		Show:              row.Show,
-		Sort:              nullInt64Ptr(row.Sort),
-		CreatedAt:         row.CreatedAt,
-		UpdatedAt:         row.UpdatedAt,
+		ID:           row.ID,
+		GroupID:      row.GroupID,
+		Name:         row.Name,
+		Host:         row.Host,
+		MatchUserIDs: parseServerStringList(row.MatchUserIDs),
+		Show:         row.Show,
+		Sort:         nullInt64Ptr(row.Sort),
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
 	}
 }
 
 func nodeAddressRuleHasCondition(rule NodeAddressRuleSaveRequest) bool {
-	return len(rule.MatchUserIDs) > 0 ||
-		len(rule.MatchPlanIDs) > 0 ||
-		len(rule.MatchGroupIDs) > 0 ||
-		len(rule.MatchUAKeywords) > 0 ||
-		len(rule.ExcludeUAKeywords) > 0 ||
-		rule.NoUA ||
-		rule.MinRegisteredDays != nil ||
-		rule.MaxRegisteredDays != nil
+	return len(rule.MatchUserIDs) > 0
 }
 
 func normalizeNodeAddressStringList(values []string) []string {
@@ -500,11 +448,4 @@ func encodeNodeAddressStringList(values []string) string {
 		return "[]"
 	}
 	return string(raw)
-}
-
-func boolToSmallInt(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
 }
