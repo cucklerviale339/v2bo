@@ -216,6 +216,67 @@ type ServerRouteSaveRequest struct {
 	ActionValue *string
 }
 
+type NodeAddressRuleRecord struct {
+	ID                int64    `json:"id"`
+	GroupID           int64    `json:"group_id"`
+	Name              string   `json:"name"`
+	Host              string   `json:"host"`
+	MatchUserIDs      []string `json:"match_user_ids,omitempty"`
+	MatchPlanIDs      []string `json:"match_plan_ids,omitempty"`
+	MatchGroupIDs     []string `json:"match_group_ids,omitempty"`
+	MatchUAKeywords   []string `json:"match_ua_keywords,omitempty"`
+	ExcludeUAKeywords []string `json:"exclude_ua_keywords,omitempty"`
+	NoUA              bool     `json:"no_ua"`
+	MinRegisteredDays *int64   `json:"min_registered_days,omitempty"`
+	MaxRegisteredDays *int64   `json:"max_registered_days,omitempty"`
+	IsDefault         bool     `json:"is_default"`
+	Show              int64    `json:"show"`
+	Sort              *int64   `json:"sort,omitempty"`
+	CreatedAt         int64    `json:"created_at,omitempty"`
+	UpdatedAt         int64    `json:"updated_at,omitempty"`
+}
+
+type NodeAddressBindingRecord struct {
+	ServerType string `json:"server_type"`
+	ServerID   int64  `json:"server_id"`
+}
+
+type NodeAddressGroupRecord struct {
+	ID          int64                      `json:"id"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description"`
+	Show        int64                      `json:"show"`
+	Rules       []NodeAddressRuleRecord    `json:"rules,omitempty"`
+	Bindings    []NodeAddressBindingRecord `json:"bindings,omitempty"`
+	CreatedAt   int64                      `json:"created_at,omitempty"`
+	UpdatedAt   int64                      `json:"updated_at,omitempty"`
+}
+
+type NodeAddressRuleSaveRequest struct {
+	ID                *int64
+	Name              string
+	Host              string
+	MatchUserIDs      []string
+	MatchPlanIDs      []string
+	MatchGroupIDs     []string
+	MatchUAKeywords   []string
+	ExcludeUAKeywords []string
+	NoUA              bool
+	MinRegisteredDays *int64
+	MaxRegisteredDays *int64
+	IsDefault         bool
+	Show              *int64
+	Sort              *int64
+}
+
+type NodeAddressGroupSaveRequest struct {
+	ID          *int64
+	Name        string
+	Description string
+	Show        *int64
+	Rules       []NodeAddressRuleSaveRequest
+}
+
 type ClientEntryGroupMemberRecord struct {
 	ServerType string `json:"server_type"`
 	ServerID   int64  `json:"server_id"`
@@ -325,6 +386,9 @@ type Service interface {
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
 	DeleteServerRoute(ctx context.Context, id int64) (bool, error)
+	ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error)
+	SaveNodeAddressGroup(ctx context.Context, req NodeAddressGroupSaveRequest) (bool, error)
+	DeleteNodeAddressGroup(ctx context.Context, id int64) (bool, error)
 	ListManagedServers(ctx context.Context) ([]map[string]any, error)
 	SortManagedServers(ctx context.Context, values map[string]map[int64]int64) (bool, error)
 	UpdateManagedServerHost(ctx context.Context, oldHost, newHost string) (ManagedServerHostUpdateResult, error)
@@ -398,6 +462,8 @@ type DBService struct {
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
+	nodeAddressEnsureOnce sync.Once
+	nodeAddressEnsureErr  error
 }
 
 type paymentRow struct {

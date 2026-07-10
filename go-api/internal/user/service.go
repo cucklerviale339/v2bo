@@ -247,6 +247,8 @@ type DBService struct {
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
+	nodeAddressEnsureOnce sync.Once
+	nodeAddressEnsureErr  error
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {

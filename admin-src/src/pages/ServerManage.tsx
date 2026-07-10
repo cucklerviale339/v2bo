@@ -172,6 +172,7 @@ function normalizeInitial(row: any) {
     group_id: listValue(row?.group_id),
     route_id: listValue(row?.route_id),
     tags: listValue(row?.tags),
+    address_group_id: row?.address_group_id ? String(row.address_group_id) : undefined,
     network_settings: formatTextJSON(row?.network_settings ?? row?.networkSettings),
     tls_settings: formatTextJSON(normalizeTLSSettings(row)),
     encryption_settings: formatTextJSON(row?.encryption_settings),
@@ -191,6 +192,7 @@ function normalizePayload(values: any, edit: any) {
   delete payload.entry_group_name;
   delete payload.entry_group_names;
   delete payload.entry_group_options;
+  delete payload.address_group_name;
   delete payload.install_command;
   delete payload.send_through;
   payload.group_id = listValue(payload.group_id);
@@ -201,6 +203,7 @@ function normalizePayload(values: any, edit: any) {
   });
   if (payload.show === true) payload.show = 1;
   if (payload.show === false) payload.show = 0;
+  if (payload.address_group_id === undefined || payload.address_group_id === '') payload.address_group_id = null;
   if (type !== 'v2node') {
     delete payload.protocol;
     delete payload.listen_ip;
@@ -209,7 +212,7 @@ function normalizePayload(values: any, edit: any) {
 }
 
 function baseDefaults(type: string) {
-  const common: any = { type, show: 1, rate: 1, port: '443', server_port: 443, group_id: [], route_id: [], tags: [] };
+  const common: any = { type, show: 1, rate: 1, port: '443', server_port: 443, group_id: [], route_id: [], tags: [], address_group_id: undefined };
   if (type === 'v2node') return { ...common, protocol: 'vless', network: 'tcp', tls: 0, disable_sni: 0, zero_rtt_handshake: 0, flow: null, ddns_settings: '', install_command: '' };
   if (type === 'vless') return { ...common, network: 'tcp', tls: 0, flow: null };
   if (type === 'vmess') return { ...common, network: 'tcp', tls: 0 };
@@ -493,6 +496,7 @@ export default function ServerManage() {
   const [rows, setRows] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
+  const [addressGroups, setAddressGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [sortMode, setSortMode] = useState(false);
   const [searchKey, setSearchKey] = useState('');
@@ -516,14 +520,16 @@ export default function ServerManage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [nodeRes, groupRes, routeRes] = await Promise.all([
+      const [nodeRes, groupRes, routeRes, addressRes] = await Promise.all([
         apiGet('/server/manage/getNodes'),
         apiGet('/server/group/fetch').catch(() => ({ data: [] })),
         apiGet('/server/route/fetch').catch(() => ({ data: [] })),
+        apiGet('/server/address/fetch').catch(() => ({ data: [] })),
       ]);
       setRows(nodeRes.data || []);
       setGroups(groupRes.data || []);
       setRoutes(routeRes.data || []);
+      setAddressGroups(addressRes.data || []);
     } catch (e: any) {
       message.error(e.message || '加载失败');
     } finally {
@@ -653,6 +659,7 @@ export default function ServerManage() {
     { title: <Tooltip title="根据服务端上报频率而定">人数 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'online', sorter: (a: any, b: any) => Number(a.online || 0) - Number(b.online || 0), width: 130, render: (online: any) => <span><UserOutlined /> {online || 0}</span> },
     { title: <Tooltip title="使用的流量将乘以倍率进行扣除">倍率 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'rate', align: 'center', width: 100, render: (rate: any) => <Tag style={{ minWidth: 60 }}>{rate} x</Tag> },
     { title: '权限组', dataIndex: 'group_id', filters: groups.map((group) => ({ text: group.name, value: group.id })), onFilter: (value: any, row: any) => listValue(row.group_id).includes(String(value)), render: (_: any, row: any) => listValue(row.group_id).map((id) => <Tag key={id}>{groups.find((g) => String(g.id) === String(id))?.name || id}</Tag>) },
+    { title: '地址组', dataIndex: 'address_group_name', width: 160, render: (_: any, row: any) => row.address_group_id ? <Tag color="blue">{row.address_group_name || `#${row.address_group_id}`}</Tag> : '-' },
     { title: '监听地址', width: 150, render: (_: any, row: any) => row.type === 'v2node' ? <span className="muted-lines">{row.listen_ip || '-'}</span> : '-' },
     { title: '操作', dataIndex: 'action', fixed: 'right', align: 'right', width: 120, render: (_: any, row: any) => <Dropdown trigger={['click']} menu={{ items: [
       { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: () => openEditor(row) },
@@ -732,6 +739,7 @@ export default function ServerManage() {
           <ProtocolFields type={currentType} protocol={watchProtocol} tls={watchTLS} network={watchNetwork} form={form} onEditChild={(title, type) => setChildEditor({ title, type })} />
           <div className="form-col-12"><Form.Item name="parent_id" label="父节点"><Select allowClear placeholder="无" options={rows.filter((row) => row.type === currentType && row.id !== edit?.id).map((row) => ({ label: row.name, value: row.id }))} /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="show" label="显示"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item></div>
+          <div className="form-col-12"><Form.Item name="address_group_id" label="地址组"><Select allowClear placeholder="不绑定地址组" options={addressGroups.map((group) => ({ label: group.name, value: String(group.id) }))} /></Form.Item></div>
           <div className="form-col-24"><Form.Item name="route_id" label="路由组"><Select mode="multiple" placeholder="请选择路由组" options={routes.map((route) => ({ label: route.remarks || route.name || route.id, value: String(route.id) }))} /></Form.Item></div>
           {currentType === 'v2node' && <DDNSFields form={form} host={watchHost} />}
           {currentType === 'v2node' && <div className="form-col-24"><Form.Item name="install_command" label="一键安装指令"><Input.TextArea rows={4} readOnly style={{ backgroundColor: '#f5f5f5', cursor: 'text' }} /></Form.Item></div>}

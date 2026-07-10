@@ -1,0 +1,514 @@
+package admin
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+type nodeAddressGroupRow struct {
+	ID          int64
+	Name        string
+	Description string
+	Show        int64
+	CreatedAt   int64
+	UpdatedAt   int64
+}
+
+type nodeAddressRuleRow struct {
+	ID                int64
+	GroupID           int64
+	Name              string
+	Host              string
+	MatchUserIDs      string
+	MatchPlanIDs      string
+	MatchGroupIDs     string
+	MatchUAKeywords   string
+	ExcludeUAKeywords string
+	NoUA              int64
+	MinRegisteredDays sql.NullInt64
+	MaxRegisteredDays sql.NullInt64
+	IsDefault         int64
+	Show              int64
+	Sort              sql.NullInt64
+	CreatedAt         int64
+	UpdatedAt         int64
+}
+
+func (s *DBService) ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error) {
+	if s.db == nil {
+		return nil, ErrUnavailable
+	}
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return nil, err
+	}
+
+	query := `SELECT id, name, description, "show", created_at, updated_at
+FROM v2_node_address_group`
+	args := []any{}
+	if id != nil {
+		query += ` WHERE id = $1`
+		args = append(args, *id)
+	}
+	query += ` ORDER BY id ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query node address groups: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]NodeAddressGroupRecord, 0)
+	ids := make([]int64, 0)
+	for rows.Next() {
+		row, err := scanNodeAddressGroupRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, nodeAddressGroupRecord(row))
+		ids = append(ids, row.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate node address groups: %w", err)
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	rules, err := s.loadNodeAddressRules(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := s.loadNodeAddressBindings(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for index := range result {
+		result[index].Rules = rules[result[index].ID]
+		result[index].Bindings = bindings[result[index].ID]
+	}
+	return result, nil
+}
+
+func (s *DBService) SaveNodeAddressGroup(ctx context.Context, req NodeAddressGroupSaveRequest) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return false, err
+	}
+
+	normalized, err := normalizeNodeAddressGroupSaveRequest(req)
+	if err != nil {
+		return false, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("保存失败")
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+	groupID := int64(0)
+	show := int64(1)
+	if normalized.Show != nil {
+		show = *normalized.Show
+	}
+	if normalized.ID == nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_node_address_group (name, description, "show", created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id`, normalized.Name, normalized.Description, show, now, now).Scan(&groupID); err != nil {
+			return false, errors.New("创建失败")
+		}
+	} else {
+		groupID = *normalized.ID
+		result, err := tx.ExecContext(ctx, `UPDATE v2_node_address_group
+SET name = $2, description = $3, "show" = $4, updated_at = $5
+WHERE id = $1`, groupID, normalized.Name, normalized.Description, show, now)
+		if err != nil {
+			return false, errors.New("保存失败")
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected == 0 {
+			return false, errors.New("地址组不存在")
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_node_address_rule WHERE group_id = $1`, groupID); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
+
+	for index, rule := range normalized.Rules {
+		sortValue := rule.Sort
+		if sortValue == nil {
+			next := int64(index)
+			sortValue = &next
+		}
+		ruleShow := int64(1)
+		if rule.Show != nil {
+			ruleShow = *rule.Show
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
+group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
+match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
+is_default, "show", sort, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+			groupID,
+			rule.Name,
+			rule.Host,
+			encodeNodeAddressStringList(rule.MatchUserIDs),
+			encodeNodeAddressStringList(rule.MatchPlanIDs),
+			encodeNodeAddressStringList(rule.MatchGroupIDs),
+			encodeNodeAddressStringList(rule.MatchUAKeywords),
+			encodeNodeAddressStringList(rule.ExcludeUAKeywords),
+			boolToSmallInt(rule.NoUA),
+			nullableInt64(rule.MinRegisteredDays),
+			nullableInt64(rule.MaxRegisteredDays),
+			boolToSmallInt(rule.IsDefault),
+			ruleShow,
+			nullableInt64(sortValue),
+			now,
+			now,
+		); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("保存失败")
+	}
+	return true, nil
+}
+
+func (s *DBService) DeleteNodeAddressGroup(ctx context.Context, id int64) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return false, err
+	}
+	if id <= 0 {
+		return false, errors.New("地址组不存在")
+	}
+
+	var used int64
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM v2_node_address_binding WHERE address_group_id = $1 LIMIT 1`, id).Scan(&used)
+	if err == nil {
+		return false, errors.New("地址组已被节点使用，无法删除")
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("query node address group usage: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("删除失败")
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_node_address_rule WHERE group_id = $1`, id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM v2_node_address_group WHERE id = $1`, id)
+	if err != nil {
+		return false, errors.New("删除失败")
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, errors.New("地址组不存在")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("删除失败")
+	}
+	return true, nil
+}
+
+func (s *DBService) replaceManagedServerAddressGroup(ctx context.Context, serverType string, serverID int64, addressGroupID any, now int64) error {
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return err
+	}
+	serverType = strings.TrimSpace(serverType)
+	if _, ok := managedServerDefinitions[serverType]; !ok || serverID <= 0 {
+		return errors.New("invalid managed server")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_node_address_binding WHERE server_type = $1 AND server_id = $2`, serverType, serverID); err != nil {
+		return err
+	}
+
+	if addressGroupID != nil {
+		groupID, ok := addressGroupID.(int64)
+		if !ok || groupID <= 0 {
+			return errors.New("invalid address group id")
+		}
+		var exists int64
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM v2_node_address_group WHERE id = $1 LIMIT 1`, groupID).Scan(&exists); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_binding (address_group_id, server_type, server_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)`, groupID, serverType, serverID, now, now); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+type managedServerAddressBinding struct {
+	GroupID   int64
+	GroupName string
+}
+
+func managedServerAddressBindingKey(serverType string, serverID int64) string {
+	return fmt.Sprintf("%s-%d", strings.TrimSpace(serverType), serverID)
+}
+
+func (s *DBService) managedServerAddressBindings(ctx context.Context) (map[string]managedServerAddressBinding, error) {
+	result := make(map[string]managedServerAddressBinding)
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return result, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT b.server_type, b.server_id, g.id, g.name
+FROM v2_node_address_binding b
+JOIN v2_node_address_group g ON g.id = b.address_group_id
+ORDER BY b.server_type ASC, b.server_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query managed server address bindings: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var serverType string
+		var serverID int64
+		var binding managedServerAddressBinding
+		if err := rows.Scan(&serverType, &serverID, &binding.GroupID, &binding.GroupName); err != nil {
+			return nil, fmt.Errorf("scan managed server address binding: %w", err)
+		}
+		result[managedServerAddressBindingKey(serverType, serverID)] = binding
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed server address bindings: %w", err)
+	}
+	return result, nil
+}
+
+func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[int64][]NodeAddressRuleRecord, error) {
+	result := make(map[int64][]NodeAddressRuleRecord, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
+match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
+is_default, "show", sort, created_at, updated_at
+FROM v2_node_address_rule
+WHERE group_id IN (%s)
+ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query node address rules: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		row, err := scanNodeAddressRuleRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[row.GroupID] = append(result[row.GroupID], nodeAddressRuleRecord(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate node address rules: %w", err)
+	}
+	return result, nil
+}
+
+func (s *DBService) loadNodeAddressBindings(ctx context.Context, ids []int64) (map[int64][]NodeAddressBindingRecord, error) {
+	result := make(map[int64][]NodeAddressBindingRecord, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	query, args := buildInt64InQuery(`SELECT address_group_id, server_type, server_id
+FROM v2_node_address_binding
+WHERE address_group_id IN (%s)
+ORDER BY address_group_id ASC, server_type ASC, server_id ASC`, ids)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query node address bindings: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var groupID int64
+		var record NodeAddressBindingRecord
+		if err := rows.Scan(&groupID, &record.ServerType, &record.ServerID); err != nil {
+			return nil, fmt.Errorf("scan node address binding: %w", err)
+		}
+		result[groupID] = append(result[groupID], record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate node address bindings: %w", err)
+	}
+	return result, nil
+}
+
+func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (NodeAddressGroupSaveRequest, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Description = strings.TrimSpace(req.Description)
+	if req.Name == "" {
+		return req, errors.New("地址组名称不能为空")
+	}
+	if req.Show != nil && (*req.Show < 0 || *req.Show > 1) {
+		return req, errors.New("显示状态格式不正确")
+	}
+	for index := range req.Rules {
+		rule := &req.Rules[index]
+		rule.Name = strings.TrimSpace(rule.Name)
+		rule.Host = strings.TrimSpace(rule.Host)
+		if rule.Host == "" {
+			return req, errors.New("规则地址不能为空")
+		}
+		rule.MatchUserIDs = normalizeNodeAddressStringList(rule.MatchUserIDs)
+		rule.MatchPlanIDs = normalizeNodeAddressStringList(rule.MatchPlanIDs)
+		rule.MatchGroupIDs = normalizeNodeAddressStringList(rule.MatchGroupIDs)
+		rule.MatchUAKeywords = normalizeNodeAddressStringList(rule.MatchUAKeywords)
+		rule.ExcludeUAKeywords = normalizeNodeAddressStringList(rule.ExcludeUAKeywords)
+		if rule.Show != nil && (*rule.Show < 0 || *rule.Show > 1) {
+			return req, errors.New("规则显示状态格式不正确")
+		}
+		if rule.MinRegisteredDays != nil && *rule.MinRegisteredDays < 0 {
+			return req, errors.New("注册天数格式不正确")
+		}
+		if rule.MaxRegisteredDays != nil && *rule.MaxRegisteredDays < 0 {
+			return req, errors.New("注册天数格式不正确")
+		}
+		if rule.MinRegisteredDays != nil && rule.MaxRegisteredDays != nil && *rule.MinRegisteredDays > *rule.MaxRegisteredDays {
+			return req, errors.New("注册天数范围不正确")
+		}
+		if !rule.IsDefault && !nodeAddressRuleHasCondition(*rule) {
+			rule.IsDefault = true
+		}
+	}
+	return req, nil
+}
+
+func scanNodeAddressGroupRow(scanner interface{ Scan(...any) error }) (nodeAddressGroupRow, error) {
+	var row nodeAddressGroupRow
+	if err := scanner.Scan(&row.ID, &row.Name, &row.Description, &row.Show, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		return nodeAddressGroupRow{}, fmt.Errorf("scan node address group: %w", err)
+	}
+	return row, nil
+}
+
+func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddressRuleRow, error) {
+	var row nodeAddressRuleRow
+	if err := scanner.Scan(
+		&row.ID,
+		&row.GroupID,
+		&row.Name,
+		&row.Host,
+		&row.MatchUserIDs,
+		&row.MatchPlanIDs,
+		&row.MatchGroupIDs,
+		&row.MatchUAKeywords,
+		&row.ExcludeUAKeywords,
+		&row.NoUA,
+		&row.MinRegisteredDays,
+		&row.MaxRegisteredDays,
+		&row.IsDefault,
+		&row.Show,
+		&row.Sort,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	); err != nil {
+		return nodeAddressRuleRow{}, fmt.Errorf("scan node address rule: %w", err)
+	}
+	return row, nil
+}
+
+func nodeAddressGroupRecord(row nodeAddressGroupRow) NodeAddressGroupRecord {
+	return NodeAddressGroupRecord{
+		ID:          row.ID,
+		Name:        row.Name,
+		Description: row.Description,
+		Show:        row.Show,
+		Rules:       []NodeAddressRuleRecord{},
+		Bindings:    []NodeAddressBindingRecord{},
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
+	}
+}
+
+func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
+	return NodeAddressRuleRecord{
+		ID:                row.ID,
+		GroupID:           row.GroupID,
+		Name:              row.Name,
+		Host:              row.Host,
+		MatchUserIDs:      parseServerStringList(row.MatchUserIDs),
+		MatchPlanIDs:      parseServerStringList(row.MatchPlanIDs),
+		MatchGroupIDs:     parseServerStringList(row.MatchGroupIDs),
+		MatchUAKeywords:   parseServerStringList(row.MatchUAKeywords),
+		ExcludeUAKeywords: parseServerStringList(row.ExcludeUAKeywords),
+		NoUA:              row.NoUA != 0,
+		MinRegisteredDays: nullInt64Ptr(row.MinRegisteredDays),
+		MaxRegisteredDays: nullInt64Ptr(row.MaxRegisteredDays),
+		IsDefault:         row.IsDefault != 0,
+		Show:              row.Show,
+		Sort:              nullInt64Ptr(row.Sort),
+		CreatedAt:         row.CreatedAt,
+		UpdatedAt:         row.UpdatedAt,
+	}
+}
+
+func nodeAddressRuleHasCondition(rule NodeAddressRuleSaveRequest) bool {
+	return len(rule.MatchUserIDs) > 0 ||
+		len(rule.MatchPlanIDs) > 0 ||
+		len(rule.MatchGroupIDs) > 0 ||
+		len(rule.MatchUAKeywords) > 0 ||
+		len(rule.ExcludeUAKeywords) > 0 ||
+		rule.NoUA ||
+		rule.MinRegisteredDays != nil ||
+		rule.MaxRegisteredDays != nil
+}
+
+func normalizeNodeAddressStringList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			next := strings.TrimSpace(item)
+			if next == "" {
+				continue
+			}
+			if _, exists := seen[next]; exists {
+				continue
+			}
+			seen[next] = struct{}{}
+			result = append(result, next)
+		}
+	}
+	return result
+}
+
+func encodeNodeAddressStringList(values []string) string {
+	raw, err := json.Marshal(normalizeNodeAddressStringList(values))
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func boolToSmallInt(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
+}

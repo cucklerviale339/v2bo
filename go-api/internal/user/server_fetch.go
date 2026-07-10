@@ -73,6 +73,11 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		return []map[string]any{}, nil
 	}
 
+	addressSelector, err := s.loadNodeAddressSelector(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	servers := make([]map[string]any, 0)
 	for _, table := range serverFetchTables {
 		rows, err := s.queryServerFetchRows(ctx, table)
@@ -112,11 +117,15 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {
 		if hostValue, ok := item["host"].(string); ok {
-			host, hostOK := parseServerHostByCondition(hostValue, userRow, ua, now)
-			if !hostOK {
-				continue
+			if host, matched := addressSelector.Resolve(fmt.Sprint(item["type"]), mapInt64(item["id"]), userRow, ua, now); matched {
+				item["host"] = host
+			} else {
+				host, hostOK := parseServerHostByCondition(hostValue, userRow, ua, now)
+				if !hostOK {
+					continue
+				}
+				item["host"] = host
 			}
-			item["host"] = host
 		}
 
 		if rawPort, isRange := serverPortRange(item["port"]); isRange {
@@ -131,7 +140,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 			isOnline = 1
 		}
 		item["is_online"] = isOnline
-		item["cache_key"] = fmt.Sprintf("%s-%d-%v-%d", item["type"], mapInt64(item["id"]), item["updated_at"], isOnline)
+		item["cache_key"] = fmt.Sprintf("%s-%d-%v-%d-%s", item["type"], mapInt64(item["id"]), item["updated_at"], isOnline, strings.TrimSpace(fmt.Sprint(item["host"])))
 		filtered = append(filtered, item)
 	}
 

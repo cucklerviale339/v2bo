@@ -28,6 +28,11 @@ func (s *DBService) ListManagedServers(ctx context.Context) ([]map[string]any, e
 		return nil, ErrUnavailable
 	}
 
+	addressBindings, err := s.managedServerAddressBindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	result := make([]map[string]any, 0)
 	for serverType, table := range managedServerTypeTable {
 		rows, err := s.db.QueryContext(ctx, `SELECT row_to_json(t)
@@ -56,6 +61,10 @@ FROM (
 			item["group_id"] = managedServerStringList(item["group_id"])
 			item["route_id"] = managedServerStringList(item["route_id"])
 			item["tags"] = managedServerStringList(item["tags"])
+			if binding, ok := addressBindings[managedServerAddressBindingKey(serverType, managedServerIDValue(item["id"]))]; ok {
+				item["address_group_id"] = binding.GroupID
+				item["address_group_name"] = binding.GroupName
+			}
 			targetID := managedServerRuntimeTargetID(item)
 			online, err := s.getInt64KV(ctx, managedServerRuntimeKey(serverType, "ONLINE_USER", targetID))
 			if err != nil {

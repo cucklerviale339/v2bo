@@ -681,6 +681,18 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/address/fetch":
+			if handleAdminNodeAddressGroupFetch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/address/save":
+			if handleAdminNodeAddressGroupSave(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/address/drop":
+			if handleAdminNodeAddressGroupDrop(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/manage/getNodes":
 			if handleAdminServerManageGetNodes(w, r, state.session, state.admin) {
 				return

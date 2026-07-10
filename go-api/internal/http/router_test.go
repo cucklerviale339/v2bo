@@ -769,6 +769,7 @@ type fakeAdminService struct {
 	inviteRecords       admin.InviteCampaignRecordListResult
 	serverGroups        []admin.ServerGroupRecord
 	clientEntryGroups   []admin.ClientEntryGroupRecord
+	nodeAddressGroups   []admin.NodeAddressGroupRecord
 	serverRoutes        []admin.ServerRouteRecord
 	managedServers      []map[string]any
 	hostUpdateResult    admin.ManagedServerHostUpdateResult
@@ -855,6 +856,9 @@ type fakeAdminService struct {
 	lastClientEntryID   *int64
 	lastClientEntrySave admin.ClientEntryGroupSaveRequest
 	lastClientEntryDrop int64
+	lastNodeAddressID   *int64
+	lastNodeAddressSave admin.NodeAddressGroupSaveRequest
+	lastNodeAddressDrop int64
 	lastRouteSave       admin.ServerRouteSaveRequest
 	lastRouteDrop       int64
 	lastManagedSort     map[string]map[int64]int64
@@ -1049,6 +1053,21 @@ func (f *fakeAdminService) SaveClientEntryGroup(_ context.Context, req admin.Cli
 
 func (f *fakeAdminService) DeleteClientEntryGroup(_ context.Context, id int64) (bool, error) {
 	f.lastClientEntryDrop = id
+	return true, f.err
+}
+
+func (f *fakeAdminService) ListNodeAddressGroups(_ context.Context, id *int64) ([]admin.NodeAddressGroupRecord, error) {
+	f.lastNodeAddressID = id
+	return f.nodeAddressGroups, f.err
+}
+
+func (f *fakeAdminService) SaveNodeAddressGroup(_ context.Context, req admin.NodeAddressGroupSaveRequest) (bool, error) {
+	f.lastNodeAddressSave = req
+	return true, f.err
+}
+
+func (f *fakeAdminService) DeleteNodeAddressGroup(_ context.Context, id int64) (bool, error) {
+	f.lastNodeAddressDrop = id
 	return true, f.err
 }
 

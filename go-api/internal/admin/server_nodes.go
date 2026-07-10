@@ -106,11 +106,16 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 		return false, ErrUnavailable
 	}
 
-	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
+	serverType = strings.TrimSpace(serverType)
+	def, ok := managedServerDefinitions[serverType]
 	if !ok {
 		return false, errors.New("保存失败")
 	}
 
+	addressGroupID, addressGroupPresent, err := optionalManagedServerEntryGroupField(payload, "address_group_id", "地址组格式不正确")
+	if err != nil {
+		return false, err
+	}
 	id, values, err := normalizeManagedServerSavePayload(serverType, payload)
 	if err != nil {
 		return false, err
@@ -120,8 +125,14 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 	if id == nil {
 		values["created_at"] = now
 		values["updated_at"] = now
-		if err := s.insertManagedServer(ctx, def, values); err != nil {
+		insertedID, err := s.insertManagedServer(ctx, def, values)
+		if err != nil {
 			return false, errors.New("创建失败")
+		}
+		if addressGroupPresent {
+			if err := s.replaceManagedServerAddressGroup(ctx, serverType, insertedID, addressGroupID, now); err != nil {
+				return false, errors.New("地址组保存失败")
+			}
 		}
 		return true, nil
 	}
@@ -137,6 +148,11 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 	values["updated_at"] = now
 	if err := s.updateManagedServerRecord(ctx, def, *id, values); err != nil {
 		return false, errors.New("保存失败")
+	}
+	if addressGroupPresent {
+		if err := s.replaceManagedServerAddressGroup(ctx, serverType, *id, addressGroupID, now); err != nil {
+			return false, errors.New("地址组保存失败")
+		}
 	}
 	return true, nil
 }
@@ -159,12 +175,27 @@ func (s *DBService) DeleteManagedServer(ctx context.Context, serverType string, 
 		return false, errors.New("节点ID不存在")
 	}
 
-	result, err := s.db.ExecContext(ctx, `DELETE FROM `+quoteIdentifier(def.table)+` WHERE id = $1`, id)
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("删除失败")
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_node_address_binding WHERE server_type = $1 AND server_id = $2`, strings.TrimSpace(serverType), id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM `+quoteIdentifier(def.table)+` WHERE id = $1`, id)
 	if err != nil {
 		return false, errors.New("删除失败")
 	}
 	affected, err := result.RowsAffected()
 	if err != nil || affected == 0 {
+		return false, errors.New("删除失败")
+	}
+	if err := tx.Commit(); err != nil {
 		return false, errors.New("删除失败")
 	}
 	return true, nil
@@ -199,6 +230,12 @@ func (s *DBService) UpdateManagedServer(ctx context.Context, serverType string, 
 			return false, errors.New("保存失败")
 		}
 		delete(normalized, "entry_group_id")
+	}
+	if addressGroupID, present := normalized["address_group_id"]; present {
+		if err := s.replaceManagedServerAddressGroup(ctx, strings.TrimSpace(serverType), id, addressGroupID, now); err != nil {
+			return false, errors.New("地址组保存失败")
+		}
+		delete(normalized, "address_group_id")
 	}
 	if len(normalized) > 0 {
 		normalized["updated_at"] = now
@@ -328,6 +365,11 @@ func normalizeManagedServerUpdatePayload(payload map[string]any) (map[string]any
 		return nil, err
 	} else if present {
 		values["entry_group_id"] = entryGroupID
+	}
+	if addressGroupID, present, err := optionalManagedServerEntryGroupField(payload, "address_group_id", "地址组格式不正确"); err != nil {
+		return nil, err
+	} else if present {
+		values["address_group_id"] = addressGroupID
 	}
 	if len(values) == 0 {
 		return nil, errors.New("保存失败")
@@ -922,7 +964,7 @@ func (s *DBService) managedServerExists(ctx context.Context, table string, id in
 	return false, fmt.Errorf("query managed server existence: %w", err)
 }
 
-func (s *DBService) insertManagedServer(ctx context.Context, def managedServerDefinition, values map[string]any) error {
+func (s *DBService) insertManagedServer(ctx context.Context, def managedServerDefinition, values map[string]any) (int64, error) {
 	columns := make([]string, 0, len(def.columns))
 	args := make([]any, 0, len(def.columns))
 	for _, column := range def.columns {
@@ -934,7 +976,7 @@ func (s *DBService) insertManagedServer(ctx context.Context, def managedServerDe
 		args = append(args, value)
 	}
 	if len(columns) == 0 {
-		return errors.New("missing values")
+		return 0, errors.New("missing values")
 	}
 
 	placeholders := make([]string, 0, len(columns))
@@ -942,13 +984,15 @@ func (s *DBService) insertManagedServer(ctx context.Context, def managedServerDe
 		placeholders = append(placeholders, fmt.Sprintf("$%d", index+1))
 	}
 
-	_, err := s.db.ExecContext(
+	var id int64
+	err := s.db.QueryRowContext(
 		ctx,
 		`INSERT INTO `+quoteIdentifier(def.table)+` (`+strings.Join(columns, ", ")+`)
-VALUES (`+strings.Join(placeholders, ", ")+`)`,
+VALUES (`+strings.Join(placeholders, ", ")+`)
+RETURNING id`,
 		args...,
-	)
-	return err
+	).Scan(&id)
+	return id, err
 }
 
 func (s *DBService) updateManagedServerRecord(ctx context.Context, def managedServerDefinition, id int64, values map[string]any) error {
