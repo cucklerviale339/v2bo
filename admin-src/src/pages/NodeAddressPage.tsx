@@ -48,6 +48,7 @@ export default function NodeAddressPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [togglingID, setTogglingID] = useState<any>(null);
   const [edit, setEdit] = useState<any>(null);
   const [form] = Form.useForm();
 
@@ -93,6 +94,20 @@ export default function NodeAddressPage() {
     load();
   };
 
+  const toggleEnabled = async (row: any, enabled: boolean) => {
+    setTogglingID(row.id);
+    try {
+      await apiPost('/server/address/save', savePayload({ ...normalizeGroup(row), enabled }));
+      message.success('保存成功');
+      load();
+    } catch (e: any) {
+      message.error(e.message || '保存失败');
+      load();
+    } finally {
+      setTogglingID(null);
+    }
+  };
+
   const columns: any[] = [
     { title: 'ID', dataIndex: 'id', width: 80 },
     { title: '地址组名称', dataIndex: 'name', width: 180 },
@@ -106,7 +121,7 @@ export default function NodeAddressPage() {
       const count = Array.isArray(bindings) ? bindings.length : 0;
       return count ? `${count} 个节点` : '-';
     } },
-    { title: '启用', dataIndex: 'enabled', width: 90, render: (enabled: any) => <Tag color={Number(enabled) ? 'green' : 'default'}>{Number(enabled) ? '启用' : '停用'}</Tag> },
+    { title: '启用', dataIndex: 'enabled', width: 90, render: (enabled: any, row: any) => <Switch size="small" checked={!!Number(enabled)} loading={togglingID === row.id} onChange={(checked) => toggleEnabled(row, checked)} /> },
     { title: '操作', dataIndex: 'action', align: 'right', width: 120, render: (_: any, row: any) => <Space split={<span className="ant-divider ant-divider-vertical" />}><a onClick={() => openEditor(row)}>编辑</a><Popconfirm title="确认删除？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm></Space> },
   ];
 
@@ -124,7 +139,6 @@ export default function NodeAddressPage() {
         <Form.Item name="id" hidden><Input /></Form.Item>
         <Form.Item name="name" label="地址组名称" rules={[{ required: true, message: '请输入地址组名称' }]}><Input placeholder="请输入地址组名称" /></Form.Item>
         <Form.Item name="description" label="说明"><Input placeholder="请输入说明" /></Form.Item>
-        <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         <Form.List name="rules">
           {(fields, { add, remove }) => <>
             <div className="node-address-rule-head">
