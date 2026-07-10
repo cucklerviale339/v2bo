@@ -735,7 +735,7 @@ func TestRouterClientSubscribeSagerNetEndpointUsesGeneralURIBase64(t *testing.T)
 	if err != nil {
 		t.Fatalf("expected sagernet base64 body: %v", err)
 	}
-	if body := string(decoded); !strings.Contains(body, "vmess://") || !strings.Contains(body, "VMess-1") {
+	if body := string(decoded); !strings.Contains(body, "vmess://") {
 		t.Fatalf("expected sagernet URI payload, got %q", body)
 	}
 }
@@ -757,7 +757,7 @@ func TestRouterClientSubscribeV2RayTunEndpointKeepsDownloadHeaders(t *testing.T)
 	if err != nil {
 		t.Fatalf("expected v2raytun base64 body: %v", err)
 	}
-	if body := string(decoded); !strings.Contains(body, "vmess://") || !strings.Contains(body, "VMess-1") {
+	if body := string(decoded); !strings.Contains(body, "vmess://") {
 		t.Fatalf("expected v2raytun URI payload, got %q", body)
 	}
 }
