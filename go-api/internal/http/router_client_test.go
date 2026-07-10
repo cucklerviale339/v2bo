@@ -7,11 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
@@ -597,230 +594,171 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	}
 }
 
-func TestRouterClientSubscribeGuardBlocksTokenBlacklistBeforeUserLookup(t *testing.T) {
-	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
-	router := NewRouter(config.Config{
-		PublicDir:                        "../public",
-		SubscribeGuardEnable:             true,
-		SubscribeGuardTokenBlacklist:     []string{"token-1"},
-		SubscribeGuardRateLimitPerMinute: 0,
-	}, WithUserService(userService))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-	req.Header.Set("User-Agent", "ClashMeta/1.0")
-	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if userService.lastClientToken != "" {
-		t.Fatalf("expected blocked request to skip user lookup, got token %q", userService.lastClientToken)
-	}
-	if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "token" {
-		t.Fatalf("expected token block reason header, got %q", reason)
-	}
-}
-
-func TestSubscribeGuardRequestClientIPPrefersForwardedForOverProxyRealIP(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-	req.RemoteAddr = "10.0.0.10:12345"
-	req.Header.Set("X-Real-IP", "198.51.100.10")
-	req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.10")
-
-	if ip := requestClientIP(req); ip != "203.0.113.9" {
-		t.Fatalf("expected real client ip from X-Forwarded-For, got %q", ip)
-	}
-}
-
-func TestSubscribeGuardRequestClientIPPrefersCloudflareHeader(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-	req.RemoteAddr = "10.0.0.10:12345"
-	req.Header.Set("CF-Connecting-IP", "203.0.113.8")
-	req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.10")
-
-	if ip := requestClientIP(req); ip != "203.0.113.8" {
-		t.Fatalf("expected Cloudflare connecting ip, got %q", ip)
-	}
-}
-
-func TestRouterClientSubscribeGuardBlocksBadUserAgent(t *testing.T) {
-	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
-	router := NewRouter(config.Config{
-		PublicDir:                        "../public",
-		SubscribeGuardEnable:             true,
-		SubscribeGuardUABlacklist:        []string{"curl", "python"},
-		SubscribeGuardRateLimitPerMinute: 0,
-	}, WithUserService(userService))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-	req.Header.Set("User-Agent", "curl/8.0")
-	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "ua" {
-		t.Fatalf("expected ua block reason header, got %q", reason)
-	}
-}
-
-func TestRouterClientSubscribeGuardRateLimitsByIP(t *testing.T) {
-	userService := &fakeUserService{
+func compatibleSubscribeUserService(servers []map[string]any) *fakeUserService {
+	return &fakeUserService{
 		resolvedClientUserID: 10,
 		subscribe: user.Subscribe{
-			UUID:           "11111111-1111-1111-1111-111111111111",
-			Token:          "token-1",
-			TransferEnable: 1024,
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
 		},
-	}
-	router := NewRouter(config.Config{
-		PublicDir:                        "../public",
-		SubscribeGuardEnable:             true,
-		SubscribeGuardRateLimitPerMinute: 1,
-	}, WithUserService(userService))
-
-	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-		req.RemoteAddr = "203.0.113.9:12345"
-		req.Header.Set("User-Agent", "ClashMeta/1.0")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		if i == 0 && rec.Code != http.StatusOK {
-			t.Fatalf("expected first request 200, got %d: %s", rec.Code, rec.Body.String())
-		}
-		if i == 1 {
-			if rec.Code != http.StatusTooManyRequests {
-				t.Fatalf("expected second request 429, got %d: %s", rec.Code, rec.Body.String())
-			}
-			if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "rate_limit" {
-				t.Fatalf("expected rate_limit reason header, got %q", reason)
-			}
-		}
+		servers: servers,
 	}
 }
 
-func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
-	resetSubscribeGuardStateForTest()
-	publicDir := filepath.Join(t.TempDir(), "public")
-	if err := os.MkdirAll(publicDir, 0o755); err != nil {
-		t.Fatal(err)
+func compatibleVmessServer() map[string]any {
+	return map[string]any{
+		"type":    "vmess",
+		"name":    "VMess-1",
+		"host":    "node.example.com",
+		"port":    int64(443),
+		"network": "ws",
+		"tls":     int64(1),
+		"tls_settings": map[string]any{
+			"server_name": "node.example.com",
+		},
+		"network_settings": map[string]any{
+			"path": "/ws",
+			"headers": map[string]any{
+				"Host": "node.example.com",
+			},
+		},
 	}
-	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
-	nodeService := &fakeNodeService{sensitiveStats: map[string]any{
-		"top_users": []map[string]any{{"user_id": int64(10), "email": "user@example.com", "count": int64(3)}},
-	}}
-	router := NewRouter(config.Config{
-		PublicDir:                    publicDir,
-		AdminPath:                    "localadmin",
-		SubscribeGuardEnable:         true,
-		SubscribeGuardTokenBlacklist: []string{"token-1"},
-	}, WithUserService(userService), WithSessionService(sessionService), WithNodeService(nodeService))
+}
 
-	blockedReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
-	blockedReq.RemoteAddr = "203.0.113.9:12345"
-	blockedReq.Header.Set("User-Agent", "ClashMeta/1.0")
-	blockedRec := httptest.NewRecorder()
-	router.ServeHTTP(blockedRec, blockedReq)
-	if blockedRec.Code != http.StatusForbidden {
-		t.Fatalf("expected guard request 403, got %d: %s", blockedRec.Code, blockedRec.Body.String())
+func compatibleShadowsocksServer() map[string]any {
+	return map[string]any{
+		"id":     int64(7),
+		"type":   "shadowsocks",
+		"name":   "SS-1",
+		"host":   "ss.example.com",
+		"port":   int64(8388),
+		"cipher": "aes-256-gcm",
 	}
+}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/stats?auth_data=jwt-admin", nil)
+func TestRouterClientSubscribeLoonEndpointUsesPlainTextProfile(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleVmessServer()})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=loon", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "text/plain") {
+		t.Fatalf("expected loon subscribe to return text/plain, got %q", contentType)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "VMess-1=vmess,node.example.com,443") || strings.Contains(body, "vmess://") {
+		t.Fatalf("expected loon plain text profile, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeQuantumultXEndpointUsesDedicatedBase64Profile(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleVmessServer()})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=quantumult%20x", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("expected quantumult x base64 body: %v", err)
+	}
+	body := string(decoded)
+	if !strings.Contains(body, "vmess=node.example.com:443") || strings.Contains(body, "vmess://") {
+		t.Fatalf("expected quantumult x line profile, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeShadowsocksEndpointUsesSIP008(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleShadowsocksServer()})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=shadowsocks", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("expected shadowsocks subscribe to return json, got %q", contentType)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("expected json body: %v", err)
+		t.Fatalf("decode sip008 payload: %v", err)
 	}
-	data, ok := payload["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected data object, got %#v", payload["data"])
+	servers := payload["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("expected one sip008 server, got %#v", servers)
 	}
-	if data["blocked"].(float64) != 1 || data["total"].(float64) != 1 {
-		t.Fatalf("unexpected guard counters: %#v", data)
-	}
-	recent, ok := data["recent"].([]any)
-	if !ok || len(recent) != 1 {
-		t.Fatalf("expected one recent event, got %#v", data["recent"])
-	}
-	first := recent[0].(map[string]any)
-	if first["reason"] != "token" || first["ip"] != "203.0.113.9" {
-		t.Fatalf("unexpected recent event: %#v", first)
-	}
-	sensitive, ok := data["sensitive"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected sensitive stats, got %#v", data["sensitive"])
-	}
-	topUsers, ok := sensitive["top_users"].([]any)
-	if !ok || len(topUsers) != 1 {
-		t.Fatalf("expected sensitive top users, got %#v", sensitive["top_users"])
-	}
-	subscribeUsers, ok := data["top_subscribe_users"].([]any)
-	if !ok || len(subscribeUsers) != 1 {
-		t.Fatalf("expected subscribe guard user rank, got %#v", data["top_subscribe_users"])
-	}
-	subscribeUser, ok := subscribeUsers[0].(map[string]any)
-	if !ok || subscribeUser["email"] != "guard-user@example.com" || subscribeUser["ua_count"] != float64(1) || subscribeUser["ip_count"] != float64(1) {
-		t.Fatalf("unexpected subscribe guard user rank: %#v", subscribeUsers[0])
-	}
-	if ips, ok := subscribeUser["ips"].([]any); !ok || len(ips) != 1 || ips[0] != "203.0.113.9" {
-		t.Fatalf("unexpected subscribe guard user ips: %#v", subscribeUser["ips"])
+	server := servers[0].(map[string]any)
+	if server["remarks"] != "SS-1" || server["server"] != "ss.example.com" {
+		t.Fatalf("unexpected sip008 server: %#v", server)
 	}
 }
 
-func TestSubscribeGuardStatsSurvivesMemoryResetFromLogFile(t *testing.T) {
-	resetSubscribeGuardStateForTest()
-	publicDir := filepath.Join(t.TempDir(), "public")
-	if err := os.MkdirAll(publicDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 7}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-persist", nil)
-	req.RemoteAddr = "203.0.113.10:12345"
-	req.Header.Set("User-Agent", "curl/8.0")
+func TestRouterClientSubscribeStashEndpointUsesStashTemplate(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest", PublicDir: "../public"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleVmessServer()})))
 
-	recordSubscribeGuardEvent(cfg, req, http.StatusForbidden, "ua", true)
-	resetSubscribeGuardStateForTest()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=stash", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
 
-	stats := subscribeGuardStatsSnapshot(cfg)
-	if stats["total"].(int64) != 1 || stats["blocked"].(int64) != 1 {
-		t.Fatalf("expected persisted stats after memory reset, got %#v", stats)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	recent := stats["recent"].([]subscribeGuardEvent)
-	if len(recent) != 1 || recent[0].Token != "token-persist" || recent[0].Reason != "ua" {
-		t.Fatalf("unexpected persisted recent events: %#v", recent)
+	body := rec.Body.String()
+	if !strings.Contains(body, "mixed-port: 7890") || !strings.Contains(body, "VMess-1") {
+		t.Fatalf("expected stash yaml profile from stash template, got %q", body)
 	}
 }
 
-func TestSubscribeGuardLogCleanupUsesRetentionDays(t *testing.T) {
-	resetSubscribeGuardStateForTest()
-	publicDir := filepath.Join(t.TempDir(), "public")
-	if err := os.MkdirAll(publicDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 1}
-	oldEvent := subscribeGuardEvent{Time: time.Now().Add(-48 * time.Hour).Unix(), IP: "203.0.113.1", Token: "old", UA: "curl", Status: 403, Reason: "ua", Blocked: true}
-	newEvent := subscribeGuardEvent{Time: time.Now().Unix(), IP: "203.0.113.2", Token: "new", UA: "clash", Status: 200, Reason: "pass", Blocked: false}
-	if err := writeSubscribeGuardEvents(cfg, []subscribeGuardEvent{oldEvent, newEvent}); err != nil {
-		t.Fatal(err)
-	}
+func TestRouterClientSubscribeSagerNetEndpointUsesGeneralURIBase64(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleVmessServer()})))
 
-	if err := cleanupSubscribeGuardLog(cfg, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=sagernet", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
 
-	events := readSubscribeGuardLogEvents(cfg)
-	if len(events) != 1 || events[0].Token != "new" {
-		t.Fatalf("expected only new event after cleanup, got %#v", events)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("expected sagernet base64 body: %v", err)
+	}
+	if body := string(decoded); !strings.Contains(body, "vmess://") || !strings.Contains(body, "VMess-1") {
+		t.Fatalf("expected sagernet URI payload, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeV2RayTunEndpointKeepsDownloadHeaders(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(compatibleSubscribeUserService([]map[string]any{compatibleVmessServer()})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=v2raytun", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="Forest"` {
+		t.Fatalf("expected v2raytun attachment header, got %q", got)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("expected v2raytun base64 body: %v", err)
+	}
+	if body := string(decoded); !strings.Contains(body, "vmess://") || !strings.Contains(body, "VMess-1") {
+		t.Fatalf("expected v2raytun URI payload, got %q", body)
 	}
 }
 
@@ -1178,7 +1116,7 @@ func TestRouterClientSubscribeSingboxFlagUsesJSONProfile(t *testing.T) {
 		t.Fatalf("expected sing-box subscribe to return json, got %q with body %q", contentType, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"VMess-1\"") {
+	if !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"VMess-1\"") || !strings.Contains(body, "\"tag\":\"direct\"") {
 		t.Fatalf("expected sing-box json body, got %q", body)
 	}
 	if strings.Contains(body, "38.207.164.191") || strings.Contains(body, "apt-hcloud-doh") {

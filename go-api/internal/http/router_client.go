@@ -75,9 +75,6 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
 	r = withClientSubscribePathToken(cfg, r)
 	r = withRecoveredClientSubscribeQuery(r)
-	if handleSubscribeGuard(w, r, cfg) {
-		return true
-	}
 	userID, ok := authenticateClientUser(w, r, service)
 	if !ok {
 		return true
@@ -135,7 +132,8 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	if isClashLikeSubscribeFlag(flag) {
 		writeSubscribeDownloadHeaders(w, cfg)
-		body, err := buildClashStandardProfile(cfg, "custom.clash.yaml", "default.clash.yaml", subscribe.UUID, servers)
+		customFile, defaultFile := clashLikeTemplateFiles(flag)
+		body, err := buildClashStandardProfile(cfg, customFile, defaultFile, subscribe.UUID, servers)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 			return true
@@ -143,6 +141,39 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
+		return true
+	}
+
+	if isLoonSubscribeFlag(flag) {
+		writePlainText(w, http.StatusOK, buildLoonPayload(subscribe.UUID, servers))
+		return true
+	}
+
+	if isQuantumultXSubscribeFlag(flag) {
+		writePlainText(w, http.StatusOK, buildQuantumultXPayload(subscribe.UUID, servers))
+		return true
+	}
+
+	if isV2RayTunSubscribeFlag(flag) {
+		writeV2RayTunHeaders(w, cfg)
+		writePlainText(w, http.StatusOK, buildGeneralSubscribePayload(subscribe.UUID, servers))
+		return true
+	}
+
+	if isShadowsocksSubscribeFlag(flag) {
+		body, err := buildShadowsocksSIP008Profile(subscribe, servers)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+			return true
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+		return true
+	}
+
+	if isSagerNetSubscribeFlag(flag) {
+		writePlainText(w, http.StatusOK, buildSagerNetPayload(subscribe.UUID, servers))
 		return true
 	}
 
@@ -346,6 +377,15 @@ func writeSubscribeDownloadHeadersWithExtension(w http.ResponseWriter, cfg confi
 	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(filename))
 }
 
+func writeV2RayTunHeaders(w http.ResponseWriter, cfg config.Config) {
+	appName := strings.TrimSpace(cfg.AppName)
+	if appName == "" {
+		appName = "Forest"
+	}
+	w.Header().Set("profile-title", appName)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+strings.ReplaceAll(appName, `"`, "")+`"`)
+}
+
 func isClashLikeSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "clash") ||
 		strings.Contains(flag, "meta") ||
@@ -355,12 +395,45 @@ func isClashLikeSubscribeFlag(flag string) bool {
 		strings.Contains(flag, "nyanpasu")
 }
 
+func clashLikeTemplateFiles(flag string) (string, string) {
+	if isStashSubscribeFlag(flag) {
+		return "custom.stash.yaml", "default.stash.yaml"
+	}
+	return "custom.clash.yaml", "default.clash.yaml"
+}
+
+func isStashSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "stash")
+}
+
 func isShadowrocketModuleSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "shadowrocket-module") || strings.Contains(flag, "shadowrocket_module") || strings.Contains(flag, "sr-module")
 }
 
 func isShadowrocketSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "shadowrocket")
+}
+
+func isLoonSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "loon")
+}
+
+func isQuantumultXSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "quantumult x") ||
+		strings.Contains(flag, "quantumult%20x") ||
+		strings.Contains(flag, "quantumultx")
+}
+
+func isV2RayTunSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "v2raytun")
+}
+
+func isShadowsocksSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "shadowsocks")
+}
+
+func isSagerNetSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "sagernet")
 }
 
 func isSurgeSubscribeFlag(flag string) bool {
@@ -390,7 +463,7 @@ func singBoxTemplateFiles(flag string) (string, string) {
 func singBoxUsesLegacyTemplate(flag string) bool {
 	version, ok := parseSingBoxVersion(flag)
 	if !ok {
-		return false
+		return true
 	}
 	return compareVersion(version, "1.12.0") < 0
 }

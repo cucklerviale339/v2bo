@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	usersvc "forest/go-api/internal/user"
 )
 
 func TestBuildGeneralSubscribePayloadInfersLegacyV2nodeProtocol(t *testing.T) {
@@ -38,5 +41,96 @@ func TestBuildGeneralSubscribePayloadInfersLegacyV2nodeProtocol(t *testing.T) {
 	}
 	if !strings.Contains(string(decoded), "vmess://") {
 		t.Fatalf("expected vmess uri in payload, got %q", string(decoded))
+	}
+}
+
+func TestBuildLoonPayloadUsesDedicatedPlainTextFormat(t *testing.T) {
+	payload := buildLoonPayload("user-uuid", []map[string]any{
+		{
+			"type":    "vmess",
+			"name":    "loon-vmess",
+			"host":    "node.example.com",
+			"port":    int64(443),
+			"network": "ws",
+			"tls":     int64(1),
+			"networkSettings": map[string]any{
+				"path": "/ws",
+				"headers": map[string]any{
+					"Host": "cdn.example.com",
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(payload, "loon-vmess=vmess,node.example.com,443") {
+		t.Fatalf("expected loon vmess line, got %q", payload)
+	}
+	if strings.Contains(payload, "vmess://") {
+		t.Fatalf("expected loon plain text format, got generic uri payload %q", payload)
+	}
+}
+
+func TestBuildQuantumultXPayloadUsesDedicatedBase64Format(t *testing.T) {
+	payload := buildQuantumultXPayload("user-uuid", []map[string]any{
+		{
+			"type":    "vmess",
+			"name":    "qx-vmess",
+			"host":    "node.example.com",
+			"port":    int64(443),
+			"network": "ws",
+			"tls":     int64(1),
+			"networkSettings": map[string]any{
+				"path": "/ws",
+				"headers": map[string]any{
+					"Host": "cdn.example.com",
+				},
+			},
+		},
+	})
+
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode quantumult x payload: %v", err)
+	}
+	body := string(decoded)
+	if !strings.Contains(body, "vmess=node.example.com:443") {
+		t.Fatalf("expected quantumult x vmess line, got %q", body)
+	}
+	if strings.Contains(body, "vmess://") {
+		t.Fatalf("expected quantumult x line format, got generic uri payload %q", body)
+	}
+}
+
+func TestBuildShadowsocksSIP008Profile(t *testing.T) {
+	payload, err := buildShadowsocksSIP008Profile(usersvc.Subscribe{
+		UUID:           "user-uuid",
+		U:              1024,
+		D:              2048,
+		TransferEnable: 8192,
+	}, []map[string]any{
+		{
+			"id":     int64(7),
+			"type":   "shadowsocks",
+			"name":   "ss-node",
+			"host":   "ss.example.com",
+			"port":   int64(8388),
+			"cipher": "aes-256-gcm",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build sip008 profile: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode sip008 profile: %v", err)
+	}
+	servers := decoded["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("expected one server, got %#v", servers)
+	}
+	server := servers[0].(map[string]any)
+	if server["remarks"] != "ss-node" || server["password"] != "user-uuid" {
+		t.Fatalf("unexpected sip008 server: %#v", server)
 	}
 }

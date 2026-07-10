@@ -491,63 +491,6 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestDBServiceSaveConfigDisablesSubscribeGuard(t *testing.T) {
-	root := t.TempDir()
-	writeAdminJSONFixture(t, root, map[string]any{
-		"secure_path":            "localadmin",
-		"subscribe_guard_enable": 1,
-	})
-	mustMkdirAll(t, filepath.Join(root, "go-api"))
-
-	oldRoot := adminProjectRoot
-	adminProjectRoot = root
-	defer func() { adminProjectRoot = oldRoot }()
-
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	defer func() { _ = os.Chdir(prevWD) }()
-	if err := os.Chdir(filepath.Join(root, "go-api")); err != nil {
-		t.Fatalf("chdir work dir: %v", err)
-	}
-
-	t.Setenv("SUBSCRIBE_GUARD_ENABLE", "")
-
-	cfg := cfgpkg.Load()
-	runtimeState := cfgpkg.NewRuntimeState(cfg)
-	service := (&DBService{cfg: cfg}).WithRuntimeConfig(runtimeState)
-
-	if !runtimeState.CurrentConfig().SubscribeGuardEnable {
-		t.Fatalf("expected subscribe guard enabled before save")
-	}
-
-	ok, err := service.SaveConfig(context.Background(), map[string]any{
-		"subscribe_guard_enable": 0,
-	})
-	if err != nil {
-		t.Fatalf("save config: %v", err)
-	}
-	if !ok {
-		t.Fatalf("expected save config success")
-	}
-	if runtimeState.CurrentConfig().SubscribeGuardEnable {
-		t.Fatalf("expected subscribe guard disabled after save")
-	}
-
-	data, err := service.FetchConfig(context.Background(), "subscribe_guard")
-	if err != nil {
-		t.Fatalf("fetch config: %v", err)
-	}
-	group, ok := data["subscribe_guard"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected subscribe guard group, got %#v", data)
-	}
-	if group["subscribe_guard_enable"] != int64(0) {
-		t.Fatalf("expected subscribe_guard_enable=0 after save, got %#v", group["subscribe_guard_enable"])
-	}
-}
-
 func TestLoadBulkMailConfigFallsBackToAppNameForFromName(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{

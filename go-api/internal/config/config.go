@@ -48,16 +48,6 @@ type Config struct {
 	SubscribeURL                       string
 	SubscribePath                      string
 	SubscribeTokenInPath               bool
-	SubscribeGuardEnable               bool
-	SubscribeGuardIPWhitelist          []string
-	SubscribeGuardIPBlacklist          []string
-	SubscribeGuardUAWhitelist          []string
-	SubscribeGuardUABlacklist          []string
-	SubscribeGuardTokenBlacklist       []string
-	SubscribeGuardBlockEmptyUA         bool
-	SubscribeGuardBlockCrawlerUA       bool
-	SubscribeGuardRateLimitPerMinute   int64
-	SubscribeGuardLogKeepDays          int64
 	SubscribeGuardSensitiveEnable      bool
 	SubscribeGuardSensitiveRules       []string
 	SubscribeGuardSensitiveInterval    int64
@@ -196,16 +186,6 @@ func Load() Config {
 		SubscribeURL:                       managedString("SUBSCRIBE_URL", "subscribe_url", ""),
 		SubscribePath:                      managedString("SUBSCRIBE_PATH", "subscribe_path", "/api/v1/client/subscribe"),
 		SubscribeTokenInPath:               managedBool("SUBSCRIBE_TOKEN_IN_PATH", "subscribe_token_in_path", false),
-		SubscribeGuardEnable:               managedBool("SUBSCRIBE_GUARD_ENABLE", "subscribe_guard_enable", false),
-		SubscribeGuardIPWhitelist:          managedList("SUBSCRIBE_GUARD_IP_WHITELIST", "subscribe_guard_ip_whitelist", nil),
-		SubscribeGuardIPBlacklist:          managedList("SUBSCRIBE_GUARD_IP_BLACKLIST", "subscribe_guard_ip_blacklist", nil),
-		SubscribeGuardUAWhitelist:          managedList("SUBSCRIBE_GUARD_UA_WHITELIST", "subscribe_guard_ua_whitelist", nil),
-		SubscribeGuardUABlacklist:          managedList("SUBSCRIBE_GUARD_UA_BLACKLIST", "subscribe_guard_ua_blacklist", nil),
-		SubscribeGuardTokenBlacklist:       managedList("SUBSCRIBE_GUARD_TOKEN_BLACKLIST", "subscribe_guard_token_blacklist", nil),
-		SubscribeGuardBlockEmptyUA:         managedBool("SUBSCRIBE_GUARD_BLOCK_EMPTY_UA", "subscribe_guard_block_empty_ua", true),
-		SubscribeGuardBlockCrawlerUA:       managedBool("SUBSCRIBE_GUARD_BLOCK_CRAWLER_UA", "subscribe_guard_block_crawler_ua", true),
-		SubscribeGuardRateLimitPerMinute:   managedInt64("SUBSCRIBE_GUARD_RATE_LIMIT_PER_MINUTE", "subscribe_guard_rate_limit_per_minute", 20),
-		SubscribeGuardLogKeepDays:          managedInt64("SUBSCRIBE_GUARD_LOG_KEEP_DAYS", "subscribe_guard_log_keep_days", 7),
 		SubscribeGuardSensitiveEnable:      managedBool("SUBSCRIBE_GUARD_SENSITIVE_ENABLE", "subscribe_guard_sensitive_enable", false),
 		SubscribeGuardSensitiveRules:       managedList("SUBSCRIBE_GUARD_SENSITIVE_RULES", "subscribe_guard_sensitive_rules", nil),
 		SubscribeGuardSensitiveInterval:    managedInt64("SUBSCRIBE_GUARD_SENSITIVE_INTERVAL", "subscribe_guard_sensitive_interval", 60),

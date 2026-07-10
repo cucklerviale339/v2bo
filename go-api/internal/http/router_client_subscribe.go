@@ -138,6 +138,470 @@ func buildShadowrocketVmessURI(userUUID string, server map[string]any) string {
 	return "vmess://" + userinfo + "?" + params.Encode() + "\r\n"
 }
 
+func buildSagerNetPayload(userUUID string, servers []map[string]any) string {
+	var builder strings.Builder
+	for _, server := range servers {
+		serverType, normalized := normalizeSubscribeServer(server)
+		if serverType == "hysteria" || serverType == "hysteria2" {
+			continue
+		}
+		builder.WriteString(buildSubscribeURI(userUUID, normalized))
+	}
+	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
+}
+
+func buildLoonPayload(userUUID string, servers []map[string]any) string {
+	var builder strings.Builder
+	for _, server := range servers {
+		serverType, normalized := normalizeSubscribeServer(server)
+		switch serverType {
+		case "shadowsocks":
+			builder.WriteString(buildLoonShadowsocksLine(userUUID, normalized))
+		case "vmess":
+			builder.WriteString(buildLoonVmessLine(userUUID, normalized))
+		case "vless":
+			builder.WriteString(buildLoonVlessLine(userUUID, normalized))
+		case "trojan":
+			builder.WriteString(buildLoonTrojanLine(userUUID, normalized))
+		case "hysteria2":
+			builder.WriteString(buildLoonHysteria2Line(userUUID, normalized))
+		}
+	}
+	return builder.String()
+}
+
+func buildLoonShadowsocksLine(userUUID string, server map[string]any) string {
+	parts := []string{
+		serverString(server, "name") + "=Shadowsocks",
+		serverString(server, "host"),
+		subscribePortString(server),
+		serverString(server, "cipher"),
+		subscribeShadowsocksPassword(userUUID, server),
+	}
+	if strings.EqualFold(serverString(server, "obfs"), "http") {
+		parts = append(parts, "obfs-name="+serverString(server, "obfs"))
+		if host := serverString(server, "obfs-host"); host != "" {
+			parts = append(parts, "obfs-host="+host)
+		}
+		if path := serverString(server, "obfs-path"); path != "" {
+			parts = append(parts, "obfs-uri="+path)
+		}
+	}
+	parts = append(parts, "fast-open=false", "udp=true")
+	return strings.Join(parts, ",") + "\r\n"
+}
+
+func buildLoonVmessLine(userUUID string, server map[string]any) string {
+	networkSettings := subscribeNetworkSettings(server)
+	parts := []string{
+		serverString(server, "name") + "=vmess",
+		serverString(server, "host"),
+		subscribePortString(server),
+		firstNonEmptyString(stringValue(networkSettings["security"]), "auto"),
+		userUUID,
+		"fast-open=false",
+		"udp=true",
+		"alterId=0",
+	}
+
+	switch serverString(server, "network") {
+	case "tcp":
+		transport := "tcp"
+		header := nestedMap(networkSettings, "header")
+		if strings.EqualFold(stringValue(header["type"]), "http") {
+			transport = "http"
+			request := nestedMap(header, "request")
+			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+				parts = append(parts, "path="+stringValue(paths[0]))
+			}
+			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+				parts = append(parts, "host="+stringValue(hosts[0]))
+			}
+		}
+		parts = append(parts, "transport="+transport)
+	case "ws":
+		parts = append(parts, "transport=ws")
+		if path := stringValue(networkSettings["path"]); path != "" {
+			parts = append(parts, "path="+path)
+		}
+		if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
+			parts = append(parts, "host="+host)
+		}
+	}
+
+	if serverBool(server, "tls") {
+		parts = append(parts, "over-tls=true")
+		tlsSettings := subscribeTLSSettings(server)
+		if serverMapBool(tlsSettings, "allow_insecure", "allowInsecure") {
+			parts = append(parts, "skip-cert-verify=true")
+		}
+		if name := firstNonEmptyString(stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"])); name != "" {
+			parts = append(parts, "tls-name="+name)
+		}
+	}
+
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildLoonVlessLine(userUUID string, server map[string]any) string {
+	parts := []string{
+		serverString(server, "name") + "=vless",
+		serverString(server, "host"),
+		subscribePortString(server),
+		userUUID,
+		"fast-open=false",
+		"udp=true",
+		"alterId=0",
+	}
+
+	networkSettings := subscribeNetworkSettings(server)
+	switch serverString(server, "network") {
+	case "tcp":
+		transport := "tcp"
+		header := nestedMap(networkSettings, "header")
+		if strings.EqualFold(stringValue(header["type"]), "http") {
+			transport = "http"
+			request := nestedMap(header, "request")
+			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+				parts = append(parts, "path="+stringValue(paths[0]))
+			}
+			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+				parts = append(parts, "host="+stringValue(hosts[0]))
+			}
+		}
+		parts = append(parts, "transport="+transport)
+	case "ws":
+		parts = append(parts, "transport=ws")
+		if path := stringValue(networkSettings["path"]); path != "" {
+			parts = append(parts, "path="+path)
+		}
+		if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
+			parts = append(parts, "host="+host)
+		}
+	}
+
+	tls := serverInt64(server, "tls")
+	tlsSettings := subscribeTLSSettings(server)
+	if tls == 1 {
+		parts = append(parts, "over-tls=true")
+		if flow := serverString(server, "flow"); flow != "" {
+			parts = append(parts, "flow="+flow)
+		}
+		if serverMapBool(tlsSettings, "allow_insecure") {
+			parts = append(parts, "skip-cert-verify=true")
+		}
+		if name := stringValue(tlsSettings["server_name"]); name != "" {
+			parts = append(parts, "tls-name="+name)
+		}
+	} else if tls == 2 {
+		if flow := serverString(server, "flow"); flow != "" {
+			parts = append(parts, "flow="+flow)
+		}
+		if publicKey := stringValue(tlsSettings["public_key"]); publicKey != "" {
+			parts = append(parts, "public-key="+publicKey)
+		}
+		if shortID := stringValue(tlsSettings["short_id"]); shortID != "" {
+			parts = append(parts, "short-id="+shortID)
+		}
+		if sni := stringValue(tlsSettings["server_name"]); sni != "" {
+			parts = append(parts, "sni="+sni)
+		}
+		if serverMapBool(tlsSettings, "allow_insecure") {
+			parts = append(parts, "skip-cert-verify=true")
+		}
+	}
+
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildLoonTrojanLine(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	parts := []string{
+		serverString(server, "name") + "=trojan",
+		serverString(server, "host"),
+		subscribePortString(server),
+		userUUID,
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
+		parts = append(parts, "tls-name="+sni)
+	}
+	parts = append(parts, "fast-open=false", "udp=true")
+	if serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure") {
+		parts = append(parts, "skip-cert-verify=true")
+	}
+	if serverString(server, "network") == "ws" {
+		networkSettings := subscribeNetworkSettings(server)
+		parts = append(parts, "ws=true")
+		if path := stringValue(networkSettings["path"]); path != "" {
+			parts = append(parts, "ws-path="+path)
+		}
+		if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
+			parts = append(parts, "ws-headers=Host:"+host)
+		}
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildLoonHysteria2Line(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	parts := []string{
+		serverString(server, "name") + "=hysteria2",
+		serverString(server, "host"),
+		firstSubscribePort(server),
+		"password=" + userUUID,
+		"download-bandwidth=" + strconv.FormatInt(serverInt64(server, "up_mbps"), 10),
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
+		parts = append(parts, "sni="+sni)
+	}
+	parts = append(parts, "udp=true")
+	if serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure") {
+		parts = append(parts, "skip-cert-verify=true")
+	}
+	if serverString(server, "obfs") != "" && serverString(server, "obfs_password") != "" {
+		parts = append(parts, "salamander-password="+serverString(server, "obfs_password"))
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildQuantumultXPayload(userUUID string, servers []map[string]any) string {
+	var builder strings.Builder
+	for _, server := range servers {
+		serverType, normalized := normalizeSubscribeServer(server)
+		switch serverType {
+		case "shadowsocks":
+			builder.WriteString(buildQuantumultXShadowsocksLine(userUUID, normalized))
+		case "vmess":
+			builder.WriteString(buildQuantumultXVmessLine(userUUID, normalized))
+		case "vless":
+			if serverString(normalized, "flow") == "" && serverInt64(normalized, "tls") != 2 {
+				builder.WriteString(buildQuantumultXVlessLine(userUUID, normalized))
+			}
+		case "trojan":
+			builder.WriteString(buildQuantumultXTrojanLine(userUUID, normalized))
+		}
+	}
+	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
+}
+
+func buildQuantumultXShadowsocksLine(userUUID string, server map[string]any) string {
+	parts := []string{
+		"shadowsocks=" + serverString(server, "host") + ":" + subscribePortString(server),
+		"method=" + serverString(server, "cipher"),
+		"password=" + subscribeShadowsocksPassword(userUUID, server),
+	}
+	if strings.EqualFold(serverString(server, "obfs"), "http") {
+		parts = append(parts, "obfs=http")
+		if host := serverString(server, "obfs-host"); host != "" {
+			parts = append(parts, "obfs-host="+host)
+		}
+		if path := serverString(server, "obfs-path"); path != "" {
+			parts = append(parts, "obfs-uri="+path)
+		}
+	}
+	parts = append(parts, "fast-open=false", "udp-relay=true", "tag="+serverString(server, "name"))
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildQuantumultXVmessLine(userUUID string, server map[string]any) string {
+	method := "chacha20-poly1305"
+	host := ""
+	extras := make([]string, 0)
+	networkSettings := subscribeNetworkSettings(server)
+
+	if serverString(server, "network") == "tcp" {
+		header := nestedMap(networkSettings, "header")
+		if strings.EqualFold(stringValue(header["type"]), "http") {
+			extras = append(extras, "obfs=http")
+		}
+		request := nestedMap(header, "request")
+		if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+			extras = append(extras, "obfs-uri="+stringValue(paths[0]))
+		}
+		if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+			extras = append(extras, "obfs-host="+stringValue(hosts[0]))
+		}
+	}
+
+	if serverBool(server, "tls") {
+		extras = append(extras, "tls13=true")
+		if serverString(server, "network") == "tcp" {
+			extras = append(extras, "obfs=over-tls")
+		}
+		tlsSettings := subscribeTLSSettings(server)
+		if serverMapBool(tlsSettings, "allow_insecure", "allowInsecure") {
+			extras = append(extras, "tls-verification=false")
+		}
+		host = firstNonEmptyString(stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"]))
+	}
+
+	if serverString(server, "network") == "ws" {
+		if serverBool(server, "tls") {
+			extras = append(extras, "obfs=wss")
+		} else {
+			extras = append(extras, "obfs=ws")
+		}
+		if path := stringValue(networkSettings["path"]); path != "" {
+			extras = append(extras, "obfs-uri="+path)
+		}
+		if wsHost := stringValue(nestedMap(networkSettings, "headers")["Host"]); wsHost != "" && host == "" {
+			host = wsHost
+		}
+		if security := stringValue(networkSettings["security"]); security != "" && security != "auto" {
+			method = security
+		}
+	}
+	if host != "" {
+		extras = append(extras, "obfs-host="+host)
+	}
+
+	parts := []string{
+		"vmess=" + serverString(server, "host") + ":" + subscribePortString(server),
+		"method=" + method,
+		"password=" + userUUID,
+		"fast-open=true",
+		"udp-relay=true",
+		"tag=" + serverString(server, "name"),
+	}
+	parts = append(parts, extras...)
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildQuantumultXVlessLine(userUUID string, server map[string]any) string {
+	host := ""
+	extras := make([]string, 0)
+	networkSettings := subscribeNetworkSettings(server)
+
+	if serverString(server, "network") == "tcp" {
+		header := nestedMap(networkSettings, "header")
+		if strings.EqualFold(stringValue(header["type"]), "http") {
+			extras = append(extras, "obfs=http")
+		}
+		request := nestedMap(header, "request")
+		if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+			extras = append(extras, "obfs-uri="+stringValue(paths[0]))
+		}
+		if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+			extras = append(extras, "obfs-host="+stringValue(hosts[0]))
+		}
+	}
+
+	if serverInt64(server, "tls") == 1 {
+		extras = append(extras, "tls13=true")
+		if serverString(server, "network") == "tcp" {
+			extras = append(extras, "obfs=over-tls")
+		}
+		tlsSettings := subscribeTLSSettings(server)
+		if serverMapBool(tlsSettings, "allow_insecure") {
+			extras = append(extras, "tls-verification=false")
+		}
+		host = stringValue(tlsSettings["server_name"])
+	}
+
+	if serverString(server, "network") == "ws" {
+		if serverBool(server, "tls") {
+			extras = append(extras, "obfs=wss")
+		} else {
+			extras = append(extras, "obfs=ws")
+		}
+		if path := stringValue(networkSettings["path"]); path != "" {
+			extras = append(extras, "obfs-uri="+path)
+		}
+		if wsHost := stringValue(nestedMap(networkSettings, "headers")["Host"]); wsHost != "" && host == "" {
+			host = wsHost
+		}
+	}
+	if host != "" {
+		extras = append(extras, "obfs-host="+host)
+	}
+
+	parts := []string{
+		"vless=" + serverString(server, "host") + ":" + subscribePortString(server),
+		"method=none",
+		"password=" + userUUID,
+		"fast-open=true",
+		"udp-relay=true",
+		"tag=" + serverString(server, "name"),
+	}
+	parts = append(parts, extras...)
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildQuantumultXTrojanLine(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	host := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), serverString(server, "host"))
+	parts := []string{
+		"trojan=" + serverString(server, "host") + ":" + subscribePortString(server),
+		"password=" + userUUID,
+		"tls-verification=" + strconv.FormatBool(!(serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure"))),
+		"fast-open=true",
+		"udp-relay=true",
+		"tag=" + serverString(server, "name"),
+	}
+	if serverString(server, "network") == "ws" {
+		networkSettings := subscribeNetworkSettings(server)
+		parts = append(parts, "obfs=wss")
+		if path := stringValue(networkSettings["path"]); path != "" {
+			parts = append(parts, "obfs-uri="+path)
+		}
+		if wsHost := stringValue(nestedMap(networkSettings, "headers")["Host"]); wsHost != "" {
+			host = wsHost
+		}
+		parts = append(parts, "obfs-host="+host)
+	} else {
+		parts = append(parts, "over-tls=true")
+		if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
+			parts = append(parts, "tls-host="+sni)
+		}
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildShadowsocksSIP008Profile(subscribe usersvc.Subscribe, servers []map[string]any) (string, error) {
+	bytesUsed := subscribe.U + subscribe.D
+	bytesRemaining := subscribe.TransferEnable - bytesUsed
+	if bytesRemaining < 0 {
+		bytesRemaining = 0
+	}
+
+	items := make([]map[string]any, 0)
+	for _, server := range servers {
+		serverType, normalized := normalizeSubscribeServer(server)
+		if serverType != "shadowsocks" || !isSIP008ShadowsocksCipher(serverString(normalized, "cipher")) {
+			continue
+		}
+		items = append(items, map[string]any{
+			"id":          serverInt64(normalized, "id"),
+			"remarks":     serverString(normalized, "name"),
+			"server":      serverString(normalized, "host"),
+			"server_port": serverInt64(normalized, "port"),
+			"password":    subscribe.UUID,
+			"method":      serverString(normalized, "cipher"),
+		})
+	}
+
+	payload := map[string]any{
+		"version":         int64(1),
+		"bytes_used":      bytesUsed,
+		"bytes_remaining": bytesRemaining,
+		"servers":         items,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal shadowsocks sip008 profile: %w", err)
+	}
+	return string(raw), nil
+}
+
+func isSIP008ShadowsocksCipher(cipher string) bool {
+	switch cipher {
+	case "aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "chacha20-ietf-poly1305":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any) (string, error) {
 	template, err := loadRuleTemplate(cfg, customFile, defaultFile)
 	if err != nil {
@@ -1425,6 +1889,50 @@ func canonicalSubscribeServerType(value string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
+}
+
+func subscribeNetworkSettings(server map[string]any) map[string]any {
+	return firstNonEmptyMap(serverMap(server, "networkSettings"), serverMap(server, "network_settings"))
+}
+
+func subscribeTLSSettings(server map[string]any) map[string]any {
+	return firstNonEmptyMap(serverMap(server, "tlsSettings"), serverMap(server, "tls_settings"))
+}
+
+func subscribePortString(server map[string]any) string {
+	if port := serverString(server, "port"); port != "" {
+		return port
+	}
+	if port := serverInt64(server, "port"); port > 0 {
+		return strconv.FormatInt(port, 10)
+	}
+	return ""
+}
+
+func firstSubscribePort(server map[string]any) string {
+	portValue := subscribePortString(server)
+	if portValue == "" {
+		return ""
+	}
+	first := strings.TrimSpace(strings.Split(portValue, ",")[0])
+	if strings.Contains(first, "-") {
+		first = strings.TrimSpace(strings.SplitN(first, "-", 2)[0])
+	}
+	return first
+}
+
+func subscribeShadowsocksPassword(userUUID string, server map[string]any) string {
+	cipher := serverString(server, "cipher")
+	if !strings.Contains(cipher, "2022-blake3") {
+		return userUUID
+	}
+	length := 32
+	if cipher == "2022-blake3-aes-128-gcm" {
+		length = 16
+	}
+	serverKey := nodeapi.ServerKey(serverInt64(server, "created_at"), length)
+	userKey := base64.StdEncoding.EncodeToString([]byte(truncateString(userUUID, length)))
+	return serverKey + ":" + userKey
 }
 
 func buildClashVlessEncryption(server map[string]any) string {

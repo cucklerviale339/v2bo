@@ -17,9 +17,5 @@
   "email_from_address": "__SET_IN_SERVER_CONFIG__",
   "server_token": "__SET_IN_SERVER_CONFIG__",
   "server_cf_api_token": "__SET_IN_SERVER_CONFIG__",
-  "server_api_url": "",
-  "subscribe_guard_enable": "0",
-  "subscribe_guard_block_empty_ua": "1",
-  "subscribe_guard_block_crawler_ua": "1",
-  "subscribe_guard_rate_limit_per_minute": "60"
+  "server_api_url": ""
 }
