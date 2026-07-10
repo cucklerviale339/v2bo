@@ -56,13 +56,18 @@ type phpConfigFile struct {
 }
 
 type TelegramAdminStatus struct {
-	BotEnabled             bool           `json:"bot_enabled"`
-	TokenConfigured        bool           `json:"token_configured"`
-	AdminBound             bool           `json:"admin_bound"`
-	TelegramID             *int64         `json:"telegram_id"`
-	WebhookURL             string         `json:"webhook_url"`
-	TelegramWebhookInfo    map[string]any `json:"telegram_webhook_info,omitempty"`
-	TelegramWebhookInfoErr string         `json:"telegram_webhook_info_error,omitempty"`
+	BotEnabled                    bool           `json:"bot_enabled"`
+	TokenConfigured               bool           `json:"token_configured"`
+	SupportTokenConfigured        bool           `json:"support_token_configured"`
+	SupportChatConfigured         bool           `json:"support_chat_configured"`
+	AdminBound                    bool           `json:"admin_bound"`
+	TelegramID                    *int64         `json:"telegram_id"`
+	WebhookURL                    string         `json:"webhook_url"`
+	SupportWebhookURL             string         `json:"support_webhook_url"`
+	TelegramWebhookInfo           map[string]any `json:"telegram_webhook_info,omitempty"`
+	TelegramWebhookInfoErr        string         `json:"telegram_webhook_info_error,omitempty"`
+	SupportTelegramWebhookInfo    map[string]any `json:"support_telegram_webhook_info,omitempty"`
+	SupportTelegramWebhookInfoErr string         `json:"support_telegram_webhook_info_error,omitempty"`
 }
 
 var adminProjectRoot = detectAdminProjectRoot()
@@ -181,10 +186,12 @@ func (s *DBService) fetchConfigFromStore(cfg *phpConfigFile, key string) map[str
 			"email_bulk_interval": cfg.int64Value("email_bulk_interval", 0),
 		},
 		"telegram": map[string]any{
-			"telegram_bot_enable":   cfg.int64Value("telegram_bot_enable", 0),
-			"telegram_bot_token":    cfg.nullableStringValue("telegram_bot_token"),
-			"telegram_webhook_url":  cfg.nullableStringValue("telegram_webhook_url"),
-			"telegram_discuss_link": cfg.nullableStringValue("telegram_discuss_link"),
+			"telegram_bot_enable":        cfg.int64Value("telegram_bot_enable", 0),
+			"telegram_bot_token":         cfg.nullableStringValue("telegram_bot_token"),
+			"telegram_webhook_url":       cfg.nullableStringValue("telegram_webhook_url"),
+			"telegram_discuss_link":      cfg.nullableStringValue("telegram_discuss_link"),
+			"telegram_support_bot_token": cfg.nullableStringValue("telegram_support_bot_token"),
+			"telegram_support_chat_id":   cfg.int64Value("telegram_support_chat_id", 0),
 		},
 		"app": map[string]any{
 			"windows_version":      cfg.nullableStringValue("windows_version"),
@@ -290,7 +297,7 @@ func shouldSkipEmptySensitiveConfigValue(key string, value phpConfigValue, cfg *
 		return false
 	}
 	switch key {
-	case "email_password", "telegram_bot_token", "server_token", "server_cf_api_token", "recaptcha_key":
+	case "email_password", "telegram_bot_token", "telegram_support_bot_token", "server_token", "server_cf_api_token", "recaptcha_key":
 		return !emptyConfigValue(cfg.values[key])
 	default:
 		return false
@@ -376,9 +383,16 @@ func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (
 	if token == "" {
 		token = strings.TrimSpace(s.currentConfig().TelegramBotToken)
 	}
+	supportToken := strings.TrimSpace(cfg.stringValue("telegram_support_bot_token", ""))
+	if supportToken == "" {
+		supportToken = strings.TrimSpace(s.currentConfig().TelegramSupportBotToken)
+	}
+	supportChatID := cfg.int64Value("telegram_support_chat_id", s.currentConfig().TelegramSupportChatID)
 	status := TelegramAdminStatus{
-		BotEnabled:      cfg.int64Value("telegram_bot_enable", boolToInt64(s.currentConfig().TelegramBotEnable)) != 0,
-		TokenConfigured: token != "",
+		BotEnabled:             cfg.int64Value("telegram_bot_enable", boolToInt64(s.currentConfig().TelegramBotEnable)) != 0,
+		TokenConfigured:        token != "",
+		SupportTokenConfigured: supportToken != "",
+		SupportChatConfigured:  supportChatID != 0,
 	}
 	if token != "" {
 		status.WebhookURL = s.telegramWebhookURL(cfg, token)
@@ -387,6 +401,15 @@ func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (
 			status.TelegramWebhookInfoErr = err.Error()
 		} else {
 			status.TelegramWebhookInfo = info
+		}
+	}
+	if supportToken != "" {
+		status.SupportWebhookURL = s.telegramWebhookURL(cfg, supportToken)
+		info, err := telegramAPIResultMap(&http.Client{Timeout: 10 * time.Second}, supportToken, "getWebhookInfo", nil)
+		if err != nil {
+			status.SupportTelegramWebhookInfoErr = err.Error()
+		} else {
+			status.SupportTelegramWebhookInfo = info
 		}
 	}
 
@@ -518,7 +541,28 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	if token == "" {
 		return false, errors.New("参数错误")
 	}
+	return s.setTelegramWebhook(cfg, token)
+}
 
+func (s *DBService) SetTelegramSupportWebhook(_ context.Context, token string) (bool, error) {
+	token = strings.TrimSpace(token)
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return false, err
+	}
+	if token == "" {
+		token = strings.TrimSpace(cfg.stringValue("telegram_support_bot_token", ""))
+	}
+	if token == "" {
+		token = strings.TrimSpace(s.currentConfig().TelegramSupportBotToken)
+	}
+	if token == "" {
+		return false, errors.New("请先填写客服机器人Token")
+	}
+	return s.setTelegramWebhook(cfg, token)
+}
+
+func (s *DBService) setTelegramWebhook(cfg *phpConfigFile, token string) (bool, error) {
 	hookURL := s.telegramWebhookURL(cfg, token)
 	if hookURL == "" {
 		return false, errors.New("Webhook URL格式不正确，必须携带http(s)://")

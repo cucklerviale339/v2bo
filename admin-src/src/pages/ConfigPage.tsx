@@ -73,7 +73,7 @@ const fieldOrders: Record<string, string[]> = {
     'email_host', 'email_port', 'email_encryption', 'email_username', 'email_password',
     'email_from_address', 'email_template', 'email_bulk_interval'
   ],
-  telegram: ['telegram_bot_token', 'telegram_bot_enable', 'telegram_webhook_url', 'telegram_discuss_link'],
+  telegram: ['telegram_bot_token', 'telegram_bot_enable', 'telegram_webhook_url', 'telegram_support_bot_token', 'telegram_support_chat_id', 'telegram_discuss_link'],
   app: ['windows_version', 'windows_download_url', 'macos_version', 'macos_download_url', 'android_version', 'android_download_url']
 };
 
@@ -239,6 +239,8 @@ const configLabels: Record<string, ConfigMeta> = {
   telegram_bot_token: { title: '机器人Token', description: '请输入由Botfather提供的token。', password: true },
   telegram_bot_enable: { title: '开启机器人通知', description: '开启后bot将会对绑定了telegram的管理员和用户进行基础通知。' },
   telegram_webhook_url: { title: 'Webhook API地址', description: 'Telegram回调访问的API域名。官网和API不同域名时必须填写，例如 https://api.example.com。' },
+  telegram_support_bot_token: { title: '客服机器人Token', description: '用于前台TG客服。客服机器人需要加入已开启话题的客服群。', password: true },
+  telegram_support_chat_id: { title: '客服群组ID', description: '填写开启话题功能的Telegram客服群ID，例如 -1001234567890。' },
   telegram_discuss_link: { title: '群组地址', description: '填写后将会在用户端展示，或者被用于需要的地方。' },
 
   ticket_status: { title: '工单设置', description: '关闭后用户将无法提交工单。' },
@@ -405,22 +407,23 @@ export default function ConfigPage() {
     await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
   };
 
-  const runTelegramAction = async (action: 'botInfo' | 'webhook' | 'test' | 'unbind') => {
+  const runTelegramAction = async (action: 'botInfo' | 'supportBotInfo' | 'webhook' | 'supportWebhook' | 'test' | 'unbind') => {
     setTelegramAction(action);
     try {
-      const token = form.getFieldValue('telegram_bot_token');
-      if (action === 'botInfo') {
+      const isSupportAction = action === 'supportBotInfo' || action === 'supportWebhook';
+      const token = form.getFieldValue(isSupportAction ? 'telegram_support_bot_token' : 'telegram_bot_token');
+      if (action === 'botInfo' || action === 'supportBotInfo') {
         await saveTelegramConfigIfChanged();
         const res = await apiPost('/config/telegramBotInfo', { telegram_bot_token: token }, { form: true, keepEmpty: true });
         const payload = unwrapData(res) || {};
-        message.success(`机器人正常：@${payload?.username || 'unknown'}`);
-      } else if (action === 'webhook') {
+        message.success(`${isSupportAction ? '客服机器人' : '机器人'}正常：@${payload?.username || 'unknown'}`);
+      } else if (action === 'webhook' || action === 'supportWebhook') {
         await saveTelegramConfigIfChanged();
-        await apiPost('/config/setTelegramWebhook', {
-          telegram_bot_token: token,
+        await apiPost(action === 'supportWebhook' ? '/config/setTelegramSupportWebhook' : '/config/setTelegramWebhook', {
+          [isSupportAction ? 'telegram_support_bot_token' : 'telegram_bot_token']: token,
           telegram_webhook_url: form.getFieldValue('telegram_webhook_url'),
         }, { form: true, keepEmpty: true });
-        message.success('Telegram 配置已保存，Webhook 设置成功');
+        message.success(`${isSupportAction ? '客服' : 'Telegram'} 配置已保存，Webhook 设置成功`);
         await load();
       } else if (action === 'test') {
         await saveTelegramConfigIfChanged();
@@ -449,18 +452,26 @@ export default function ConfigPage() {
           <Space wrap size={[8, 8]}>
             <Tag color={status.token_configured ? 'green' : 'red'}>Token {status.token_configured ? '已配置' : '未配置'}</Tag>
             <Tag color={status.bot_enabled ? 'green' : 'orange'}>通知 {status.bot_enabled ? '已开启' : '未开启'}</Tag>
+            <Tag color={status.support_token_configured ? 'green' : 'orange'}>客服Token {status.support_token_configured ? '已配置' : '未配置'}</Tag>
+            <Tag color={status.support_chat_configured ? 'green' : 'orange'}>客服群 {status.support_chat_configured ? '已配置' : '未配置'}</Tag>
             <Tag color={status.admin_bound ? 'green' : 'red'}>当前管理员 {status.admin_bound ? `已绑定 ${status.telegram_id || ''}` : '未绑定'}</Tag>
           </Space>
           {!status.admin_bound && <div className="telegram-tools-hint">绑定方式：先设置 Webhook，然后私聊机器人发送 <Typography.Text code>/bind 你的订阅链接</Typography.Text></div>}
           {status.webhook_url && <div className="telegram-tools-webhook">面板应设置Webhook：<Typography.Text copyable>{status.webhook_url}</Typography.Text></div>}
+          {status.support_webhook_url && <div className="telegram-tools-webhook">客服Webhook：<Typography.Text copyable>{status.support_webhook_url}</Typography.Text></div>}
           {status.telegram_webhook_info?.url && <div className="telegram-tools-webhook">Telegram当前Webhook：<Typography.Text copyable>{status.telegram_webhook_info.url}</Typography.Text></div>}
+          {status.support_telegram_webhook_info?.url && <div className="telegram-tools-webhook">客服当前Webhook：<Typography.Text copyable>{status.support_telegram_webhook_info.url}</Typography.Text></div>}
           {status.telegram_webhook_info?.last_error_message && <div className="telegram-tools-error">Telegram错误：{status.telegram_webhook_info.last_error_message}</div>}
           {status.telegram_webhook_info_error && <div className="telegram-tools-error">Webhook诊断失败：{status.telegram_webhook_info_error}</div>}
+          {status.support_telegram_webhook_info?.last_error_message && <div className="telegram-tools-error">客服Telegram错误：{status.support_telegram_webhook_info.last_error_message}</div>}
+          {status.support_telegram_webhook_info_error && <div className="telegram-tools-error">客服Webhook诊断失败：{status.support_telegram_webhook_info_error}</div>}
         </div>}
       />
       <Space wrap className="telegram-tools-actions">
         <Button loading={telegramAction === 'botInfo'} onClick={() => runTelegramAction('botInfo')}>检测Token</Button>
         <Button loading={telegramAction === 'webhook'} onClick={() => runTelegramAction('webhook')}>设置Webhook</Button>
+        <Button loading={telegramAction === 'supportBotInfo'} onClick={() => runTelegramAction('supportBotInfo')}>检测客服Token</Button>
+        <Button loading={telegramAction === 'supportWebhook'} onClick={() => runTelegramAction('supportWebhook')}>设置客服Webhook</Button>
         <Button type="primary" loading={telegramAction === 'test'} onClick={() => runTelegramAction('test')}>发送测试消息</Button>
         <Button danger loading={telegramAction === 'unbind'} disabled={!status.admin_bound} onClick={() => runTelegramAction('unbind')}>解绑当前管理员</Button>
         <Button onClick={loadTelegramStatus}>刷新状态</Button>

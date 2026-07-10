@@ -38,6 +38,10 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 		return nil
 	}
 
+	if handled, err := s.handleSupportWebhookMessage(ctx, messagePayload); err != nil || handled {
+		return err
+	}
+
 	message, ok := parseWebhookMessage(messagePayload)
 	if !ok {
 		return nil

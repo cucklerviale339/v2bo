@@ -20,6 +20,7 @@ import (
 	"forest/go-api/internal/payment"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
+	"forest/go-api/internal/telegram"
 	"forest/go-api/internal/user"
 )
 
@@ -337,6 +338,28 @@ func TestRouterGuestTelegramWebhookEndpoint(t *testing.T) {
 	message, ok := telegramService.lastPayload["message"].(map[string]any)
 	if !ok || message["text"] != "/traffic" {
 		t.Fatalf("unexpected webhook payload: %#v", telegramService.lastPayload)
+	}
+}
+
+func TestRouterGuestTelegramWebhookAcceptsSupportBotToken(t *testing.T) {
+	telegramService := &fakeTelegramService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", TelegramSupportBotToken: "support-token"},
+		WithTelegramService(telegramService),
+	)
+
+	accessToken := md5.Sum([]byte("support-token"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/guest/telegram/webhook?access_token="+strings.ToLower(fmt.Sprintf("%x", accessToken)), strings.NewReader(`{"message":{"text":"reply","chat":{"id":-1001,"type":"supergroup"},"message_thread_id":10}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastPayload == nil {
+		t.Fatalf("expected webhook service called")
 	}
 }
 
@@ -746,159 +769,160 @@ func (f *fakeUserService) CancelOrder(_ context.Context, userID int64, tradeNo s
 }
 
 type fakeAdminService struct {
-	systemStatus        admin.SystemStatus
-	queueStats          admin.QueueStats
-	workload            []map[string]any
-	systemLogs          []map[string]any
-	systemLogsTotal     int64
-	statOverride        map[string]any
-	statOrder           []map[string]any
-	statSummary         map[string]any
-	statRanking         []map[string]any
-	statRecords         []map[string]any
-	serverLastRank      []map[string]any
-	serverTodayRank     []map[string]any
-	inviteLastRank      []map[string]any
-	inviteTodayRank     []map[string]any
-	userLastRank        []map[string]any
-	userTodayRank       []map[string]any
-	statUserRecords     []map[string]any
-	statUserTotal       int64
-	inviteList          admin.InviteCampaignListResult
-	inviteDetail        map[string]any
-	inviteRecords       admin.InviteCampaignRecordListResult
-	serverGroups        []admin.ServerGroupRecord
-	clientEntryGroups   []admin.ClientEntryGroupRecord
-	nodeAddressGroups   []admin.NodeAddressGroupRecord
-	serverRoutes        []admin.ServerRouteRecord
-	managedServers      []map[string]any
-	hostUpdateResult    admin.ManagedServerHostUpdateResult
-	configData          map[string]any
-	themes              map[string]any
-	themeConfig         map[string]any
-	emailTemplates      []string
-	themeTemplates      []string
-	mailTestLog         admin.ConfigMailTestLog
-	telegramBotInfo     map[string]any
-	telegramStatus      admin.TelegramAdminStatus
-	telegramTestOK      bool
-	unbindTelegramOK    bool
-	lastTelegramAdminID int64
-	plans               []admin.PlanRecord
-	notices             []admin.NoticeRecord
-	couponList          admin.CouponListResult
-	giftcardList        admin.GiftcardListResult
-	knowledges          []admin.KnowledgeRecord
-	knowledgeDetail     admin.KnowledgeRecord
-	knowledgeCats       []string
-	payments            []admin.PaymentRecord
-	methods             []string
-	form                map[string]admin.PaymentFormField
-	orderList           admin.OrderListResult
-	orderDetail         map[string]any
-	ticketList          admin.TicketListResult
-	ticketDetail        admin.TicketDetail
-	lastPlanSave        admin.PlanSaveRequest
-	lastPlanDropID      int64
-	lastPlanUpdate      admin.PlanToggleRequest
-	lastPlanSortIDs     []int64
-	lastNoticeSave      admin.NoticeSaveRequest
-	lastNoticeDrop      int64
-	lastNoticeShow      int64
-	lastCouponList      admin.CouponListRequest
-	lastCouponSave      admin.CouponGenerateRequest
-	lastCouponDrop      int64
-	lastCouponShow      int64
-	couponCSV           string
-	lastGiftcardList    admin.GiftcardListRequest
-	lastGiftcardSave    admin.GiftcardGenerateRequest
-	lastGiftcardDrop    int64
-	giftcardCSV         string
-	lastKnowledgeID     int64
-	lastKnowledgeSave   admin.KnowledgeSaveRequest
-	lastKnowledgeShow   int64
-	lastKnowledgeDrop   int64
-	lastKnowledgeSort   []int64
-	lastFormID          *int64
-	lastGateway         string
-	lastSave            admin.PaymentSaveRequest
-	lastDropID          int64
-	lastShowID          int64
-	lastSortIDs         []int64
-	lastFetch           admin.OrderFetchRequest
-	lastDetailID        int64
-	lastUpdate          admin.OrderUpdateRequest
-	lastPaid            string
-	lastCancel          string
-	lastRefund          string
-	lastAssign          admin.OrderAssignRequest
-	lastTicketFetch     admin.TicketListRequest
-	lastTicketID        int64
-	lastTicketReply     admin.TicketReplyRequest
-	lastTicketClose     int64
-	lastLogCurrent      int64
-	lastLogPageSize     int64
-	lastLogLevel        string
-	lastStatStartAt     int64
-	lastStatEndAt       int64
-	lastRankingType     string
-	lastRankingLimit    int64
-	lastRecordType      string
-	lastRecordStartAt   int64
-	lastRecordEndAt     int64
-	lastStatUserID      int64
-	lastStatCurrent     int64
-	lastStatPageSize    int64
-	lastInviteList      admin.InviteCampaignListRequest
-	lastInviteID        int64
-	lastInviteRecords   admin.InviteCampaignRecordListRequest
-	lastGroupID         *int64
-	lastGroupSave       admin.ServerGroupSaveRequest
-	lastGroupDrop       int64
-	lastClientEntryID   *int64
-	lastClientEntrySave admin.ClientEntryGroupSaveRequest
-	lastClientEntryDrop int64
-	lastNodeAddressID   *int64
-	lastNodeAddressSave admin.NodeAddressGroupSaveRequest
-	lastNodeAddressDrop int64
-	lastRouteSave       admin.ServerRouteSaveRequest
-	lastRouteDrop       int64
-	lastManagedSort     map[string]map[int64]int64
-	lastOldHost         string
-	lastNewHost         string
-	lastNodeSaveType    string
-	lastNodeSave        map[string]any
-	lastNodeDropType    string
-	lastNodeDropID      int64
-	lastNodeUpdateType  string
-	lastNodeUpdateID    int64
-	lastNodeUpdate      map[string]any
-	lastNodeCopyType    string
-	lastNodeCopyID      int64
-	lastConfigKey       string
-	lastConfigSave      map[string]any
-	lastWebhookToken    string
-	lastBotToken        string
-	lastMailTestEmail   string
-	userList            admin.UserListResult
-	userInfoDetail      map[string]any
-	userGenerateCSV     string
-	userGenerateBatch   bool
-	userDumpCSV         string
-	lastUserFetch       admin.UserFetchRequest
-	lastUserInfoID      int64
-	lastUserUpdate      admin.UserUpdateRequest
-	lastUserGenerate    admin.UserGenerateRequest
-	lastUserMail        admin.UserMailRequest
-	lastUserDump        []admin.UserFilter
-	lastUserBan         []admin.UserFilter
-	lastUserBannedID    int64
-	lastUserBannedValue int64
-	lastUserResetID     int64
-	lastUserDeleteID    int64
-	lastUserDeleteAll   []admin.UserFilter
-	assignTrade         string
-	err                 error
+	systemStatus            admin.SystemStatus
+	queueStats              admin.QueueStats
+	workload                []map[string]any
+	systemLogs              []map[string]any
+	systemLogsTotal         int64
+	statOverride            map[string]any
+	statOrder               []map[string]any
+	statSummary             map[string]any
+	statRanking             []map[string]any
+	statRecords             []map[string]any
+	serverLastRank          []map[string]any
+	serverTodayRank         []map[string]any
+	inviteLastRank          []map[string]any
+	inviteTodayRank         []map[string]any
+	userLastRank            []map[string]any
+	userTodayRank           []map[string]any
+	statUserRecords         []map[string]any
+	statUserTotal           int64
+	inviteList              admin.InviteCampaignListResult
+	inviteDetail            map[string]any
+	inviteRecords           admin.InviteCampaignRecordListResult
+	serverGroups            []admin.ServerGroupRecord
+	clientEntryGroups       []admin.ClientEntryGroupRecord
+	nodeAddressGroups       []admin.NodeAddressGroupRecord
+	serverRoutes            []admin.ServerRouteRecord
+	managedServers          []map[string]any
+	hostUpdateResult        admin.ManagedServerHostUpdateResult
+	configData              map[string]any
+	themes                  map[string]any
+	themeConfig             map[string]any
+	emailTemplates          []string
+	themeTemplates          []string
+	mailTestLog             admin.ConfigMailTestLog
+	telegramBotInfo         map[string]any
+	telegramStatus          admin.TelegramAdminStatus
+	telegramTestOK          bool
+	unbindTelegramOK        bool
+	lastTelegramAdminID     int64
+	plans                   []admin.PlanRecord
+	notices                 []admin.NoticeRecord
+	couponList              admin.CouponListResult
+	giftcardList            admin.GiftcardListResult
+	knowledges              []admin.KnowledgeRecord
+	knowledgeDetail         admin.KnowledgeRecord
+	knowledgeCats           []string
+	payments                []admin.PaymentRecord
+	methods                 []string
+	form                    map[string]admin.PaymentFormField
+	orderList               admin.OrderListResult
+	orderDetail             map[string]any
+	ticketList              admin.TicketListResult
+	ticketDetail            admin.TicketDetail
+	lastPlanSave            admin.PlanSaveRequest
+	lastPlanDropID          int64
+	lastPlanUpdate          admin.PlanToggleRequest
+	lastPlanSortIDs         []int64
+	lastNoticeSave          admin.NoticeSaveRequest
+	lastNoticeDrop          int64
+	lastNoticeShow          int64
+	lastCouponList          admin.CouponListRequest
+	lastCouponSave          admin.CouponGenerateRequest
+	lastCouponDrop          int64
+	lastCouponShow          int64
+	couponCSV               string
+	lastGiftcardList        admin.GiftcardListRequest
+	lastGiftcardSave        admin.GiftcardGenerateRequest
+	lastGiftcardDrop        int64
+	giftcardCSV             string
+	lastKnowledgeID         int64
+	lastKnowledgeSave       admin.KnowledgeSaveRequest
+	lastKnowledgeShow       int64
+	lastKnowledgeDrop       int64
+	lastKnowledgeSort       []int64
+	lastFormID              *int64
+	lastGateway             string
+	lastSave                admin.PaymentSaveRequest
+	lastDropID              int64
+	lastShowID              int64
+	lastSortIDs             []int64
+	lastFetch               admin.OrderFetchRequest
+	lastDetailID            int64
+	lastUpdate              admin.OrderUpdateRequest
+	lastPaid                string
+	lastCancel              string
+	lastRefund              string
+	lastAssign              admin.OrderAssignRequest
+	lastTicketFetch         admin.TicketListRequest
+	lastTicketID            int64
+	lastTicketReply         admin.TicketReplyRequest
+	lastTicketClose         int64
+	lastLogCurrent          int64
+	lastLogPageSize         int64
+	lastLogLevel            string
+	lastStatStartAt         int64
+	lastStatEndAt           int64
+	lastRankingType         string
+	lastRankingLimit        int64
+	lastRecordType          string
+	lastRecordStartAt       int64
+	lastRecordEndAt         int64
+	lastStatUserID          int64
+	lastStatCurrent         int64
+	lastStatPageSize        int64
+	lastInviteList          admin.InviteCampaignListRequest
+	lastInviteID            int64
+	lastInviteRecords       admin.InviteCampaignRecordListRequest
+	lastGroupID             *int64
+	lastGroupSave           admin.ServerGroupSaveRequest
+	lastGroupDrop           int64
+	lastClientEntryID       *int64
+	lastClientEntrySave     admin.ClientEntryGroupSaveRequest
+	lastClientEntryDrop     int64
+	lastNodeAddressID       *int64
+	lastNodeAddressSave     admin.NodeAddressGroupSaveRequest
+	lastNodeAddressDrop     int64
+	lastRouteSave           admin.ServerRouteSaveRequest
+	lastRouteDrop           int64
+	lastManagedSort         map[string]map[int64]int64
+	lastOldHost             string
+	lastNewHost             string
+	lastNodeSaveType        string
+	lastNodeSave            map[string]any
+	lastNodeDropType        string
+	lastNodeDropID          int64
+	lastNodeUpdateType      string
+	lastNodeUpdateID        int64
+	lastNodeUpdate          map[string]any
+	lastNodeCopyType        string
+	lastNodeCopyID          int64
+	lastConfigKey           string
+	lastConfigSave          map[string]any
+	lastWebhookToken        string
+	lastSupportWebhookToken string
+	lastBotToken            string
+	lastMailTestEmail       string
+	userList                admin.UserListResult
+	userInfoDetail          map[string]any
+	userGenerateCSV         string
+	userGenerateBatch       bool
+	userDumpCSV             string
+	lastUserFetch           admin.UserFetchRequest
+	lastUserInfoID          int64
+	lastUserUpdate          admin.UserUpdateRequest
+	lastUserGenerate        admin.UserGenerateRequest
+	lastUserMail            admin.UserMailRequest
+	lastUserDump            []admin.UserFilter
+	lastUserBan             []admin.UserFilter
+	lastUserBannedID        int64
+	lastUserBannedValue     int64
+	lastUserResetID         int64
+	lastUserDeleteID        int64
+	lastUserDeleteAll       []admin.UserFilter
+	assignTrade             string
+	err                     error
 }
 
 type fakePaymentService struct {
@@ -913,8 +937,13 @@ type fakePaymentService struct {
 }
 
 type fakeTelegramService struct {
-	lastPayload map[string]any
-	err         error
+	lastPayload       map[string]any
+	lastSupportUserID int64
+	lastSupportEmail  string
+	lastSupportText   string
+	supportMessages   []telegram.SupportMessage
+	supportFile       telegram.SupportFile
+	err               error
 }
 
 func (f *fakePaymentService) Checkout(_ context.Context, userID int64, req payment.CheckoutRequest) (payment.CheckoutResult, error) {
@@ -933,6 +962,30 @@ func (f *fakePaymentService) Notify(_ context.Context, method, uuid string, req 
 func (f *fakeTelegramService) HandleWebhook(_ context.Context, payload map[string]any) error {
 	f.lastPayload = payload
 	return f.err
+}
+
+func (f *fakeTelegramService) SendSupportMessage(_ context.Context, userID int64, email, message string) (bool, error) {
+	f.lastSupportUserID = userID
+	f.lastSupportEmail = email
+	f.lastSupportText = message
+	return true, f.err
+}
+
+func (f *fakeTelegramService) SendSupportAttachment(_ context.Context, userID int64, email string, attachment telegram.SupportAttachment) (bool, error) {
+	f.lastSupportUserID = userID
+	f.lastSupportEmail = email
+	f.lastSupportText = attachment.Caption
+	return true, f.err
+}
+
+func (f *fakeTelegramService) SupportMessages(_ context.Context, userID int64) ([]telegram.SupportMessage, error) {
+	f.lastSupportUserID = userID
+	return f.supportMessages, f.err
+}
+
+func (f *fakeTelegramService) SupportFile(_ context.Context, userID, messageID int64) (telegram.SupportFile, error) {
+	f.lastSupportUserID = userID
+	return f.supportFile, f.err
 }
 
 func (f *fakeAdminService) GetSystemStatus(_ context.Context) (admin.SystemStatus, error) {
@@ -1221,6 +1274,11 @@ func (f *fakeAdminService) TelegramBotInfo(_ context.Context, token string) (map
 
 func (f *fakeAdminService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
 	f.lastWebhookToken = token
+	return true, f.err
+}
+
+func (f *fakeAdminService) SetTelegramSupportWebhook(_ context.Context, token string) (bool, error) {
+	f.lastSupportWebhookToken = token
 	return true, f.err
 }
 
@@ -1986,6 +2044,58 @@ func TestRouterUserTelegramGetBotInfoEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"forest_bot"`) {
 		t.Fatalf("expected telegram bot payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterUserSupportSendEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	userService := &fakeUserService{
+		info: user.Info{Email: "user@example.com"},
+	}
+	telegramService := &fakeTelegramService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go"},
+		WithSessionService(sessionService),
+		WithUserService(userService),
+		WithTelegramService(telegramService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/support/send", strings.NewReader(`{"auth_data":"jwt-support","message":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastSupportUserID != 10 || telegramService.lastSupportEmail != "user@example.com" || telegramService.lastSupportText != "hello" {
+		t.Fatalf("unexpected support send call: user=%d email=%q text=%q", telegramService.lastSupportUserID, telegramService.lastSupportEmail, telegramService.lastSupportText)
+	}
+}
+
+func TestRouterUserSupportMessagesEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	telegramService := &fakeTelegramService{
+		supportMessages: []telegram.SupportMessage{{ID: 1, Role: "agent", Message: "reply", CreatedAt: 123}},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go"},
+		WithSessionService(sessionService),
+		WithTelegramService(telegramService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/support/messages?auth_data=jwt-support", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastSupportUserID != 10 {
+		t.Fatalf("expected support messages for user 10, got %d", telegramService.lastSupportUserID)
+	}
+	if !strings.Contains(rec.Body.String(), `"reply"`) {
+		t.Fatalf("expected support messages payload, got %s", rec.Body.String())
 	}
 }
 
@@ -5105,6 +5215,40 @@ func TestRouterAdminConfigSetTelegramWebhookPersistsSubmittedWebhookURL(t *testi
 	}
 	if _, ok := adminService.lastConfigSave["app_url"]; ok {
 		t.Fatalf("set webhook should not overwrite site url through config save: %#v", adminService.lastConfigSave)
+	}
+}
+
+func TestRouterAdminConfigSetTelegramSupportWebhookEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{
+		user: &session.Identity{ID: 1, IsAdmin: 1},
+	}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	body := "auth_data=jwt-admin&telegram_support_bot_token=support123&telegram_webhook_url=https%3A%2F%2Fapi.example.com"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/config/setTelegramSupportWebhook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastSupportWebhookToken != "support123" {
+		t.Fatalf("expected support telegram token support123, got %q", adminService.lastSupportWebhookToken)
+	}
+	if adminService.lastWebhookToken != "" {
+		t.Fatalf("support webhook should not use main bot token, got %q", adminService.lastWebhookToken)
+	}
+	if adminService.lastConfigSave["telegram_webhook_url"] != "https://api.example.com" {
+		t.Fatalf("expected submitted webhook url saved, got %#v", adminService.lastConfigSave)
+	}
+	if _, ok := adminService.lastConfigSave["telegram_support_bot_token"]; ok {
+		t.Fatalf("set support webhook should not overwrite support bot token through config save: %#v", adminService.lastConfigSave)
 	}
 }
 

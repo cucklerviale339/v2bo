@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forest/go-api/internal/admin"
@@ -33,6 +34,8 @@ type Service struct {
 	sendMessage       func(ctx context.Context, chatID int64, text string) error
 	approveJoin       func(ctx context.Context, chatID, userID int64) error
 	declineJoin       func(ctx context.Context, chatID, userID int64) error
+	supportSchemaOnce sync.Once
+	supportSchemaErr  error
 }
 
 func NewService(cfg config.Config, db *sql.DB) *Service {

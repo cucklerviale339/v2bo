@@ -106,6 +106,8 @@ type Config struct {
 	TelegramBotToken                   string
 	TelegramWebhookURL                 string
 	TelegramDiscussLink                string
+	TelegramSupportBotToken            string
+	TelegramSupportChatID              int64
 	StripePKLive                       string
 	Currency                           string
 	CurrencySymbol                     string
@@ -244,6 +246,8 @@ func Load() Config {
 		TelegramBotToken:                   managedString("TELEGRAM_BOT_TOKEN", "telegram_bot_token", ""),
 		TelegramWebhookURL:                 managedString("TELEGRAM_WEBHOOK_URL", "telegram_webhook_url", ""),
 		TelegramDiscussLink:                managedString("TELEGRAM_DISCUSS_LINK", "telegram_discuss_link", ""),
+		TelegramSupportBotToken:            managedString("TELEGRAM_SUPPORT_BOT_TOKEN", "telegram_support_bot_token", ""),
+		TelegramSupportChatID:              managedInt64("TELEGRAM_SUPPORT_CHAT_ID", "telegram_support_chat_id", 0),
 		StripePKLive:                       managedString("STRIPE_PK_LIVE", "stripe_pk_live", ""),
 		Currency:                           managedString("CURRENCY", "currency", "CNY"),
 		CurrencySymbol:                     managedString("CURRENCY_SYMBOL", "currency_symbol", "¥"),

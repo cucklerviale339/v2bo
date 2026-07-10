@@ -389,6 +389,7 @@ type Service interface {
 	ListThemeTemplates(ctx context.Context) ([]string, error)
 	TelegramBotInfo(ctx context.Context, token string) (map[string]any, error)
 	SetTelegramWebhook(ctx context.Context, token string) (bool, error)
+	SetTelegramSupportWebhook(ctx context.Context, token string) (bool, error)
 	GetTelegramAdminStatus(ctx context.Context, adminID int64) (TelegramAdminStatus, error)
 	SendTelegramTestMessage(ctx context.Context, adminID int64) (bool, error)
 	UnbindTelegram(ctx context.Context, adminID int64) (bool, error)

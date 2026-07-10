@@ -24,6 +24,7 @@ import (
 	"forest/go-api/internal/payment"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
+	"forest/go-api/internal/telegram"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -31,6 +32,10 @@ type Option func(*routerState)
 
 type telegramWebhookService interface {
 	HandleWebhook(ctx context.Context, payload map[string]any) error
+	SendSupportMessage(ctx context.Context, userID int64, email, message string) (bool, error)
+	SendSupportAttachment(ctx context.Context, userID int64, email string, attachment telegram.SupportAttachment) (bool, error)
+	SupportMessages(ctx context.Context, userID int64) ([]telegram.SupportMessage, error)
+	SupportFile(ctx context.Context, userID, messageID int64) (telegram.SupportFile, error)
 }
 
 type routerState struct {
@@ -445,6 +450,18 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleUserTelegramGetBotInfo(w, r, state.session, state.user) {
 				return
 			}
+		case r.URL.Path == "/api/v1/user/support/send":
+			if handleUserSupportSend(w, r, state.session, state.user, state.telegram) {
+				return
+			}
+		case r.URL.Path == "/api/v1/user/support/messages":
+			if handleUserSupportMessages(w, r, state.session, state.telegram) {
+				return
+			}
+		case r.URL.Path == "/api/v1/user/support/file":
+			if handleUserSupportFile(w, r, state.session, state.telegram) {
+				return
+			}
 		case r.URL.Path == "/api/v1/user/knowledge/fetch":
 			if handleUserKnowledgeFetch(w, r, state.session, state.user) {
 				return
@@ -727,6 +744,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/config/setTelegramWebhook":
 			if handleAdminConfigSetTelegramWebhook(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/config/setTelegramSupportWebhook":
+			if handleAdminConfigSetTelegramSupportWebhook(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/config/telegramStatus":
@@ -1100,16 +1121,28 @@ func validTelegramWebhookAccessToken(accessToken string, cfg config.Config) bool
 		return false
 	}
 
-	currentToken := strings.TrimSpace(config.Load().TelegramBotToken)
-	if currentToken == "" {
-		currentToken = strings.TrimSpace(cfg.TelegramBotToken)
+	current := config.Load()
+	tokens := []string{
+		current.TelegramBotToken,
+		current.TelegramSupportBotToken,
 	}
-	if currentToken == "" {
-		return false
+	if strings.TrimSpace(current.TelegramBotToken) == "" && strings.TrimSpace(current.TelegramSupportBotToken) == "" {
+		tokens = []string{
+			cfg.TelegramBotToken,
+			cfg.TelegramSupportBotToken,
+		}
 	}
-
-	expected := fmt.Sprintf("%x", md5.Sum([]byte(currentToken)))
-	return strings.EqualFold(accessToken, expected)
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		expected := fmt.Sprintf("%x", md5.Sum([]byte(token)))
+		if strings.EqualFold(accessToken, expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func handleGuestPaymentNotify(w http.ResponseWriter, r *http.Request, service payment.Service) bool {
@@ -1970,6 +2003,116 @@ func handleUserTelegramGetBotInfo(w http.ResponseWriter, r *http.Request, sessio
 		return handleUserError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	return true
+}
+
+func handleUserSupportSend(w http.ResponseWriter, r *http.Request, sessionService session.Service, userService usersvc.Service, telegramService telegramWebhookService) bool {
+	identity, ok := authenticateRequest(w, r, sessionService, false)
+	if !ok {
+		return true
+	}
+	if userService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "user service unavailable"})
+		return true
+	}
+	if telegramService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "telegram support service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	message := strings.TrimSpace(inputs["message"])
+	messageType := strings.ToLower(strings.TrimSpace(inputs["type"]))
+	if messageType == "" {
+		messageType = "text"
+	}
+	if messageType == "text" && message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "message is required"})
+		return true
+	}
+
+	info, err := userService.Info(r.Context(), identity.ID)
+	if err != nil {
+		return handleUserError(w, err)
+	}
+	var sent bool
+	if messageType == "text" {
+		sent, err = telegramService.SendSupportMessage(r.Context(), identity.ID, info.Email, message)
+	} else {
+		attachment, decodeErr := telegram.DecodeSupportAttachment(
+			messageType,
+			inputs["fileName"],
+			inputs["mimeType"],
+			inputs["data"],
+			message,
+		)
+		if decodeErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": decodeErr.Error()})
+			return true
+		}
+		sent, err = telegramService.SendSupportAttachment(r.Context(), identity.ID, info.Email, attachment)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"message": "客服消息发送失败，请稍后重试",
+			"detail":  err.Error(),
+		})
+		return true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": sent})
+	return true
+}
+
+func handleUserSupportMessages(w http.ResponseWriter, r *http.Request, sessionService session.Service, telegramService telegramWebhookService) bool {
+	identity, ok := authenticateRequest(w, r, sessionService, false)
+	if !ok {
+		return true
+	}
+	if telegramService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "telegram support service unavailable"})
+		return true
+	}
+
+	messages, err := telegramService.SupportMessages(r.Context(), identity.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+		return true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": messages})
+	return true
+}
+
+func handleUserSupportFile(w http.ResponseWriter, r *http.Request, sessionService session.Service, telegramService telegramWebhookService) bool {
+	identity, ok := authenticateRequest(w, r, sessionService, false)
+	if !ok {
+		return true
+	}
+	if telegramService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "telegram support service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	messageID, err := strconv.ParseInt(strings.TrimSpace(inputs["id"]), 10, 64)
+	if err != nil || messageID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "file not found"})
+		return true
+	}
+
+	file, err := telegramService.SupportFile(r.Context(), identity.ID, messageID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+		return true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": file})
 	return true
 }
 
@@ -4182,6 +4325,41 @@ func handleAdminConfigSetTelegramWebhook(w http.ResponseWriter, r *http.Request,
 	}
 
 	updated, err := adminService.SetTelegramWebhook(r.Context(), strings.TrimSpace(inputs["telegram_bot_token"]))
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": updated})
+	return true
+}
+
+func handleAdminConfigSetTelegramSupportWebhook(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	webhookConfig := map[string]any{}
+	for _, key := range []string{"telegram_webhook_url"} {
+		if value, ok := inputs[key]; ok {
+			webhookConfig[key] = strings.TrimSpace(value)
+		}
+	}
+	if len(webhookConfig) > 0 {
+		if _, err := adminService.SaveConfig(r.Context(), webhookConfig); err != nil {
+			return handleAdminError(w, err)
+		}
+	}
+
+	updated, err := adminService.SetTelegramSupportWebhook(r.Context(), strings.TrimSpace(inputs["telegram_support_bot_token"]))
 	if err != nil {
 		return handleAdminError(w, err)
 	}
