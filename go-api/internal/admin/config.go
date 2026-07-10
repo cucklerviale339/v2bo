@@ -341,6 +341,26 @@ func (s *DBService) ListThemeTemplates(_ context.Context) ([]string, error) {
 	return []string{}, nil
 }
 
+func (s *DBService) TelegramBotInfo(ctx context.Context, token string) (map[string]any, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		cfg, err := loadAdminConfigStore(adminConfigPath())
+		if err != nil {
+			return nil, err
+		}
+		token = strings.TrimSpace(cfg.stringValue("telegram_bot_token", ""))
+	}
+	if token == "" {
+		token = strings.TrimSpace(s.currentConfig().TelegramBotToken)
+	}
+	if token == "" {
+		return nil, errors.New("请先填写机器人Token")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	return telegramAPIResultMap(client, token, "getMe", nil)
+}
+
 func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (TelegramAdminStatus, error) {
 	if adminID <= 0 {
 		return TelegramAdminStatus{}, errors.New("参数错误")
@@ -495,6 +515,27 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	actualURL := strings.TrimSpace(fmt.Sprint(info["url"]))
 	if actualURL != "" && actualURL != hookURL {
 		return false, fmt.Errorf("Webhook设置未生效，Telegram当前地址：%s，目标地址：%s", actualURL, hookURL)
+	}
+	return true, nil
+}
+
+func (s *DBService) UnbindTelegram(ctx context.Context, adminID int64) (bool, error) {
+	if adminID <= 0 {
+		return false, errors.New("参数错误")
+	}
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+
+	result, err := s.db.ExecContext(ctx, `UPDATE v2_user
+SET telegram_id = NULL, updated_at = $2
+WHERE id = $1`, adminID, time.Now().Unix())
+	if err != nil {
+		return false, errors.New("解绑Telegram失败")
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, errors.New("当前管理员不存在")
 	}
 	return true, nil
 }

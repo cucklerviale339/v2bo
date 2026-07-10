@@ -399,20 +399,23 @@ export default function ConfigPage() {
     }
   };
 
+  const saveTelegramConfigIfChanged = async () => {
+    const values = changedValuesForGroup(form.getFieldsValue(), data, 'telegram');
+    if (Object.keys(values).length === 0) return;
+    await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
+  };
+
   const runTelegramAction = async (action: 'botInfo' | 'webhook' | 'test' | 'unbind') => {
     setTelegramAction(action);
     try {
       const token = form.getFieldValue('telegram_bot_token');
       if (action === 'botInfo') {
-        const res = await fetch(`/api/v1/user/telegram/getBotInfo?auth_data=${encodeURIComponent(localStorage.getItem('forest_admin_auth_data') || '')}`, { credentials: 'same-origin' });
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(payload?.message || '检测失败');
-        message.success(`机器人正常：@${payload?.data?.username || payload?.username || 'unknown'}`);
+        await saveTelegramConfigIfChanged();
+        const res = await apiPost('/config/telegramBotInfo', { telegram_bot_token: token }, { form: true, keepEmpty: true });
+        const payload = unwrapData(res) || {};
+        message.success(`机器人正常：@${payload?.username || 'unknown'}`);
       } else if (action === 'webhook') {
-        const values = changedValuesForGroup(form.getFieldsValue(), data, 'telegram');
-        if (Object.keys(values).length > 0) {
-          await apiPost('/config/save', normalizeConfig(values), { keepEmpty: true });
-        }
+        await saveTelegramConfigIfChanged();
         await apiPost('/config/setTelegramWebhook', {
           telegram_bot_token: token,
           telegram_webhook_url: form.getFieldValue('telegram_webhook_url'),
@@ -420,12 +423,11 @@ export default function ConfigPage() {
         message.success('Telegram 配置已保存，Webhook 设置成功');
         await load();
       } else if (action === 'test') {
+        await saveTelegramConfigIfChanged();
         await apiPost('/config/testTelegram', {}, { form: true });
         message.success('测试消息已发送');
       } else {
-        const res = await fetch(`/api/v1/user/unbindTelegram?auth_data=${encodeURIComponent(localStorage.getItem('forest_admin_auth_data') || '')}`, { credentials: 'same-origin' });
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(payload?.message || '解绑失败');
+        await apiPost('/config/unbindTelegram', {}, { form: true });
         message.success('已解绑当前管理员Telegram');
       }
       loadTelegramStatus();
