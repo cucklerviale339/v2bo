@@ -3,6 +3,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,12 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestBuildSMTPMessageAddsDeliverabilityHeaders(t *testing.T) {
 	message := string(buildSMTPMessage("noreply@example.com", "Forest Mail", "user@example.net", "Subject", "Body"))
@@ -154,6 +163,57 @@ func TestDBServiceTelegramAdminStatusShowsBindingAndWebhookURL(t *testing.T) {
 	}
 }
 
+func TestValidateTelegramWebhookURLRejectsUnsupportedPort(t *testing.T) {
+	err := validateTelegramWebhookURL("https://api.example:8080/api/v1/guest/telegram/webhook?access_token=abc")
+	if err == nil || !strings.Contains(err.Error(), "当前端口是8080") {
+		t.Fatalf("expected unsupported port error, got %v", err)
+	}
+}
+
+func TestValidateTelegramWebhookURLAllowsTelegramPorts(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://api.example/api/v1/guest/telegram/webhook?access_token=abc",
+		"https://api.example:443/api/v1/guest/telegram/webhook?access_token=abc",
+		"https://api.example:8443/api/v1/guest/telegram/webhook?access_token=abc",
+	} {
+		if err := validateTelegramWebhookURL(rawURL); err != nil {
+			t.Fatalf("expected %s to be allowed, got %v", rawURL, err)
+		}
+	}
+}
+
+func TestTelegramAPIResultMapRedactsTokenInTransportErrors(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp bot-token: i/o timeout")
+	})}
+
+	_, err := telegramAPIResultMap(client, "bot-token", "getMe", nil)
+	if err == nil {
+		t.Fatalf("expected transport error")
+	}
+	if strings.Contains(err.Error(), "bot-token") {
+		t.Fatalf("expected token to be redacted, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "请求Telegram失败") {
+		t.Fatalf("expected telegram request context, got %v", err)
+	}
+}
+
+func TestTelegramAPIResultMapReturnsTelegramDescription(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":false,"description":"Bad Request: bad webhook"}`)),
+		}, nil
+	})}
+
+	_, err := telegramAPIResultMap(client, "bot-token", "setWebhook", map[string]string{"url": "https://api.example/webhook"})
+	if err == nil || !strings.Contains(err.Error(), "Bad Request: bad webhook") {
+		t.Fatalf("expected telegram description, got %v", err)
+	}
+}
+
 func TestDBServiceSendTelegramTestMessageRequiresBoundAdmin(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
@@ -261,9 +321,9 @@ func TestDBServiceSaveConfigRejectsUnknownKeys(t *testing.T) {
 
 	service := &DBService{cfg: cfgpkg.Config{AdminPath: "localadmin"}}
 	if _, err := service.SaveConfig(context.Background(), map[string]any{
-		"app_name":     "Forest",
-		"unknown_key":  "bad",
-		"another_key":  1,
+		"app_name":    "Forest",
+		"unknown_key": "bad",
+		"another_key": 1,
 	}); err == nil || !strings.Contains(err.Error(), "unsupported config key") {
 		t.Fatalf("expected unsupported config key error, got %v", err)
 	}

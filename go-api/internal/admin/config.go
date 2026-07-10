@@ -483,6 +483,28 @@ func telegramWebhookAccessToken(token string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(strings.TrimSpace(token))))
 }
 
+func validateTelegramWebhookURL(hookURL string) error {
+	parsedURL, err := url.Parse(strings.TrimSpace(hookURL))
+	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
+		return errors.New("Telegram Webhook URL必须是公网HTTPS地址")
+	}
+	switch port := parsedURL.Port(); port {
+	case "", "443", "80", "88", "8443":
+	default:
+		return fmt.Errorf("Telegram Webhook只支持HTTPS的443、80、88、8443端口，当前端口是%s，请用域名反代到443或8443", port)
+	}
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("Telegram Webhook不能使用localhost或内网地址，请填写公网HTTPS域名")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return errors.New("Telegram Webhook不能使用localhost或内网地址，请填写公网HTTPS域名")
+		}
+	}
+	return nil
+}
+
 func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
 	token = strings.TrimSpace(token)
 	cfg, err := loadAdminConfigStore(adminConfigPath())
@@ -499,6 +521,9 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	hookURL := s.telegramWebhookURL(cfg, token)
 	if hookURL == "" {
 		return false, errors.New("Webhook URL格式不正确，必须携带http(s)://")
+	}
+	if err := validateTelegramWebhookURL(hookURL); err != nil {
+		return false, err
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -1176,13 +1201,13 @@ func telegramAPIResultMap(client *http.Client, token, method string, params map[
 	}
 	resp, err := client.Get(endpoint)
 	if err != nil {
-		return nil, errors.New("请求失败")
+		return nil, telegramRequestError("请求Telegram失败", token, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.New("请求失败")
+		return nil, telegramRequestError("读取Telegram响应失败", token, err)
 	}
 	var payload struct {
 		OK          bool           `json:"ok"`
@@ -1190,18 +1215,49 @@ func telegramAPIResultMap(client *http.Client, token, method string, params map[
 		Result      map[string]any `json:"result"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, errors.New("请求失败")
+		detail := strings.TrimSpace(redactTelegramToken(string(body), token))
+		if detail == "" {
+			return nil, fmt.Errorf("Telegram响应格式不正确：HTTP %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("Telegram响应格式不正确：HTTP %d，%s", resp.StatusCode, truncateErrorDetail(detail, 200))
 	}
 	if !payload.OK {
 		if strings.TrimSpace(payload.Description) == "" {
-			return nil, errors.New("请求失败")
+			return nil, fmt.Errorf("Telegram返回失败：HTTP %d", resp.StatusCode)
 		}
-		return nil, errors.New("来自TG的错误：" + payload.Description)
+		return nil, errors.New("来自Telegram的错误：" + payload.Description)
 	}
 	if payload.Result == nil {
 		payload.Result = map[string]any{}
 	}
 	return payload.Result, nil
+}
+
+func telegramRequestError(message, token string, err error) error {
+	if err == nil {
+		return errors.New(message)
+	}
+	detail := strings.TrimSpace(redactTelegramToken(err.Error(), token))
+	if detail == "" {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s：%s", message, truncateErrorDetail(detail, 240))
+}
+
+func redactTelegramToken(value, token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, token, "[hidden]")
+}
+
+func truncateErrorDetail(value string, max int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if max <= 0 || len(runes) <= max {
+		return string(runes)
+	}
+	return string(runes[:max]) + "..."
 }
 
 func sendMail(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
