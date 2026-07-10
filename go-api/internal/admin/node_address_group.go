@@ -14,7 +14,7 @@ type nodeAddressGroupRow struct {
 	ID          int64
 	Name        string
 	Description string
-	Show        int64
+	Enabled     int64
 	CreatedAt   int64
 	UpdatedAt   int64
 }
@@ -25,7 +25,7 @@ type nodeAddressRuleRow struct {
 	Name         string
 	Host         string
 	MatchUserIDs string
-	Show         int64
+	Enabled      int64
 	Sort         sql.NullInt64
 	CreatedAt    int64
 	UpdatedAt    int64
@@ -39,7 +39,7 @@ func (s *DBService) ListNodeAddressGroups(ctx context.Context, id *int64) ([]Nod
 		return nil, err
 	}
 
-	query := `SELECT id, name, description, "show", created_at, updated_at
+	query := `SELECT id, name, description, enabled, created_at, updated_at
 FROM v2_node_address_group`
 	args := []any{}
 	if id != nil {
@@ -107,21 +107,21 @@ func (s *DBService) SaveNodeAddressGroup(ctx context.Context, req NodeAddressGro
 
 	now := time.Now().Unix()
 	groupID := int64(0)
-	show := int64(1)
-	if normalized.Show != nil {
-		show = *normalized.Show
+	enabled := int64(1)
+	if normalized.Enabled != nil {
+		enabled = *normalized.Enabled
 	}
 	if normalized.ID == nil {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_node_address_group (name, description, "show", created_at, updated_at)
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_node_address_group (name, description, enabled, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id`, normalized.Name, normalized.Description, show, now, now).Scan(&groupID); err != nil {
+RETURNING id`, normalized.Name, normalized.Description, enabled, now, now).Scan(&groupID); err != nil {
 			return false, errors.New("创建失败")
 		}
 	} else {
 		groupID = *normalized.ID
 		result, err := tx.ExecContext(ctx, `UPDATE v2_node_address_group
-SET name = $2, description = $3, "show" = $4, updated_at = $5
-WHERE id = $1`, groupID, normalized.Name, normalized.Description, show, now)
+SET name = $2, description = $3, enabled = $4, updated_at = $5
+WHERE id = $1`, groupID, normalized.Name, normalized.Description, enabled, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
@@ -140,18 +140,18 @@ WHERE id = $1`, groupID, normalized.Name, normalized.Description, show, now)
 			next := int64(index)
 			sortValue = &next
 		}
-		ruleShow := int64(1)
-		if rule.Show != nil {
-			ruleShow = *rule.Show
+		ruleEnabled := int64(1)
+		if rule.Enabled != nil {
+			ruleEnabled = *rule.Enabled
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
-group_id, name, host, match_user_ids, "show", sort, created_at, updated_at
+group_id, name, host, match_user_ids, enabled, sort, created_at, updated_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			groupID,
 			rule.Name,
 			rule.Host,
 			encodeNodeAddressStringList(rule.MatchUserIDs),
-			ruleShow,
+			ruleEnabled,
 			nullableInt64(sortValue),
 			now,
 			now,
@@ -289,7 +289,7 @@ func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return result, nil
 	}
-	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, "show", sort, created_at, updated_at
+	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, enabled, sort, created_at, updated_at
 FROM v2_node_address_rule
 WHERE group_id IN (%s)
 ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
@@ -345,8 +345,8 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 	if req.Name == "" {
 		return req, errors.New("地址组名称不能为空")
 	}
-	if req.Show != nil && (*req.Show < 0 || *req.Show > 1) {
-		return req, errors.New("显示状态格式不正确")
+	if req.Enabled != nil && (*req.Enabled < 0 || *req.Enabled > 1) {
+		return req, errors.New("启用状态格式不正确")
 	}
 	for index := range req.Rules {
 		rule := &req.Rules[index]
@@ -356,8 +356,8 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 			return req, errors.New("规则地址不能为空")
 		}
 		rule.MatchUserIDs = normalizeNodeAddressStringList(rule.MatchUserIDs)
-		if rule.Show != nil && (*rule.Show < 0 || *rule.Show > 1) {
-			return req, errors.New("规则显示状态格式不正确")
+		if rule.Enabled != nil && (*rule.Enabled < 0 || *rule.Enabled > 1) {
+			return req, errors.New("规则启用状态格式不正确")
 		}
 		if !nodeAddressRuleHasCondition(*rule) {
 			return req, errors.New("地址规则至少需要一个匹配条件")
@@ -368,7 +368,7 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 
 func scanNodeAddressGroupRow(scanner interface{ Scan(...any) error }) (nodeAddressGroupRow, error) {
 	var row nodeAddressGroupRow
-	if err := scanner.Scan(&row.ID, &row.Name, &row.Description, &row.Show, &row.CreatedAt, &row.UpdatedAt); err != nil {
+	if err := scanner.Scan(&row.ID, &row.Name, &row.Description, &row.Enabled, &row.CreatedAt, &row.UpdatedAt); err != nil {
 		return nodeAddressGroupRow{}, fmt.Errorf("scan node address group: %w", err)
 	}
 	return row, nil
@@ -382,7 +382,7 @@ func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddres
 		&row.Name,
 		&row.Host,
 		&row.MatchUserIDs,
-		&row.Show,
+		&row.Enabled,
 		&row.Sort,
 		&row.CreatedAt,
 		&row.UpdatedAt,
@@ -397,7 +397,7 @@ func nodeAddressGroupRecord(row nodeAddressGroupRow) NodeAddressGroupRecord {
 		ID:          row.ID,
 		Name:        row.Name,
 		Description: row.Description,
-		Show:        row.Show,
+		Enabled:     row.Enabled,
 		Rules:       []NodeAddressRuleRecord{},
 		Bindings:    []NodeAddressBindingRecord{},
 		CreatedAt:   row.CreatedAt,
@@ -412,7 +412,7 @@ func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
 		Name:         row.Name,
 		Host:         row.Host,
 		MatchUserIDs: parseServerStringList(row.MatchUserIDs),
-		Show:         row.Show,
+		Enabled:      row.Enabled,
 		Sort:         nullInt64Ptr(row.Sort),
 		CreatedAt:    row.CreatedAt,
 		UpdatedAt:    row.UpdatedAt,

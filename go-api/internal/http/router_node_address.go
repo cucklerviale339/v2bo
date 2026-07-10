@@ -14,7 +14,7 @@ type nodeAddressGroupPayload struct {
 	ID          *json.Number             `json:"id"`
 	Name        string                   `json:"name"`
 	Description string                   `json:"description"`
-	Show        *json.Number             `json:"show"`
+	Enabled     *json.Number             `json:"enabled"`
 	Rules       []nodeAddressRulePayload `json:"rules"`
 }
 
@@ -23,7 +23,7 @@ type nodeAddressRulePayload struct {
 	Name         string       `json:"name"`
 	Host         string       `json:"host"`
 	MatchUserIDs []string     `json:"match_user_ids"`
-	Show         *json.Number `json:"show"`
+	Enabled      *json.Number `json:"enabled"`
 	Sort         *json.Number `json:"sort"`
 }
 
@@ -87,8 +87,8 @@ func handleAdminNodeAddressGroupSave(w http.ResponseWriter, r *http.Request, ses
 	if strings.TrimSpace(payload.Description) == "" {
 		payload.Description = strings.TrimSpace(inputs["description"])
 	}
-	if payload.Show == nil {
-		payload.Show = jsonNumberFromInput(inputs, "show")
+	if payload.Enabled == nil {
+		payload.Enabled = jsonNumberFromInput(inputs, "enabled")
 	}
 
 	req, ok := buildNodeAddressGroupSaveRequest(w, payload)
@@ -137,9 +137,9 @@ func buildNodeAddressGroupSaveRequest(w http.ResponseWriter, payload nodeAddress
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "地址组格式不正确"})
 		return admin.NodeAddressGroupSaveRequest{}, false
 	}
-	show, err := jsonNumberToInt64Pointer(payload.Show)
+	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "显示状态格式不正确"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "启用状态格式不正确"})
 		return admin.NodeAddressGroupSaveRequest{}, false
 	}
 
@@ -147,7 +147,7 @@ func buildNodeAddressGroupSaveRequest(w http.ResponseWriter, payload nodeAddress
 		ID:          id,
 		Name:        payload.Name,
 		Description: payload.Description,
-		Show:        show,
+		Enabled:     enabled,
 		Rules:       make([]admin.NodeAddressRuleSaveRequest, 0, len(payload.Rules)),
 	}
 	for _, item := range payload.Rules {
@@ -166,9 +166,9 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则格式不正确"})
 		return admin.NodeAddressRuleSaveRequest{}, false
 	}
-	show, err := jsonNumberToInt64Pointer(item.Show)
+	enabled, err := jsonNumberToInt64Pointer(item.Enabled)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则显示状态格式不正确"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则启用状态格式不正确"})
 		return admin.NodeAddressRuleSaveRequest{}, false
 	}
 	sortValue, err := jsonNumberToInt64Pointer(item.Sort)
@@ -182,7 +182,7 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 		Name:         item.Name,
 		Host:         item.Host,
 		MatchUserIDs: item.MatchUserIDs,
-		Show:         show,
+		Enabled:      enabled,
 		Sort:         sortValue,
 	}, true
 }

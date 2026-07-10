@@ -12,7 +12,7 @@ function normalizeRule(rule: any = {}, index = 0) {
   return {
     ...rule,
     match_user_ids: splitList(rule.match_user_ids),
-    show: rule.show === undefined ? true : !!Number(rule.show),
+    enabled: rule.enabled === undefined ? true : !!Number(rule.enabled),
     sort: rule.sort ?? index,
   };
 }
@@ -20,7 +20,7 @@ function normalizeRule(rule: any = {}, index = 0) {
 function normalizeGroup(row: any = {}) {
   return {
     ...row,
-    show: row.show === undefined ? true : !!Number(row.show),
+    enabled: row.enabled === undefined ? true : !!Number(row.enabled),
     rules: Array.isArray(row.rules) ? row.rules.map(normalizeRule) : [],
   };
 }
@@ -28,11 +28,11 @@ function normalizeGroup(row: any = {}) {
 function savePayload(values: any) {
   return {
     ...values,
-    show: values.show ? 1 : 0,
+    enabled: values.enabled ? 1 : 0,
     rules: (Array.isArray(values.rules) ? values.rules : []).map((rule: any, index: number) => ({
       ...rule,
       match_user_ids: splitList(rule.match_user_ids),
-      show: rule.show ? 1 : 0,
+      enabled: rule.enabled ? 1 : 0,
       sort: rule.sort ?? index,
     })),
   };
@@ -66,7 +66,7 @@ export default function NodeAddressPage() {
   useEffect(() => { load(); }, []);
 
   const openEditor = (row?: any) => {
-    const next = normalizeGroup(row || { name: '', description: '', show: true });
+    const next = normalizeGroup(row || { name: '', description: '', enabled: true });
     setEdit(next);
     form.resetFields();
     form.setFieldsValue(next);
@@ -106,7 +106,7 @@ export default function NodeAddressPage() {
       const count = Array.isArray(bindings) ? bindings.length : 0;
       return count ? `${count} 个节点` : '-';
     } },
-    { title: '显示', dataIndex: 'show', width: 90, render: (show: any) => <Tag color={Number(show) ? 'green' : 'default'}>{Number(show) ? '显示' : '隐藏'}</Tag> },
+    { title: '启用', dataIndex: 'enabled', width: 90, render: (enabled: any) => <Tag color={Number(enabled) ? 'green' : 'default'}>{Number(enabled) ? '启用' : '停用'}</Tag> },
     { title: '操作', dataIndex: 'action', align: 'right', width: 120, render: (_: any, row: any) => <Space split={<span className="ant-divider ant-divider-vertical" />}><a onClick={() => openEditor(row)}>编辑</a><Popconfirm title="确认删除？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm></Space> },
   ];
 
@@ -124,12 +124,12 @@ export default function NodeAddressPage() {
         <Form.Item name="id" hidden><Input /></Form.Item>
         <Form.Item name="name" label="地址组名称" rules={[{ required: true, message: '请输入地址组名称' }]}><Input placeholder="请输入地址组名称" /></Form.Item>
         <Form.Item name="description" label="说明"><Input placeholder="请输入说明" /></Form.Item>
-        <Form.Item name="show" label="显示" valuePropName="checked"><Switch /></Form.Item>
+        <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         <Form.List name="rules">
           {(fields, { add, remove }) => <>
             <div className="node-address-rule-head">
               <span>地址规则</span>
-              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', show: true, sort: fields.length })}>添加规则</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', enabled: true, sort: fields.length })}>添加规则</Button>
             </div>
             {fields.map((field, index) => <div key={field.key} className="node-address-rule-item">
               <div className="node-address-rule-title">
@@ -140,7 +140,7 @@ export default function NodeAddressPage() {
                 <div className="form-col-8"><Form.Item name={[field.name, 'name']} label="规则名称"><Input placeholder="规则名称" /></Form.Item></div>
                 <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="下发地址" rules={[{ required: true, message: '请输入下发地址' }]}><Input placeholder="example.com" /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'sort']} label="排序"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></div>
-                <div className="form-col-3"><Form.Item name={[field.name, 'show']} label="显示" valuePropName="checked"><Switch /></Form.Item></div>
+                <div className="form-col-3"><Form.Item name={[field.name, 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="用户ID"><Select mode="tags" placeholder="1 或 1-100" /></Form.Item></div>
               </div>
             </div>)}

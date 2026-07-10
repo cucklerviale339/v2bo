@@ -34,7 +34,7 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
-WHERE g."show" = 1 AND r."show" = 1
+WHERE g.enabled = 1 AND r.enabled = 1
 ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query node address rules: %w", err)
@@ -65,7 +65,7 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 	bindingRows, err := s.db.QueryContext(ctx, `SELECT b.server_type, b.server_id, b.address_group_id
 FROM v2_node_address_binding b
 JOIN v2_node_address_group g ON g.id = b.address_group_id
-WHERE g."show" = 1
+WHERE g.enabled = 1
 ORDER BY b.server_type ASC, b.server_id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query node address bindings: %w", err)

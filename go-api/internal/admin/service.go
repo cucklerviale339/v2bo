@@ -222,7 +222,7 @@ type NodeAddressRuleRecord struct {
 	Name         string   `json:"name"`
 	Host         string   `json:"host"`
 	MatchUserIDs []string `json:"match_user_ids,omitempty"`
-	Show         int64    `json:"show"`
+	Enabled      int64    `json:"enabled"`
 	Sort         *int64   `json:"sort,omitempty"`
 	CreatedAt    int64    `json:"created_at,omitempty"`
 	UpdatedAt    int64    `json:"updated_at,omitempty"`
@@ -237,7 +237,7 @@ type NodeAddressGroupRecord struct {
 	ID          int64                      `json:"id"`
 	Name        string                     `json:"name"`
 	Description string                     `json:"description"`
-	Show        int64                      `json:"show"`
+	Enabled     int64                      `json:"enabled"`
 	Rules       []NodeAddressRuleRecord    `json:"rules,omitempty"`
 	Bindings    []NodeAddressBindingRecord `json:"bindings,omitempty"`
 	CreatedAt   int64                      `json:"created_at,omitempty"`
@@ -249,7 +249,7 @@ type NodeAddressRuleSaveRequest struct {
 	Name         string
 	Host         string
 	MatchUserIDs []string
-	Show         *int64
+	Enabled      *int64
 	Sort         *int64
 }
 
@@ -257,7 +257,7 @@ type NodeAddressGroupSaveRequest struct {
 	ID          *int64
 	Name        string
 	Description string
-	Show        *int64
+	Enabled     *int64
 	Rules       []NodeAddressRuleSaveRequest
 }
 
