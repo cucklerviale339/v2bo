@@ -141,7 +141,6 @@ CREATE TABLE IF NOT EXISTS "v2_node_address_rule" (
   "no_ua" SMALLINT NOT NULL DEFAULT '0',
   "min_registered_days" INTEGER DEFAULT NULL,
   "max_registered_days" INTEGER DEFAULT NULL,
-  "is_default" SMALLINT NOT NULL DEFAULT '0',
   "show" SMALLINT NOT NULL DEFAULT '1',
   "sort" INTEGER DEFAULT NULL,
   "created_at" INTEGER NOT NULL,

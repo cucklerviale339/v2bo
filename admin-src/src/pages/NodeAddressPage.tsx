@@ -17,7 +17,6 @@ function normalizeRule(rule: any = {}, index = 0) {
     match_ua_keywords: splitList(rule.match_ua_keywords),
     exclude_ua_keywords: splitList(rule.exclude_ua_keywords),
     no_ua: !!rule.no_ua,
-    is_default: !!rule.is_default,
     show: rule.show === undefined ? true : !!Number(rule.show),
     sort: rule.sort ?? index,
   };
@@ -27,9 +26,7 @@ function normalizeGroup(row: any = {}) {
   return {
     ...row,
     show: row.show === undefined ? true : !!Number(row.show),
-    rules: Array.isArray(row.rules) && row.rules.length > 0
-      ? row.rules.map(normalizeRule)
-      : [{ name: '默认地址', host: '', show: true, sort: 0, is_default: true }],
+    rules: Array.isArray(row.rules) ? row.rules.map(normalizeRule) : [],
   };
 }
 
@@ -45,7 +42,6 @@ function savePayload(values: any) {
       match_ua_keywords: splitList(rule.match_ua_keywords),
       exclude_ua_keywords: splitList(rule.exclude_ua_keywords),
       no_ua: !!rule.no_ua,
-      is_default: !!rule.is_default,
       show: rule.show ? 1 : 0,
       sort: rule.sort ?? index,
       min_registered_days: rule.min_registered_days ?? undefined,
@@ -55,7 +51,6 @@ function savePayload(values: any) {
 }
 
 function ruleSummary(rule: any) {
-  if (rule.is_default) return '默认';
   const parts: string[] = [];
   if (splitList(rule.match_user_ids).length) parts.push('用户');
   if (splitList(rule.match_plan_ids).length) parts.push('套餐');
@@ -64,7 +59,7 @@ function ruleSummary(rule: any) {
   if (splitList(rule.exclude_ua_keywords).length) parts.push('排除客户端');
   if (rule.no_ua) parts.push('无UA');
   if (rule.min_registered_days !== undefined || rule.max_registered_days !== undefined) parts.push('注册天数');
-  return parts.length ? parts.join(' / ') : '默认';
+  return parts.length ? parts.join(' / ') : '未配置条件';
 }
 
 export default function NodeAddressPage() {
@@ -183,7 +178,6 @@ export default function NodeAddressPage() {
                 <div className="form-col-6"><Form.Item name={[field.name, 'min_registered_days']} label="注册天数最小值"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></div>
                 <div className="form-col-6"><Form.Item name={[field.name, 'max_registered_days']} label="注册天数最大值"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></div>
                 <div className="form-col-6"><Form.Item name={[field.name, 'no_ua']} valuePropName="checked"><Checkbox>无UA</Checkbox></Form.Item></div>
-                <div className="form-col-6"><Form.Item name={[field.name, 'is_default']} valuePropName="checked"><Checkbox>默认规则</Checkbox></Form.Item></div>
               </div>
             </div>)}
           </>}

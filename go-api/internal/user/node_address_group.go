@@ -24,7 +24,6 @@ type nodeAddressRule struct {
 	NoUA              bool
 	MinRegisteredDays *int64
 	MaxRegisteredDays *int64
-	IsDefault         bool
 }
 
 func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSelector, error) {
@@ -41,7 +40,7 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids, r.match_plan_ids, r.match_group_ids,
-r.match_ua_keywords, r.exclude_ua_keywords, r.no_ua, r.min_registered_days, r.max_registered_days, r.is_default
+r.match_ua_keywords, r.exclude_ua_keywords, r.no_ua, r.min_registered_days, r.max_registered_days
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
 WHERE g."show" = 1 AND r."show" = 1
@@ -61,7 +60,6 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 		var noUA int64
 		var minRegisteredDays sql.NullInt64
 		var maxRegisteredDays sql.NullInt64
-		var isDefault int64
 		if err := rows.Scan(
 			&rule.GroupID,
 			&rule.Host,
@@ -73,7 +71,6 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 			&noUA,
 			&minRegisteredDays,
 			&maxRegisteredDays,
-			&isDefault,
 		); err != nil {
 			return nil, fmt.Errorf("scan node address rule: %w", err)
 		}
@@ -89,7 +86,6 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 		rule.NoUA = noUA != 0
 		rule.MinRegisteredDays = nodeAddressNullInt64Ptr(minRegisteredDays)
 		rule.MaxRegisteredDays = nodeAddressNullInt64Ptr(maxRegisteredDays)
-		rule.IsDefault = isDefault != 0
 		selector.rules[rule.GroupID] = append(selector.rules[rule.GroupID], rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -141,10 +137,6 @@ func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user se
 }
 
 func (r nodeAddressRule) matches(user serverFetchUser, ua string, now int64) bool {
-	if r.IsDefault {
-		return true
-	}
-
 	hasCondition := false
 	if len(r.MatchUserIDs) > 0 {
 		hasCondition = true
@@ -196,7 +188,7 @@ func (r nodeAddressRule) matches(user serverFetchUser, ua string, now int64) boo
 		}
 	}
 
-	return !hasCondition
+	return hasCondition
 }
 
 func nodeAddressServerKey(serverType string, serverID int64) string {

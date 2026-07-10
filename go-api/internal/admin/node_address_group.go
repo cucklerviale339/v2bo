@@ -32,7 +32,6 @@ type nodeAddressRuleRow struct {
 	NoUA              int64
 	MinRegisteredDays sql.NullInt64
 	MaxRegisteredDays sql.NullInt64
-	IsDefault         int64
 	Show              int64
 	Sort              sql.NullInt64
 	CreatedAt         int64
@@ -155,8 +154,8 @@ WHERE id = $1`, groupID, normalized.Name, normalized.Description, show, now)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
 group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
 match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
-is_default, "show", sort, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+"show", sort, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 			groupID,
 			rule.Name,
 			rule.Host,
@@ -168,7 +167,6 @@ is_default, "show", sort, created_at, updated_at
 			boolToSmallInt(rule.NoUA),
 			nullableInt64(rule.MinRegisteredDays),
 			nullableInt64(rule.MaxRegisteredDays),
-			boolToSmallInt(rule.IsDefault),
 			ruleShow,
 			nullableInt64(sortValue),
 			now,
@@ -309,7 +307,7 @@ func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[
 	}
 	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_plan_ids, match_group_ids,
 match_ua_keywords, exclude_ua_keywords, no_ua, min_registered_days, max_registered_days,
-is_default, "show", sort, created_at, updated_at
+"show", sort, created_at, updated_at
 FROM v2_node_address_rule
 WHERE group_id IN (%s)
 ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
@@ -392,8 +390,8 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 		if rule.MinRegisteredDays != nil && rule.MaxRegisteredDays != nil && *rule.MinRegisteredDays > *rule.MaxRegisteredDays {
 			return req, errors.New("注册天数范围不正确")
 		}
-		if !rule.IsDefault && !nodeAddressRuleHasCondition(*rule) {
-			rule.IsDefault = true
+		if !nodeAddressRuleHasCondition(*rule) {
+			return req, errors.New("地址规则至少需要一个匹配条件")
 		}
 	}
 	return req, nil
@@ -422,7 +420,6 @@ func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddres
 		&row.NoUA,
 		&row.MinRegisteredDays,
 		&row.MaxRegisteredDays,
-		&row.IsDefault,
 		&row.Show,
 		&row.Sort,
 		&row.CreatedAt,
@@ -460,7 +457,6 @@ func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
 		NoUA:              row.NoUA != 0,
 		MinRegisteredDays: nullInt64Ptr(row.MinRegisteredDays),
 		MaxRegisteredDays: nullInt64Ptr(row.MaxRegisteredDays),
-		IsDefault:         row.IsDefault != 0,
 		Show:              row.Show,
 		Sort:              nullInt64Ptr(row.Sort),
 		CreatedAt:         row.CreatedAt,

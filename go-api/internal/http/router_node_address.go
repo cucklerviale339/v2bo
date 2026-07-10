@@ -30,7 +30,6 @@ type nodeAddressRulePayload struct {
 	NoUA              bool         `json:"no_ua"`
 	MinRegisteredDays *json.Number `json:"min_registered_days"`
 	MaxRegisteredDays *json.Number `json:"max_registered_days"`
-	IsDefault         bool         `json:"is_default"`
 	Show              *json.Number `json:"show"`
 	Sort              *json.Number `json:"sort"`
 }
@@ -207,7 +206,6 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 		NoUA:              item.NoUA,
 		MinRegisteredDays: minRegisteredDays,
 		MaxRegisteredDays: maxRegisteredDays,
-		IsDefault:         item.IsDefault,
 		Show:              show,
 		Sort:              sortValue,
 	}, true

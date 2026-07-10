@@ -229,7 +229,6 @@ type NodeAddressRuleRecord struct {
 	NoUA              bool     `json:"no_ua"`
 	MinRegisteredDays *int64   `json:"min_registered_days,omitempty"`
 	MaxRegisteredDays *int64   `json:"max_registered_days,omitempty"`
-	IsDefault         bool     `json:"is_default"`
 	Show              int64    `json:"show"`
 	Sort              *int64   `json:"sort,omitempty"`
 	CreatedAt         int64    `json:"created_at,omitempty"`
@@ -264,7 +263,6 @@ type NodeAddressRuleSaveRequest struct {
 	NoUA              bool
 	MinRegisteredDays *int64
 	MaxRegisteredDays *int64
-	IsDefault         bool
 	Show              *int64
 	Sort              *int64
 }
