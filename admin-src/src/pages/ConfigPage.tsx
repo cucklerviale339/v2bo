@@ -20,6 +20,12 @@ const emailTemplateOptions = [
   { label: 'default', value: 'default' }
 ];
 
+const ticketStatusOptions = [
+  { label: '允许所有用户提交', value: 0 },
+  { label: '仅已购买用户提交', value: 1 },
+  { label: '禁止提交工单', value: 2 }
+];
+
 type ConfigMeta = {
   title: string;
   description?: string;
@@ -243,7 +249,7 @@ const configLabels: Record<string, ConfigMeta> = {
   telegram_support_chat_id: { title: '客服群组ID', description: '填写开启话题功能的Telegram客服群ID，例如 -1001234567890。' },
   telegram_discuss_link: { title: '群组地址', description: '填写后将会在用户端展示，或者被用于需要的地方。' },
 
-  ticket_status: { title: '工单设置', description: '关闭后用户将无法提交工单。' },
+  ticket_status: { title: '工单设置', description: '控制用户是否可以提交工单。', options: ticketStatusOptions },
   deposit_bounus: { title: '充值奖励', description: '请按行填写充值奖励规则。', textarea: true },
   deposit_recharge_enable: { title: '充值奖励', description: '开启后用户充值可获得奖励。' },
   deposit_recharge_bonus: { title: '充值奖励规则', description: '配置充值奖励规则。', textarea: true, child: true },
