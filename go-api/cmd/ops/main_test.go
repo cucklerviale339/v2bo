@@ -1,13 +1,126 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestSplitSQLStatementsPreservesPostgresDollarQuotedBlocks(t *testing.T) {
+	t.Parallel()
+
+	raw := `-- comments and their semicolons must not create statements;
+CREATE TABLE sample (value text);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM sample WHERE value = 'a;b') THEN
+    UPDATE sample SET value = 'updated';
+  END IF;
+END $$;
+
+DO $migration$
+BEGIN
+  INSERT INTO sample (value) VALUES ('tagged;value');
+END
+$migration$;
+
+/* trailing comment; */`
+
+	stmts := splitSQLStatements(raw)
+	if len(stmts) != 3 {
+		t.Fatalf("expected 3 statements, got %d: %#v", len(stmts), stmts)
+	}
+	if !strings.Contains(stmts[1], "UPDATE sample SET value = 'updated';") || !strings.HasSuffix(stmts[1], "END $$;") {
+		t.Fatalf("plain dollar-quoted block was split incorrectly: %q", stmts[1])
+	}
+	if !strings.Contains(stmts[2], "VALUES ('tagged;value');") || !strings.HasSuffix(stmts[2], "$migration$;") {
+		t.Fatalf("tagged dollar-quoted block was split incorrectly: %q", stmts[2])
+	}
+}
+
+func TestSplitSQLStatementsHandlesQuotedSemicolonsAndNestedComments(t *testing.T) {
+	t.Parallel()
+
+	raw := `SELECT 'one;two', "semi;colon", E'escaped\\';
+/* outer; /* nested; */ still outer; */
+SELECT 2; -- trailing;
+`
+	stmts := splitSQLStatements(raw)
+	if len(stmts) != 2 {
+		t.Fatalf("expected 2 statements, got %d: %#v", len(stmts), stmts)
+	}
+	if !strings.HasSuffix(stmts[0], `E'escaped\\';`) {
+		t.Fatalf("quoted statement was split incorrectly: %q", stmts[0])
+	}
+	if !strings.HasSuffix(stmts[1], "SELECT 2;") {
+		t.Fatalf("statement after nested comment was split incorrectly: %q", stmts[1])
+	}
+}
+
+func TestExecSQLFileStopsAtFirstFailure(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	path := filepath.Join(t.TempDir(), "update.sql")
+	if err := os.WriteFile(path, []byte("SELECT 1;\nSELECT 2;\nSELECT 3;\n"), 0o600); err != nil {
+		t.Fatalf("write SQL fixture: %v", err)
+	}
+
+	mock.ExpectExec(regexp.QuoteMeta("SELECT 1;")).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT 2;")).WillReturnError(errors.New("migration failed"))
+
+	ok, failed, execErr := execSQLFile(context.Background(), db, path)
+	if execErr == nil {
+		t.Fatal("expected execSQLFile to return the statement failure")
+	}
+	if ok != 1 || failed != 1 {
+		t.Fatalf("unexpected execution counts: success=%d failed=%d", ok, failed)
+	}
+	if !strings.Contains(execErr.Error(), "statement #2") || !strings.Contains(execErr.Error(), "migration failed") {
+		t.Fatalf("unexpected execution error: %v", execErr)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestUpdatePostgresSQLKeepsNodeAddressMigrationsWhole(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRootFromTestFile(t), "database", "update.pgsql.sql")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	dollarQuotedBlocks := 0
+	for _, stmt := range splitSQLStatements(string(raw)) {
+		trimmed := strings.TrimSpace(stmt)
+		if !strings.HasPrefix(trimmed, "DO $$") {
+			continue
+		}
+		dollarQuotedBlocks++
+		if strings.Count(trimmed, "END IF;") != 3 || !strings.HasSuffix(trimmed, "END $$;") {
+			t.Fatalf("node address migration was split incorrectly: %q", stmt)
+		}
+	}
+	if dollarQuotedBlocks != 2 {
+		t.Fatalf("expected 2 complete dollar-quoted migrations, got %d", dollarQuotedBlocks)
+	}
+}
 
 func TestPostgresSQLFilesDoNotContainInlineMySQLIndexes(t *testing.T) {
 	t.Parallel()

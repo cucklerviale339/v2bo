@@ -250,15 +250,11 @@ func execSQLFile(ctx context.Context, db *sql.DB, path string) (int, int, error)
 	for idx, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			failed++
-			fmt.Fprintf(os.Stderr, "sql failed #%d: %v\n", idx+1, err)
-			continue
+			return ok, failed, fmt.Errorf("execute SQL statement #%d from %s: %w", idx+1, path, err)
 		}
 		ok++
 	}
 
-	if ok == 0 {
-		return ok, failed, fmt.Errorf("all SQL statements failed for %s", path)
-	}
 	return ok, failed, nil
 }
 
@@ -427,38 +423,162 @@ func isIgnorableOwnerError(err error) bool {
 }
 
 func splitSQLStatements(raw string) []string {
-	lines := strings.Split(raw, "\n")
-	stmts := make([]string, 0, len(lines))
-	var builder strings.Builder
+	stmts := make([]string, 0)
+	start := 0
+	hasSQL := false
+	inSingleQuote := false
+	singleQuoteBackslashEscapes := false
+	inDoubleQuote := false
+	inLineComment := false
+	blockCommentDepth := 0
+	dollarQuoteTag := ""
 
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+			}
 			continue
 		}
 
-		if builder.Len() > 0 {
-			builder.WriteByte('\n')
-		}
-		builder.WriteString(line)
-
-		if strings.HasSuffix(trimmed, ";") {
-			stmt := strings.TrimSpace(builder.String())
-			if stmt != "" {
-				stmts = append(stmts, stmt)
+		if blockCommentDepth > 0 {
+			if ch == '/' && i+1 < len(raw) && raw[i+1] == '*' {
+				blockCommentDepth++
+				i++
+			} else if ch == '*' && i+1 < len(raw) && raw[i+1] == '/' {
+				blockCommentDepth--
+				i++
 			}
-			builder.Reset()
+			continue
+		}
+
+		if dollarQuoteTag != "" {
+			if strings.HasPrefix(raw[i:], dollarQuoteTag) {
+				i += len(dollarQuoteTag) - 1
+				dollarQuoteTag = ""
+			}
+			continue
+		}
+
+		if inSingleQuote {
+			if singleQuoteBackslashEscapes && ch == '\\' && i+1 < len(raw) {
+				i++
+				continue
+			}
+			if ch == '\'' {
+				if i+1 < len(raw) && raw[i+1] == '\'' {
+					i++
+					continue
+				}
+				inSingleQuote = false
+				singleQuoteBackslashEscapes = false
+			}
+			continue
+		}
+
+		if inDoubleQuote {
+			if ch == '"' {
+				if i+1 < len(raw) && raw[i+1] == '"' {
+					i++
+					continue
+				}
+				inDoubleQuote = false
+			}
+			continue
+		}
+
+		if ch == '-' && i+1 < len(raw) && raw[i+1] == '-' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if ch == '/' && i+1 < len(raw) && raw[i+1] == '*' {
+			blockCommentDepth = 1
+			i++
+			continue
+		}
+		if ch == '\'' {
+			inSingleQuote = true
+			singleQuoteBackslashEscapes = isEscapeStringPrefix(raw, i)
+			hasSQL = true
+			continue
+		}
+		if ch == '"' {
+			inDoubleQuote = true
+			hasSQL = true
+			continue
+		}
+		if ch == '$' {
+			if tag, ok := postgresDollarQuoteTag(raw, i); ok {
+				dollarQuoteTag = tag
+				hasSQL = true
+				i += len(tag) - 1
+				continue
+			}
+		}
+		if ch == ';' {
+			if hasSQL {
+				stmts = append(stmts, strings.TrimSpace(raw[start:i+1]))
+			}
+			start = i + 1
+			hasSQL = false
+			continue
+		}
+		if !isSQLWhitespace(ch) {
+			hasSQL = true
 		}
 	}
 
-	if builder.Len() > 0 {
-		stmt := strings.TrimSpace(builder.String())
-		if stmt != "" {
-			stmts = append(stmts, stmt)
-		}
+	if hasSQL {
+		stmts = append(stmts, strings.TrimSpace(raw[start:]))
 	}
 
 	return stmts
+}
+
+func postgresDollarQuoteTag(raw string, start int) (string, bool) {
+	if start < 0 || start >= len(raw) || raw[start] != '$' || start+1 >= len(raw) {
+		return "", false
+	}
+	if start > 0 && isSQLIdentifierPart(raw[start-1]) {
+		return "", false
+	}
+	if raw[start+1] == '$' {
+		return "$$", true
+	}
+	if !isSQLIdentifierStart(raw[start+1]) {
+		return "", false
+	}
+
+	end := start + 2
+	for end < len(raw) && isSQLIdentifierPart(raw[end]) {
+		end++
+	}
+	if end >= len(raw) || raw[end] != '$' {
+		return "", false
+	}
+	return raw[start : end+1], true
+}
+
+func isEscapeStringPrefix(raw string, quoteIndex int) bool {
+	if quoteIndex == 0 || (raw[quoteIndex-1] != 'E' && raw[quoteIndex-1] != 'e') {
+		return false
+	}
+	return quoteIndex == 1 || !isSQLIdentifierPart(raw[quoteIndex-2])
+}
+
+func isSQLIdentifierStart(ch byte) bool {
+	return ch == '_' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
+}
+
+func isSQLIdentifierPart(ch byte) bool {
+	return isSQLIdentifierStart(ch) || ch >= '0' && ch <= '9'
+}
+
+func isSQLWhitespace(ch byte) bool {
+	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v'
 }
 
 func upsertAdmin(ctx context.Context, db *sql.DB, email, password string) (string, error) {
