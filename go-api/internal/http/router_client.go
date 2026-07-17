@@ -115,13 +115,14 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".conf")
 		subscribeURL := managedSubscribeURL(r, cfg)
 		subscribeDomain := managedSubscribeDomain(subscribeURL, r)
+		isSurfboard := isSurfboardSubscribeFlag(flag)
 		customFile := "custom.surge.conf"
 		defaultFile := "default.surge.conf"
-		if isSurfboardSubscribeFlag(flag) {
+		if isSurfboard {
 			customFile = "custom.surfboard.conf"
 			defaultFile = "default.surfboard.conf"
 		}
-		body, err := buildSurgeProfile(cfg, customFile, defaultFile, subscribeURL, subscribeDomain, subscribe, subscribe.UUID, servers)
+		body, err := buildSurgeProfile(cfg, customFile, defaultFile, subscribeURL, subscribeDomain, subscribe, subscribe.UUID, servers, isSurfboard)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 			return true

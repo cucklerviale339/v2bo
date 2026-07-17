@@ -70,6 +70,25 @@ func TestBuildLoonPayloadUsesDedicatedPlainTextFormat(t *testing.T) {
 	}
 }
 
+func TestBuildLoonPayloadIncludesAnyTLS(t *testing.T) {
+	payload := buildLoonPayload("user-uuid", []map[string]any{
+		{
+			"type":         "anytls",
+			"name":         "loon-anytls",
+			"host":         "node.example.com",
+			"port":         int64(443),
+			"insecure":     true,
+			"server_name":  "sni.example.com",
+			"tls_settings": map[string]any{"allow_insecure": true},
+		},
+	})
+
+	want := "loon-anytls=AnyTLS,node.example.com,443,user-uuid,skip-cert-verify=true,sni=sni.example.com,udp=true,block-quic=false"
+	if !strings.Contains(payload, want) {
+		t.Fatalf("expected loon anytls line, got %q", payload)
+	}
+}
+
 func TestBuildQuantumultXPayloadUsesDedicatedBase64Format(t *testing.T) {
 	payload := buildQuantumultXPayload("user-uuid", []map[string]any{
 		{
@@ -98,6 +117,52 @@ func TestBuildQuantumultXPayloadUsesDedicatedBase64Format(t *testing.T) {
 	}
 	if strings.Contains(body, "vmess://") {
 		t.Fatalf("expected quantumult x line format, got generic uri payload %q", body)
+	}
+}
+
+func TestBuildQuantumultXPayloadIncludesAnyTLS(t *testing.T) {
+	payload := buildQuantumultXPayload("user-uuid", []map[string]any{
+		{
+			"type":         "anytls",
+			"name":         "qx-anytls",
+			"host":         "node.example.com",
+			"port":         int64(443),
+			"insecure":     true,
+			"server_name":  "sni.example.com",
+			"tls_settings": map[string]any{"allow_insecure": true},
+		},
+	})
+
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode quantumult x anytls payload: %v", err)
+	}
+	want := "anytls=node.example.com:443,password=user-uuid,over-tls=true,tls-host=sni.example.com,tls-verification=false,udp-relay=true,tag=qx-anytls"
+	if !strings.Contains(string(decoded), want) {
+		t.Fatalf("expected quantumult x anytls line, got %q", string(decoded))
+	}
+}
+
+func TestBuildSurfboardAnyTLSUsesPositionalPassword(t *testing.T) {
+	line, ok := buildSurfboardProxyLine("user-uuid", map[string]any{
+		"type":         "anytls",
+		"name":         "surfboard-anytls",
+		"host":         "node.example.com",
+		"port":         int64(443),
+		"insecure":     true,
+		"server_name":  "sni.example.com",
+		"tls_settings": map[string]any{"allow_insecure": true},
+	})
+	if !ok {
+		t.Fatal("expected surfboard anytls node to be supported")
+	}
+
+	want := "surfboard-anytls=anytls,node.example.com,443,user-uuid,skip-cert-verify=true,sni=sni.example.com,udp-relay=true"
+	if !strings.Contains(line, want) {
+		t.Fatalf("expected surfboard anytls line, got %q", line)
+	}
+	if strings.Contains(line, "password=user-uuid") {
+		t.Fatalf("expected positional surfboard password, got %q", line)
 	}
 }
 

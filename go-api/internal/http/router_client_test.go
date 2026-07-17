@@ -1056,6 +1056,16 @@ func TestRouterClientSubscribeSurfboardEndpointUsesManagedProfile(t *testing.T) 
 					"server_name": "trojan.example.com",
 				},
 			},
+			{
+				"type":        "anytls",
+				"name":        "Surfboard-AnyTLS",
+				"host":        "anytls.example.com",
+				"port":        int64(443),
+				"server_name": "sni.example.com",
+				"tls_settings": map[string]any{
+					"allow_insecure": true,
+				},
+			},
 		},
 	}
 	router := NewRouter(config.Config{AppName: "Forest", AppURL: "https://panel.example.com"}, WithUserService(userService))
@@ -1070,7 +1080,8 @@ func TestRouterClientSubscribeSurfboardEndpointUsesManagedProfile(t *testing.T) 
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "#!MANAGED-CONFIG https://panel.example.com/api/v1/client/subscribe?token=token-1&flag=surfboard") ||
 		!strings.Contains(body, "[Proxy]") ||
-		!strings.Contains(body, "Trojan-1=trojan") {
+		!strings.Contains(body, "Trojan-1=trojan") ||
+		!strings.Contains(body, "Surfboard-AnyTLS=anytls,anytls.example.com,443,user-uuid,skip-cert-verify=true,sni=sni.example.com,udp-relay=true") {
 		t.Fatalf("expected surfboard profile body, got %q", body)
 	}
 }

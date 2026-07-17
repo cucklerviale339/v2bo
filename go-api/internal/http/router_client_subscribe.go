@@ -165,6 +165,8 @@ func buildLoonPayload(userUUID string, servers []map[string]any) string {
 			builder.WriteString(buildLoonTrojanLine(userUUID, normalized))
 		case "hysteria2":
 			builder.WriteString(buildLoonHysteria2Line(userUUID, normalized))
+		case "anytls":
+			builder.WriteString(buildLoonAnyTLSLine(userUUID, normalized))
 		}
 	}
 	return builder.String()
@@ -364,6 +366,29 @@ func buildLoonHysteria2Line(userUUID string, server map[string]any) string {
 	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
 }
 
+func buildLoonAnyTLSLine(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	insecure := serverBoolValue(server["insecure"]) ||
+		serverBoolValue(server["allow_insecure"]) ||
+		serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	parts := []string{
+		serverString(server, "name") + "=AnyTLS",
+		serverString(server, "host"),
+		subscribePortString(server),
+		userUUID,
+		"skip-cert-verify=" + strconv.FormatBool(insecure),
+	}
+	if sni := firstNonEmptyString(
+		serverString(server, "server_name"),
+		stringValue(tlsSettings["server_name"]),
+		stringValue(tlsSettings["serverName"]),
+	); sni != "" {
+		parts = append(parts, "sni="+sni)
+	}
+	parts = append(parts, "udp=true", "block-quic=false")
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
 func buildQuantumultXPayload(userUUID string, servers []map[string]any) string {
 	var builder strings.Builder
 	for _, server := range servers {
@@ -379,6 +404,8 @@ func buildQuantumultXPayload(userUUID string, servers []map[string]any) string {
 			}
 		case "trojan":
 			builder.WriteString(buildQuantumultXTrojanLine(userUUID, normalized))
+		case "anytls":
+			builder.WriteString(buildQuantumultXAnyTLSLine(userUUID, normalized))
 		}
 	}
 	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
@@ -557,6 +584,31 @@ func buildQuantumultXTrojanLine(userUUID string, server map[string]any) string {
 	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
 }
 
+func buildQuantumultXAnyTLSLine(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	insecure := serverBoolValue(server["insecure"]) ||
+		serverBoolValue(server["allow_insecure"]) ||
+		serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	parts := []string{
+		"anytls=" + formatHost(serverString(server, "host")) + ":" + subscribePortString(server),
+		"password=" + userUUID,
+		"over-tls=true",
+	}
+	if sni := firstNonEmptyString(
+		serverString(server, "server_name"),
+		stringValue(tlsSettings["server_name"]),
+		stringValue(tlsSettings["serverName"]),
+	); sni != "" {
+		parts = append(parts, "tls-host="+sni)
+	}
+	parts = append(parts,
+		"tls-verification="+strconv.FormatBool(!insecure),
+		"udp-relay=true",
+		"tag="+serverString(server, "name"),
+	)
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
 func buildShadowsocksSIP008Profile(subscribe usersvc.Subscribe, servers []map[string]any) (string, error) {
 	bytesUsed := subscribe.U + subscribe.D
 	bytesRemaining := subscribe.TransferEnable - bytesUsed
@@ -680,7 +732,7 @@ func loadRuleTemplateRaw(cfg config.Config, customFile, defaultFile string) ([]b
 	return raw, nil
 }
 
-func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL, subscribeDomain string, subscribe usersvc.Subscribe, userUUID string, servers []map[string]any) (string, error) {
+func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL, subscribeDomain string, subscribe usersvc.Subscribe, userUUID string, servers []map[string]any, surfboard bool) (string, error) {
 	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
 	if err != nil {
 		return "", err
@@ -688,8 +740,12 @@ func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL,
 
 	proxies := make([]string, 0, len(servers))
 	groupNames := make([]string, 0, len(servers))
+	proxyLineBuilder := buildSurgeProxyLine
+	if surfboard {
+		proxyLineBuilder = buildSurfboardProxyLine
+	}
 	for _, server := range servers {
-		line, ok := buildSurgeProxyLine(userUUID, server)
+		line, ok := proxyLineBuilder(userUUID, server)
 		if !ok {
 			continue
 		}
@@ -757,6 +813,14 @@ func buildSurgeProxyLine(userUUID string, server map[string]any) (string, bool) 
 	default:
 		return "", false
 	}
+}
+
+func buildSurfboardProxyLine(userUUID string, server map[string]any) (string, bool) {
+	serverType, normalized := normalizeSubscribeServer(server)
+	if serverType == "anytls" {
+		return buildSurfboardAnyTLSLine(userUUID, normalized), true
+	}
+	return buildSurgeProxyLine(userUUID, normalized)
 }
 
 func normalizeSubscribeServerOnly(server map[string]any) map[string]any {
@@ -896,6 +960,29 @@ func buildSurgeAnyTLSLine(userUUID string, server map[string]any) string {
 	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
 		parts = append(parts, "sni="+sni)
 	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildSurfboardAnyTLSLine(userUUID string, server map[string]any) string {
+	tlsSettings := subscribeTLSSettings(server)
+	insecure := serverBoolValue(server["insecure"]) ||
+		serverBoolValue(server["allow_insecure"]) ||
+		serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	parts := []string{
+		fmt.Sprintf("%s=anytls", serverString(server, "name")),
+		serverString(server, "host"),
+		subscribePortString(server),
+		userUUID,
+		"skip-cert-verify=" + strconv.FormatBool(insecure),
+	}
+	if sni := firstNonEmptyString(
+		serverString(server, "server_name"),
+		stringValue(tlsSettings["server_name"]),
+		stringValue(tlsSettings["serverName"]),
+	); sni != "" {
+		parts = append(parts, "sni="+sni)
+	}
+	parts = append(parts, "udp-relay=true")
 	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
 }
 
