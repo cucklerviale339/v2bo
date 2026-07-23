@@ -847,6 +847,12 @@ func buildForestEntryProviderProxies(ctx context.Context, userUUID string, serve
 	effectiveIPs := effectiveClientEntryGroupIPs(ctx, group, resolver)
 	proxies := make([]any, 0, len(servers)*len(effectiveIPs))
 	for _, server := range servers {
+		if _, matched := server["host"].(usersvc.AddressGroupHost); matched {
+			if proxy, ok := buildClashStandardProxy(userUUID, server); ok {
+				proxies = append(proxies, proxy)
+			}
+			continue
+		}
 		for _, item := range effectiveIPs {
 			ip := strings.TrimSpace(item.IP)
 			if ip == "" {

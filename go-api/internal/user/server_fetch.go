@@ -118,7 +118,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	for _, item := range servers {
 		if hostValue, ok := item["host"].(string); ok {
 			if host, matched := addressSelector.Resolve(fmt.Sprint(item["type"]), mapInt64(item["id"]), userRow); matched {
-				item["host"] = host
+				item["host"] = AddressGroupHost(host)
 			} else {
 				host, hostOK := parseServerHostByCondition(hostValue, userRow, ua, now)
 				if !hostOK {

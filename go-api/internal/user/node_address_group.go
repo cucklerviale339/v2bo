@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+type AddressGroupHost string
+
 type nodeAddressSelector struct {
 	bindings map[string]int64
 	rules    map[int64][]nodeAddressRule
