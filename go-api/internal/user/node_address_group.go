@@ -13,9 +13,10 @@ type nodeAddressSelector struct {
 }
 
 type nodeAddressRule struct {
-	GroupID      int64
-	Host         string
-	MatchUserIDs []string
+	GroupID           int64
+	Host              string
+	MatchUserIDs      []string
+	MatchUserIDRanges []string
 }
 
 func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSelector, error) {
@@ -31,7 +32,7 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 		rules:    make(map[int64][]nodeAddressRule),
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids
+	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids, r.match_user_id_ranges
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
 WHERE g.enabled = 1 AND r.enabled = 1
@@ -44,10 +45,12 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 	for rows.Next() {
 		var rule nodeAddressRule
 		var matchUserIDs string
+		var matchUserIDRanges string
 		if err := rows.Scan(
 			&rule.GroupID,
 			&rule.Host,
 			&matchUserIDs,
+			&matchUserIDRanges,
 		); err != nil {
 			return nil, fmt.Errorf("scan node address rule: %w", err)
 		}
@@ -56,6 +59,7 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 			continue
 		}
 		rule.MatchUserIDs = parseServerStringList(matchUserIDs)
+		rule.MatchUserIDRanges = parseServerStringList(matchUserIDRanges)
 		selector.rules[rule.GroupID] = append(selector.rules[rule.GroupID], rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -99,7 +103,12 @@ func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user se
 		return "", false
 	}
 	for _, rule := range s.rules[groupID] {
-		if rule.matches(user) {
+		if rule.matchesExplicitUserID(user.ID) {
+			return rule.Host, true
+		}
+	}
+	for _, rule := range s.rules[groupID] {
+		if rule.matchesUserIDRange(user.ID) {
 			return rule.Host, true
 		}
 	}
@@ -107,28 +116,29 @@ func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user se
 }
 
 func (r nodeAddressRule) matches(user serverFetchUser) bool {
-	hasCondition := false
-	if len(r.MatchUserIDs) > 0 {
-		hasCondition = true
-		if !nodeAddressIntTokensMatch(r.MatchUserIDs, user.ID) {
-			return false
-		}
-	}
+	return r.matchesExplicitUserID(user.ID) || r.matchesUserIDRange(user.ID)
+}
 
-	return hasCondition
+func (r nodeAddressRule) matchesExplicitUserID(userID int64) bool {
+	return nodeAddressExactIDTokensMatch(r.MatchUserIDs, userID)
+}
+
+func (r nodeAddressRule) matchesUserIDRange(userID int64) bool {
+	return nodeAddressIDRangeTokensMatch(r.MatchUserIDRanges, userID)
 }
 
 func nodeAddressServerKey(serverType string, serverID int64) string {
 	return fmt.Sprintf("%s-%d", strings.TrimSpace(serverType), serverID)
 }
 
-func nodeAddressIntTokensMatch(tokens []string, value int64) bool {
+func nodeAddressExactIDTokensMatch(tokens []string, value int64) bool {
 	if value <= 0 {
 		return false
 	}
 	for _, token := range tokens {
 		for _, part := range strings.Split(token, ",") {
-			if nodeAddressIntTokenMatch(strings.TrimSpace(part), value) {
+			next, err := strconv.ParseInt(strings.TrimSpace(strings.Trim(part, `"'`)), 10, 64)
+			if err == nil && next == value {
 				return true
 			}
 		}
@@ -136,29 +146,37 @@ func nodeAddressIntTokensMatch(tokens []string, value int64) bool {
 	return false
 }
 
-func nodeAddressIntTokenMatch(token string, value int64) bool {
-	token = strings.TrimSpace(strings.Trim(token, `"'`))
-	if token == "" {
+func nodeAddressIDRangeTokensMatch(tokens []string, value int64) bool {
+	if value <= 0 {
 		return false
 	}
-	if strings.Contains(token, "-") {
-		parts := strings.SplitN(token, "-", 2)
-		if len(parts) != 2 {
-			return false
+	for _, token := range tokens {
+		for _, part := range strings.Split(token, ",") {
+			start, end, ok := parseNodeAddressIDRange(part)
+			if ok && value >= start && value <= end {
+				return true
+			}
 		}
-		start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
-		if err != nil {
-			return false
-		}
-		end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-		if err != nil {
-			return false
-		}
-		if end < start {
-			start, end = end, start
-		}
-		return value >= start && value <= end
 	}
-	next, err := strconv.ParseInt(token, 10, 64)
-	return err == nil && next == value
+	return false
+}
+
+func parseNodeAddressIDRange(token string) (int64, int64, bool) {
+	token = strings.TrimSpace(strings.Trim(token, `"'`))
+	parts := strings.Split(token, "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil || start <= 0 {
+		return 0, 0, false
+	}
+	end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil || end <= 0 {
+		return 0, 0, false
+	}
+	if end < start {
+		start, end = end, start
+	}
+	return start, end, true
 }

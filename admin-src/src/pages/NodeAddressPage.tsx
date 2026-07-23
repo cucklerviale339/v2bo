@@ -12,6 +12,7 @@ function normalizeRule(rule: any = {}, index = 0) {
   return {
     ...rule,
     match_user_ids: splitList(rule.match_user_ids),
+    match_user_id_ranges: splitList(rule.match_user_id_ranges),
     enabled: rule.enabled === undefined ? true : !!Number(rule.enabled),
     sort: rule.sort ?? index,
   };
@@ -32,6 +33,7 @@ function savePayload(values: any) {
     rules: (Array.isArray(values.rules) ? values.rules : []).map((rule: any, index: number) => ({
       ...rule,
       match_user_ids: splitList(rule.match_user_ids),
+      match_user_id_ranges: splitList(rule.match_user_id_ranges),
       enabled: rule.enabled ? 1 : 0,
       sort: rule.sort ?? index,
     })),
@@ -40,8 +42,19 @@ function savePayload(values: any) {
 
 function ruleSummary(rule: any) {
   const parts: string[] = [];
-  if (splitList(rule.match_user_ids).length) parts.push('用户');
+  if (splitList(rule.match_user_ids).length) parts.push('明确ID');
+  if (splitList(rule.match_user_id_ranges).length) parts.push('ID范围');
   return parts.length ? parts.join(' / ') : '未配置条件';
+}
+
+function validateUserIDs(_: any, value: any) {
+  const invalid = splitList(value).find((item) => !/^[1-9]\d*$/.test(item));
+  return invalid ? Promise.reject(new Error('用户ID必须是正整数')) : Promise.resolve();
+}
+
+function validateUserIDRanges(_: any, value: any) {
+  const invalid = splitList(value).find((item) => !/^[1-9]\d*\s*-\s*[1-9]\d*$/.test(item));
+  return invalid ? Promise.reject(new Error('ID范围格式应为起始ID-结束ID')) : Promise.resolve();
 }
 
 export default function NodeAddressPage() {
@@ -155,7 +168,8 @@ export default function NodeAddressPage() {
                 <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="下发地址" rules={[{ required: true, message: '请输入下发地址' }]}><Input placeholder="example.com" /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'sort']} label="排序"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></div>
-                <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="用户ID"><Select mode="tags" placeholder="1 或 1-100" /></Form.Item></div>
+                <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="明确用户ID" rules={[{ validator: validateUserIDs }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1、25，回车确认" /></Form.Item></div>
+                <div className="form-col-8"><Form.Item name={[field.name, 'match_user_id_ranges']} label="用户ID范围" rules={[{ validator: validateUserIDRanges }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1-100，回车确认" /></Form.Item></div>
               </div>
             </div>)}
           </>}

@@ -105,3 +105,49 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestEnsureNodeAddressSchemaAddsUserIDRangesColumn(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_group`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_rule`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_binding`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs(tableName, "enabled").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs(tableName, "show").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
+
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_node_address_rule", "match_user_id_ranges").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN match_user_id_ranges text NOT NULL DEFAULT '\[\]'`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_rule_group ON v2_node_address_rule\(group_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_binding_group ON v2_node_address_binding\(address_group_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_binding_server ON v2_node_address_binding\(server_type, server_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := EnsureNodeAddressSchema(context.Background(), db); err != nil {
+		t.Fatalf("EnsureNodeAddressSchema: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}

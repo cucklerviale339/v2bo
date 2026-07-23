@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,15 +21,16 @@ type nodeAddressGroupRow struct {
 }
 
 type nodeAddressRuleRow struct {
-	ID           int64
-	GroupID      int64
-	Name         string
-	Host         string
-	MatchUserIDs string
-	Enabled      int64
-	Sort         sql.NullInt64
-	CreatedAt    int64
-	UpdatedAt    int64
+	ID                int64
+	GroupID           int64
+	Name              string
+	Host              string
+	MatchUserIDs      string
+	MatchUserIDRanges string
+	Enabled           int64
+	Sort              sql.NullInt64
+	CreatedAt         int64
+	UpdatedAt         int64
 }
 
 func (s *DBService) ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error) {
@@ -145,12 +147,13 @@ WHERE id = $1`, groupID, normalized.Name, normalized.Description, enabled, now)
 			ruleEnabled = *rule.Enabled
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
-group_id, name, host, match_user_ids, enabled, sort, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+group_id, name, host, match_user_ids, match_user_id_ranges, enabled, sort, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 			groupID,
 			rule.Name,
 			rule.Host,
 			encodeNodeAddressStringList(rule.MatchUserIDs),
+			encodeNodeAddressStringList(rule.MatchUserIDRanges),
 			ruleEnabled,
 			nullableInt64(sortValue),
 			now,
@@ -289,7 +292,7 @@ func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return result, nil
 	}
-	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, enabled, sort, created_at, updated_at
+	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_user_id_ranges, enabled, sort, created_at, updated_at
 FROM v2_node_address_rule
 WHERE group_id IN (%s)
 ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
@@ -348,6 +351,7 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 	if req.Enabled != nil && (*req.Enabled < 0 || *req.Enabled > 1) {
 		return req, errors.New("启用状态格式不正确")
 	}
+	var err error
 	for index := range req.Rules {
 		rule := &req.Rules[index]
 		rule.Name = strings.TrimSpace(rule.Name)
@@ -355,7 +359,14 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 		if rule.Host == "" {
 			return req, errors.New("规则地址不能为空")
 		}
-		rule.MatchUserIDs = normalizeNodeAddressStringList(rule.MatchUserIDs)
+		rule.MatchUserIDs, err = normalizeNodeAddressUserIDs(rule.MatchUserIDs)
+		if err != nil {
+			return req, err
+		}
+		rule.MatchUserIDRanges, err = normalizeNodeAddressUserIDRanges(rule.MatchUserIDRanges)
+		if err != nil {
+			return req, err
+		}
 		if rule.Enabled != nil && (*rule.Enabled < 0 || *rule.Enabled > 1) {
 			return req, errors.New("规则启用状态格式不正确")
 		}
@@ -382,6 +393,7 @@ func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddres
 		&row.Name,
 		&row.Host,
 		&row.MatchUserIDs,
+		&row.MatchUserIDRanges,
 		&row.Enabled,
 		&row.Sort,
 		&row.CreatedAt,
@@ -407,20 +419,69 @@ func nodeAddressGroupRecord(row nodeAddressGroupRow) NodeAddressGroupRecord {
 
 func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
 	return NodeAddressRuleRecord{
-		ID:           row.ID,
-		GroupID:      row.GroupID,
-		Name:         row.Name,
-		Host:         row.Host,
-		MatchUserIDs: parseServerStringList(row.MatchUserIDs),
-		Enabled:      row.Enabled,
-		Sort:         nullInt64Ptr(row.Sort),
-		CreatedAt:    row.CreatedAt,
-		UpdatedAt:    row.UpdatedAt,
+		ID:                row.ID,
+		GroupID:           row.GroupID,
+		Name:              row.Name,
+		Host:              row.Host,
+		MatchUserIDs:      parseServerStringList(row.MatchUserIDs),
+		MatchUserIDRanges: parseServerStringList(row.MatchUserIDRanges),
+		Enabled:           row.Enabled,
+		Sort:              nullInt64Ptr(row.Sort),
+		CreatedAt:         row.CreatedAt,
+		UpdatedAt:         row.UpdatedAt,
 	}
 }
 
 func nodeAddressRuleHasCondition(rule NodeAddressRuleSaveRequest) bool {
-	return len(rule.MatchUserIDs) > 0
+	return len(rule.MatchUserIDs) > 0 || len(rule.MatchUserIDRanges) > 0
+}
+
+func normalizeNodeAddressUserIDs(values []string) ([]string, error) {
+	items := normalizeNodeAddressStringList(values)
+	result := make([]string, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		id, err := strconv.ParseInt(item, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, errors.New("用户ID必须是正整数")
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, strconv.FormatInt(id, 10))
+	}
+	return result, nil
+}
+
+func normalizeNodeAddressUserIDRanges(values []string) ([]string, error) {
+	items := normalizeNodeAddressStringList(values)
+	result := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		parts := strings.Split(item, "-")
+		if len(parts) != 2 {
+			return nil, errors.New("用户ID范围格式应为起始ID-结束ID")
+		}
+		start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		if err != nil || start <= 0 {
+			return nil, errors.New("用户ID范围必须使用正整数")
+		}
+		end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if err != nil || end <= 0 {
+			return nil, errors.New("用户ID范围必须使用正整数")
+		}
+		if end < start {
+			start, end = end, start
+		}
+		next := fmt.Sprintf("%d-%d", start, end)
+		if _, exists := seen[next]; exists {
+			continue
+		}
+		seen[next] = struct{}{}
+		result = append(result, next)
+	}
+	return result, nil
 }
 
 func normalizeNodeAddressStringList(values []string) []string {

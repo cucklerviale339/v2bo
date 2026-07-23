@@ -119,6 +119,7 @@ group_id INTEGER NOT NULL,
 name varchar(255) NOT NULL DEFAULT '',
 host varchar(255) NOT NULL,
 match_user_ids text NOT NULL DEFAULT '[]',
+match_user_id_ranges text NOT NULL DEFAULT '[]',
 enabled SMALLINT NOT NULL DEFAULT 1,
 sort INTEGER DEFAULT NULL,
 created_at INTEGER NOT NULL,
@@ -146,6 +147,9 @@ CONSTRAINT uniq_v2_node_address_binding UNIQUE (server_type, server_id)
 			return err
 		}
 	}
+	if err := ensureNodeAddressRuleIDRangesColumn(ctx, db); err != nil {
+		return err
+	}
 
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_address_rule_group ON v2_node_address_rule(group_id)`,
@@ -157,6 +161,20 @@ CONSTRAINT uniq_v2_node_address_binding UNIQUE (server_type, server_id)
 		}
 	}
 
+	return nil
+}
+
+func ensureNodeAddressRuleIDRangesColumn(ctx context.Context, db *sql.DB) error {
+	exists, err := columnExists(ctx, db, "v2_node_address_rule", "match_user_id_ranges")
+	if err != nil {
+		return fmt.Errorf("check node address user ID ranges column: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_node_address_rule ADD COLUMN match_user_id_ranges text NOT NULL DEFAULT '[]'`); err != nil {
+		return fmt.Errorf("add node address user ID ranges column: %w", err)
+	}
 	return nil
 }
 
