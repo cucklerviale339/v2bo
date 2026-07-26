@@ -194,6 +194,46 @@ func TestBuildGatewayCheckoutEPayPro(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayCheckoutEPayProWechatKeepsTypeBeforeSignature(t *testing.T) {
+	result, err := buildGatewayCheckout(
+		context.Background(),
+		http.DefaultClient,
+		"EPayPro",
+		map[string]string{
+			"url":  "https://pay.example.com",
+			"pid":  "10001",
+			"key":  "secret",
+			"type": "wxpay",
+		},
+		gatewayOrder{
+			TradeNo:   "T400W",
+			Total:     5678,
+			NotifyURL: "https://api.example.com/notify",
+			ReturnURL: "https://app.example.com/#/order/T400W",
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	parsed, err := url.Parse(fmt.Sprint(result.Data))
+	if err != nil {
+		t.Fatalf("parse redirect url: %v", err)
+	}
+	if parsed.Query().Get("type") != "wxpay" {
+		t.Fatalf("expected wxpay type, got %q", parsed.Query().Get("type"))
+	}
+	typeAt := strings.Index(parsed.RawQuery, "type=wxpay")
+	signAt := strings.Index(parsed.RawQuery, "&sign=")
+	if typeAt < 0 || signAt < 0 || typeAt > signAt {
+		t.Fatalf("expected type before signature, got %q", parsed.RawQuery)
+	}
+	expectedSign := md5.Sum([]byte("money=56.78&name=T400W&notify_url=https://api.example.com/notify&out_trade_no=T400W&pid=10001&return_url=https://app.example.com/#/order/T400W&type=wxpaysecret"))
+	if parsed.Query().Get("sign") != hex.EncodeToString(expectedSign[:]) {
+		t.Fatalf("unexpected sign: %s", parsed.Query().Get("sign"))
+	}
+}
+
 func TestBuildGatewayCheckoutEpusdtPay(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/order/create-transaction" {

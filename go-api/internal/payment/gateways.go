@@ -357,15 +357,12 @@ func buildEPayProCheckout(cfg map[string]string, order gatewayOrder) CheckoutRes
 		"type":         configValue(cfg, "type"),
 	}
 	sign := md5Hex(decodedQuery(params) + configValue(cfg, "key"))
-	values := url.Values{}
-	for key, value := range params {
-		values.Set(key, value)
-	}
-	values.Set("sign", sign)
-	values.Set("sign_type", "MD5")
+	signature := url.Values{}
+	signature.Set("sign", sign)
+	signature.Set("sign_type", "MD5")
 	return CheckoutResult{
 		Type: 1,
-		Data: strings.TrimRight(configValue(cfg, "url"), "/") + "/submit.php?" + values.Encode(),
+		Data: strings.TrimRight(configValue(cfg, "url"), "/") + "/submit.php?" + encodedQuery(params) + "&" + signature.Encode(),
 	}
 }
 
