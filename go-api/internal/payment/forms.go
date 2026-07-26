@@ -3,10 +3,16 @@ package payment
 import "sort"
 
 type FormField struct {
-	Label       string `json:"label"`
-	Description string `json:"description"`
-	Type        string `json:"type"`
-	Value       string `json:"value,omitempty"`
+	Label       string       `json:"label"`
+	Description string       `json:"description"`
+	Type        string       `json:"type"`
+	Value       string       `json:"value,omitempty"`
+	Options     []FormOption `json:"options,omitempty"`
+}
+
+type FormOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 var gatewayForms = map[string]map[string]FormField{
@@ -41,6 +47,20 @@ var gatewayForms = map[string]map[string]FormField{
 		"url": {Label: "URL", Description: "", Type: "input"},
 		"pid": {Label: "PID", Description: "", Type: "input"},
 		"key": {Label: "KEY", Description: "", Type: "input"},
+	},
+	"epaypro": {
+		"url": {Label: "URL", Description: "", Type: "input"},
+		"pid": {Label: "PID", Description: "", Type: "input"},
+		"key": {Label: "KEY", Description: "", Type: "input"},
+		"type": {
+			Label:       "TYPE",
+			Description: "请选择直连支付类型",
+			Type:        "select",
+			Options: []FormOption{
+				{Label: "支付宝 (alipay)", Value: "alipay"},
+				{Label: "微信支付 (wxpay)", Value: "wxpay"},
+			},
+		},
 	},
 	"EpusdtPay": {
 		"epusdt_pay_url":      {Label: "API 地址", Description: "您的 EpusdtPay API 接口地址(例如: https://epusdt-pay.xxx.com)", Type: "input"},

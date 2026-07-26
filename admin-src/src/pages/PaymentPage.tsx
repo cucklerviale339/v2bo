@@ -8,6 +8,7 @@ type PaymentFormField = {
   description?: string;
   type?: string;
   value?: string;
+  options?: Array<{ label: string; value: string }>;
 };
 
 export default function PaymentPage() {
@@ -145,7 +146,9 @@ export default function PaymentPage() {
         {gatewayKeys.map((key) => {
           const item = gatewayForm[key] || {};
           return <Form.Item key={key} name={['config', key]} label={item.label || key} rules={[{ required: true, message: `请输入${item.label || key}` }]}>
-            <Input placeholder={item.description || item.label || key} />
+            {item.type === 'select'
+              ? <Select placeholder={item.description || item.label || key} options={item.options || []} />
+              : <Input placeholder={item.description || item.label || key} />}
           </Form.Item>;
         })}
         {selectedGateway === 'MGate' && <div className="legacy-warning">MGate TG@nulledsan</div>}

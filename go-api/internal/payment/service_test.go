@@ -156,6 +156,44 @@ func TestBuildGatewayCheckoutEPay(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayCheckoutEPayPro(t *testing.T) {
+	result, err := buildGatewayCheckout(
+		context.Background(),
+		http.DefaultClient,
+		"epaypro",
+		map[string]string{
+			"url":  "https://pay.example.com",
+			"pid":  "10001",
+			"key":  "secret",
+			"type": "alipay",
+		},
+		gatewayOrder{
+			TradeNo:   "T400P",
+			Total:     1234,
+			NotifyURL: "https://api.example.com/notify",
+			ReturnURL: "https://app.example.com/#/order/T400P",
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Type != 1 {
+		t.Fatalf("expected type 1, got %d", result.Type)
+	}
+
+	parsed, err := url.Parse(fmt.Sprint(result.Data))
+	if err != nil {
+		t.Fatalf("parse redirect url: %v", err)
+	}
+	if parsed.Path != "/submit.php" || parsed.Query().Get("type") != "alipay" {
+		t.Fatalf("unexpected epaypro redirect url: %s", parsed.String())
+	}
+	expectedSign := md5.Sum([]byte("money=12.34&name=T400P&notify_url=https://api.example.com/notify&out_trade_no=T400P&pid=10001&return_url=https://app.example.com/#/order/T400P&type=alipaysecret"))
+	if parsed.Query().Get("sign") != hex.EncodeToString(expectedSign[:]) {
+		t.Fatalf("unexpected sign: %s", parsed.Query().Get("sign"))
+	}
+}
+
 func TestBuildGatewayCheckoutEpusdtPay(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/order/create-transaction" {
@@ -544,6 +582,30 @@ func TestVerifyGatewayNotifyEPay(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if result.TradeNo != "T402" || result.CallbackNo != "P402" {
+		t.Fatalf("unexpected notify result: %#v", result)
+	}
+}
+
+func TestVerifyGatewayNotifyEPayPro(t *testing.T) {
+	params := map[string]string{
+		"out_trade_no": "T402P",
+		"trade_no":     "P402P",
+	}
+	sum := md5.Sum([]byte("out_trade_no=T402P&trade_no=P402Psecret"))
+	params["sign"] = hex.EncodeToString(sum[:])
+	params["sign_type"] = "MD5"
+
+	result, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"epaypro",
+		map[string]string{"key": "secret"},
+		NotifyRequest{Params: params},
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.TradeNo != "T402P" || result.CallbackNo != "P402P" {
 		t.Fatalf("unexpected notify result: %#v", result)
 	}
 }
