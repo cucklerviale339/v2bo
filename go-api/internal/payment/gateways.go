@@ -37,7 +37,7 @@ func buildGatewayCheckout(ctx context.Context, client *http.Client, gateway stri
 		return buildCoinbaseCheckout(ctx, client, cfg, order)
 	case "EPay":
 		return buildEPayCheckout(cfg, order), nil
-	case "epaypro":
+	case "EPayPro":
 		return buildEPayProCheckout(cfg, order), nil
 	case "EpusdtPay":
 		return buildEpusdtCheckout(ctx, client, cfg, order)
@@ -74,7 +74,7 @@ func verifyGatewayNotify(ctx context.Context, client *http.Client, gateway strin
 		return verifyCoinbaseNotify(cfg, req)
 	case "EPay":
 		return verifyEPayNotify(cfg, req)
-	case "epaypro":
+	case "EPayPro":
 		return verifyEPayNotify(cfg, req)
 	case "EpusdtPay":
 		return verifyEpusdtNotify(cfg, req)

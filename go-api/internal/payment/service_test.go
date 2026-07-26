@@ -160,7 +160,7 @@ func TestBuildGatewayCheckoutEPayPro(t *testing.T) {
 	result, err := buildGatewayCheckout(
 		context.Background(),
 		http.DefaultClient,
-		"epaypro",
+		"EPayPro",
 		map[string]string{
 			"url":  "https://pay.example.com",
 			"pid":  "10001",
@@ -186,7 +186,7 @@ func TestBuildGatewayCheckoutEPayPro(t *testing.T) {
 		t.Fatalf("parse redirect url: %v", err)
 	}
 	if parsed.Path != "/submit.php" || parsed.Query().Get("type") != "alipay" {
-		t.Fatalf("unexpected epaypro redirect url: %s", parsed.String())
+		t.Fatalf("unexpected EPayPro redirect url: %s", parsed.String())
 	}
 	expectedSign := md5.Sum([]byte("money=12.34&name=T400P&notify_url=https://api.example.com/notify&out_trade_no=T400P&pid=10001&return_url=https://app.example.com/#/order/T400P&type=alipaysecret"))
 	if parsed.Query().Get("sign") != hex.EncodeToString(expectedSign[:]) {
@@ -598,7 +598,7 @@ func TestVerifyGatewayNotifyEPayPro(t *testing.T) {
 	result, err := verifyGatewayNotify(
 		context.Background(),
 		http.DefaultClient,
-		"epaypro",
+		"EPayPro",
 		map[string]string{"key": "secret"},
 		NotifyRequest{Params: params},
 	)

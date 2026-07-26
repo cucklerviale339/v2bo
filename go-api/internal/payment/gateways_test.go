@@ -3,14 +3,14 @@ package payment
 import "testing"
 
 func TestEPayProFormUsesPaymentTypeSelect(t *testing.T) {
-	form, ok := GatewayForm("epaypro")
+	form, ok := GatewayForm("EPayPro")
 	if !ok {
-		t.Fatal("expected epaypro gateway form")
+		t.Fatal("expected EPayPro gateway form")
 	}
 
 	field, ok := form["type"]
 	if !ok {
-		t.Fatal("expected epaypro TYPE field")
+		t.Fatal("expected EPayPro TYPE field")
 	}
 	if field.Type != "select" {
 		t.Fatalf("expected TYPE field to be a select, got %q", field.Type)

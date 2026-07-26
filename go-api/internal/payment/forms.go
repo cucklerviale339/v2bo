@@ -48,7 +48,7 @@ var gatewayForms = map[string]map[string]FormField{
 		"pid": {Label: "PID", Description: "", Type: "input"},
 		"key": {Label: "KEY", Description: "", Type: "input"},
 	},
-	"epaypro": {
+	"EPayPro": {
 		"url": {Label: "URL", Description: "", Type: "input"},
 		"pid": {Label: "PID", Description: "", Type: "input"},
 		"key": {Label: "KEY", Description: "", Type: "input"},
