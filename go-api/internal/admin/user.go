@@ -46,6 +46,17 @@ type UserListResult struct {
 	Total int64            `json:"total"`
 }
 
+type UserLookupRequest struct {
+	Keyword string
+	IDs     []int64
+	Limit   int64
+}
+
+type UserLookupRecord struct {
+	ID    int64  `json:"id"`
+	Email string `json:"email"`
+}
+
 type UserUpdateRequest struct {
 	ID     int64
 	Values map[string]string
@@ -161,6 +172,93 @@ func (s *DBService) ListUsers(ctx context.Context, req UserFetchRequest) (UserLi
 	}
 
 	return UserListResult{Data: data, Total: total}, nil
+}
+
+func (s *DBService) LookupUsers(ctx context.Context, req UserLookupRequest) ([]UserLookupRecord, error) {
+	if s.db == nil {
+		return nil, ErrUnavailable
+	}
+
+	keyword := strings.TrimSpace(req.Keyword)
+	if len(keyword) > 255 {
+		return nil, errors.New("邮箱搜索内容过长")
+	}
+
+	ids := make([]int64, 0, len(req.IDs))
+	seen := make(map[int64]struct{}, len(req.IDs))
+	for _, id := range req.IDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if len(ids) == 100 {
+			break
+		}
+	}
+	if keyword == "" && len(ids) == 0 {
+		return []UserLookupRecord{}, nil
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	if keyword == "" && int64(len(ids)) > limit {
+		limit = int64(len(ids))
+	}
+
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, len(ids)+2)
+	if len(ids) > 0 {
+		placeholders, idArgs := buildInt64Placeholders(1, ids)
+		clauses = append(clauses, "id IN ("+placeholders+")")
+		args = append(args, idArgs...)
+	}
+
+	keywordArg := 0
+	if keyword != "" {
+		args = append(args, "%"+keyword+"%")
+		keywordArg = len(args)
+		clauses = append(clauses, fmt.Sprintf("email ILIKE $%d", keywordArg))
+	}
+
+	orderBy := "id ASC"
+	if keywordArg > 0 {
+		args = append(args, keyword)
+		orderBy = fmt.Sprintf("CASE WHEN LOWER(email) = LOWER($%d) THEN 0 ELSE 1 END, id ASC", len(args))
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`SELECT id, email
+FROM v2_user
+WHERE %s
+ORDER BY %s
+LIMIT $%d`, strings.Join(clauses, " OR "), orderBy, len(args))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("lookup admin users: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]UserLookupRecord, 0)
+	for rows.Next() {
+		var item UserLookupRecord
+		if err := rows.Scan(&item.ID, &item.Email); err != nil {
+			return nil, fmt.Errorf("scan admin user lookup: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate admin user lookup: %w", err)
+	}
+	return result, nil
 }
 
 func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]any, error) {

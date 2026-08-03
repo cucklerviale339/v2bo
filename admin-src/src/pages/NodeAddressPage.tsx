@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
@@ -55,6 +55,122 @@ function validateUserIDs(_: any, value: any) {
 function validateUserIDRanges(_: any, value: any) {
   const invalid = splitList(value).find((item) => !/^[1-9]\d*\s*-\s*[1-9]\d*$/.test(item));
   return invalid ? Promise.reject(new Error('ID范围格式应为起始ID-结束ID')) : Promise.resolve();
+}
+
+type UserLookupOption = {
+  value: string;
+  label: string;
+  email?: string;
+};
+
+function mergeUserLookupOptions(current: UserLookupOption[], rows: any): UserLookupOption[] {
+  const next = new Map(current.map((item) => [item.value, item]));
+  (Array.isArray(rows) ? rows : []).forEach((row: any) => {
+    const id = String(row?.id || '').trim();
+    const email = String(row?.email || '').trim();
+    if (!/^[1-9]\d*$/.test(id) || !email) return;
+    next.set(id, { value: id, label: `${email}（ID: ${id}）`, email });
+  });
+  return Array.from(next.values());
+}
+
+function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (value: string[]) => void }) {
+  const selectedIDs = splitList(value);
+  const selectedKey = selectedIDs.join(',');
+  const [options, setOptions] = useState<UserLookupOption[]>([]);
+  const [searchResultIDs, setSearchResultIDs] = useState<string[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchAttempted, setSearchAttempted] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const searchSequence = useRef(0);
+
+  useEffect(() => {
+    if (!selectedKey) return;
+    let active = true;
+    apiGet('/user/lookup', { ids: selectedKey })
+      .then((res) => {
+        if (active) setOptions((current) => mergeUserLookupOptions(current, res?.data));
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [selectedKey]);
+
+  useEffect(() => () => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+  }, []);
+
+  const selectOptions = useMemo(() => {
+    const known = new Map(options.map((item) => [item.value, item]));
+    const next = new Map<string, UserLookupOption>();
+    [...searchResultIDs, ...selectedIDs].forEach((id) => {
+      if (next.has(id)) return;
+      next.set(id, known.get(id) || { value: id, label: `用户 ID: ${id}` });
+    });
+    return Array.from(next.values());
+  }, [options, searchResultIDs, selectedKey]);
+
+  const search = (raw: string) => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    const keyword = raw.trim();
+    const sequence = ++searchSequence.current;
+    setSearchFailed(false);
+    setSearchResultIDs([]);
+    if (!keyword) {
+      setSearching(false);
+      setSearchAttempted(false);
+      return;
+    }
+
+    setSearchAttempted(true);
+    searchTimer.current = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const params = /^[1-9]\d*$/.test(keyword) ? { ids: keyword } : { keyword, limit: 20 };
+        const res = await apiGet('/user/lookup', params);
+        if (sequence !== searchSequence.current) return;
+        const resultOptions = mergeUserLookupOptions([], res?.data);
+        setOptions((current) => mergeUserLookupOptions(current, res?.data));
+        setSearchResultIDs(resultOptions.map((item) => item.value));
+      } catch {
+        if (sequence === searchSequence.current) setSearchFailed(true);
+      } finally {
+        if (sequence === searchSequence.current) setSearching(false);
+      }
+    }, 350);
+  };
+
+  return <Select
+    mode="tags"
+    allowClear
+    showSearch
+    filterOption={false}
+    tokenSeparators={[',', '，']}
+    value={selectedIDs}
+    options={selectOptions}
+    loading={searching}
+    maxTagCount="responsive"
+    placeholder="输入邮箱搜索，或输入用户ID"
+    onSearch={search}
+    onChange={(values) => {
+      const items = splitList(values);
+      const optionByEmail = new Map(options.filter((item) => item.email).map((item) => [String(item.email).toLowerCase(), item.value]));
+      const ids: string[] = [];
+      let invalid = false;
+      items.forEach((item) => {
+        if (/^[1-9]\d*$/.test(item)) {
+          ids.push(item);
+          return;
+        }
+        const matchedID = optionByEmail.get(item.toLowerCase());
+        if (matchedID) ids.push(matchedID);
+        else invalid = true;
+      });
+      if (invalid) message.warning('邮箱需要从检索结果中选择');
+      onChange?.(Array.from(new Set(ids)));
+    }}
+    notFoundContent={searching ? <Spin size="small" /> : searchFailed ? '检索失败' : searchAttempted ? '未找到用户' : '输入邮箱或用户ID'}
+  />;
 }
 
 export default function NodeAddressPage() {
@@ -168,7 +284,7 @@ export default function NodeAddressPage() {
                 <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="下发地址" rules={[{ required: true, message: '请输入下发地址' }]}><Input placeholder="example.com" /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'sort']} label="排序"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></div>
-                <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="明确用户ID" rules={[{ validator: validateUserIDs }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1、25，回车确认" /></Form.Item></div>
+                <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="明确用户" rules={[{ validator: validateUserIDs }]}><UserEmailSelect /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_id_ranges']} label="用户ID范围" rules={[{ validator: validateUserIDRanges }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1-100，回车确认" /></Form.Item></div>
               </div>
             </div>)}

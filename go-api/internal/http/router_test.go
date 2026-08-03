@@ -905,11 +905,13 @@ type fakeAdminService struct {
 	lastBotToken            string
 	lastMailTestEmail       string
 	userList                admin.UserListResult
+	userLookup              []admin.UserLookupRecord
 	userInfoDetail          map[string]any
 	userGenerateCSV         string
 	userGenerateBatch       bool
 	userDumpCSV             string
 	lastUserFetch           admin.UserFetchRequest
+	lastUserLookup          admin.UserLookupRequest
 	lastUserInfoID          int64
 	lastUserUpdate          admin.UserUpdateRequest
 	lastUserGenerate        admin.UserGenerateRequest
@@ -1159,6 +1161,11 @@ func (f *fakeAdminService) UpdateManagedServerHost(_ context.Context, oldHost, n
 func (f *fakeAdminService) ListUsers(_ context.Context, req admin.UserFetchRequest) (admin.UserListResult, error) {
 	f.lastUserFetch = req
 	return f.userList, f.err
+}
+
+func (f *fakeAdminService) LookupUsers(_ context.Context, req admin.UserLookupRequest) ([]admin.UserLookupRecord, error) {
+	f.lastUserLookup = req
+	return f.userLookup, f.err
 }
 
 func (f *fakeAdminService) GetUserInfoByID(_ context.Context, id int64) (map[string]any, error) {
@@ -4502,6 +4509,53 @@ func TestRouterAdminUserFetchEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"demo@example.com"`) {
 		t.Fatalf("expected user payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminUserLookupEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		userLookup: []admin.UserLookupRecord{{ID: 9, Email: "demo@example.com"}},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/user/lookup?auth_data=jwt-admin&keyword=demo%40example.com&ids=9%2C10&limit=15", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if adminService.lastUserLookup.Keyword != "demo@example.com" || adminService.lastUserLookup.Limit != 15 {
+		t.Fatalf("unexpected lookup request: %#v", adminService.lastUserLookup)
+	}
+	if len(adminService.lastUserLookup.IDs) != 2 || adminService.lastUserLookup.IDs[0] != 9 || adminService.lastUserLookup.IDs[1] != 10 {
+		t.Fatalf("unexpected lookup ids: %#v", adminService.lastUserLookup.IDs)
+	}
+	if !strings.Contains(rec.Body.String(), `"email":"demo@example.com"`) {
+		t.Fatalf("expected lookup payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminUserLookupRejectsInvalidIDs(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/user/lookup?auth_data=jwt-admin&ids=9%2Cbad", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 

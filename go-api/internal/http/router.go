@@ -618,6 +618,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminUserFetch(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/user/lookup":
+			if handleAdminUserLookup(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/user/getUserInfoById":
 			if handleAdminUserGetInfo(w, r, state.session, state.admin) {
 				return
@@ -3498,6 +3502,71 @@ func handleAdminUserFetch(w http.ResponseWriter, r *http.Request, sessionService
 		"total": result.Total,
 	})
 	return true
+}
+
+func handleAdminUserLookup(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	ids, err := parseAdminUserLookupIDs(inputs["ids"])
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	limit := int64(20)
+	if raw := strings.TrimSpace(inputs["limit"]); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "数量限制格式不正确"})
+			return true
+		}
+		limit = parsed
+	}
+
+	result, err := adminService.LookupUsers(r.Context(), admin.UserLookupRequest{
+		Keyword: strings.TrimSpace(inputs["keyword"]),
+		IDs:     ids,
+		Limit:   limit,
+	})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
+func parseAdminUserLookupIDs(raw string) ([]int64, error) {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	ids := make([]int64, 0, len(parts))
+	seen := make(map[int64]struct{}, len(parts))
+	for _, part := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, errors.New("用户ID格式不正确")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if len(ids) > 100 {
+			return nil, errors.New("一次最多查询100个用户")
+		}
+	}
+	return ids, nil
 }
 
 func handleAdminUserGetInfo(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {

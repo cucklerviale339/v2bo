@@ -350,6 +350,7 @@ type Service interface {
 	GetUserTodayRank(ctx context.Context) ([]map[string]any, error)
 	GetStatUser(ctx context.Context, userID, current, pageSize int64) ([]map[string]any, int64, error)
 	ListUsers(ctx context.Context, req UserFetchRequest) (UserListResult, error)
+	LookupUsers(ctx context.Context, req UserLookupRequest) ([]UserLookupRecord, error)
 	GetUserInfoByID(ctx context.Context, id int64) (map[string]any, error)
 	UpdateUser(ctx context.Context, req UserUpdateRequest) (bool, error)
 	SetUserBanned(ctx context.Context, id int64, banned int64) (bool, error)
