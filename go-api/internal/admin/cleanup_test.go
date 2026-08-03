@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"forest/go-api/internal/config"
 
@@ -19,6 +20,7 @@ func TestCleanupRetentionSkipsWhenAlreadyRanToday(t *testing.T) {
 
 	service := &DBService{db: db, cfg: config.Config{}}
 
+	expectTicketAutoClose(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
 		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow("32503680000", int64(0)))
@@ -48,6 +50,7 @@ func TestCleanupRetentionDeletesConfiguredHistoryAndExpiredRows(t *testing.T) {
 		FailedJobsKeepDays:  15,
 	}}
 
+	expectTicketAutoClose(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
 		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}))
@@ -101,6 +104,7 @@ func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
 
 	service := &DBService{db: db, cfg: config.Config{}}
 
+	expectTicketAutoClose(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
 		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}))
@@ -122,4 +126,35 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
 	}
+}
+
+func TestAutoCloseRepliedTicketsUsesThreeDayCutoff(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	now := time.Unix(1_800_000_000, 0)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_ticket
+SET status = 1, updated_at = $1
+WHERE status = 0 AND reply_status = 1 AND updated_at <= $2`)).
+		WithArgs(now.Unix(), now.Add(-72*time.Hour).Unix()).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	if err := service.autoCloseRepliedTickets(context.Background(), now); err != nil {
+		t.Fatalf("auto-close replied tickets: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func expectTicketAutoClose(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_ticket
+SET status = 1, updated_at = $1
+WHERE status = 0 AND reply_status = 1 AND updated_at <= $2`)).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 }

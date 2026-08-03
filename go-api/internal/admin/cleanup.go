@@ -8,6 +8,7 @@ import (
 )
 
 const cleanupLastCheckKey = "MAINTENANCE_CLEANUP_LAST_AT_"
+const ticketAutoCloseAfter = 72 * time.Hour
 
 func (s *DBService) CleanupRetention(ctx context.Context) error {
 	if s.db == nil {
@@ -15,6 +16,11 @@ func (s *DBService) CleanupRetention(ctx context.Context) error {
 	}
 
 	now := time.Now()
+	nowUnix := now.Unix()
+	if err := s.autoCloseRepliedTickets(ctx, now); err != nil {
+		return err
+	}
+
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 
 	lastRun, err := s.getInt64KV(ctx, cleanupLastCheckKey)
@@ -26,7 +32,6 @@ func (s *DBService) CleanupRetention(ctx context.Context) error {
 	}
 
 	cfg := s.currentConfig()
-	nowUnix := now.Unix()
 
 	if cfg.MailLogKeepDays > 0 {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_mail_log WHERE created_at < $1`, nowUnix-(cfg.MailLogKeepDays*86400)); err != nil {
@@ -82,5 +87,16 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 		return fmt.Errorf("save cleanup last runtime: %w", err)
 	}
 
+	return nil
+}
+
+func (s *DBService) autoCloseRepliedTickets(ctx context.Context, now time.Time) error {
+	nowUnix := now.Unix()
+	cutoff := now.Add(-ticketAutoCloseAfter).Unix()
+	if _, err := s.db.ExecContext(ctx, `UPDATE v2_ticket
+SET status = 1, updated_at = $1
+WHERE status = 0 AND reply_status = 1 AND updated_at <= $2`, nowUnix, cutoff); err != nil {
+		return fmt.Errorf("auto-close replied tickets: %w", err)
+	}
 	return nil
 }

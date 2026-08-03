@@ -149,7 +149,7 @@ func (s *DBService) ReplyTicket(ctx context.Context, userID, id int64, message s
 		status  int64
 		subject string
 	)
-	if err := tx.QueryRowContext(ctx, `SELECT status, subject FROM v2_ticket WHERE id = $1 AND user_id = $2 LIMIT 1`, id, userID).Scan(&status, &subject); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status, subject FROM v2_ticket WHERE id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE`, id, userID).Scan(&status, &subject); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, errors.New("Ticket does not exist")
 		}

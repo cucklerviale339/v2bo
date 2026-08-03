@@ -142,6 +142,21 @@ func TestPostgresSQLFilesDoNotContainInlineMySQLIndexes(t *testing.T) {
 	}
 }
 
+func TestPostgresSQLFilesIncludeTicketAutoCloseIndex(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"install.pgsql.sql", "update.pgsql.sql"} {
+		path := filepath.Join(repoRootFromTestFile(t), "database", name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(raw), `"idx_v2_ticket_auto_close"`) {
+			t.Fatalf("%s should include the ticket auto-close index", path)
+		}
+	}
+}
+
 func TestInstallPostgresPlanTransferEnableUsesBigint(t *testing.T) {
 	t.Parallel()
 
