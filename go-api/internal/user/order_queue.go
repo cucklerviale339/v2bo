@@ -22,14 +22,18 @@ type TrafficResetSweepResult struct {
 }
 
 type trafficResetCandidate struct {
-	UserID                 int64
-	PlanID                 int64
-	U                      int64
-	D                      int64
-	ExpiredAt              int64
-	UpdatedAt              int64
-	SubscriptionStartedAt  int64
-	PlanResetTrafficMethod sql.NullInt64
+	UserID                  int64
+	PlanID                  int64
+	U                       int64
+	D                       int64
+	ExpiredAt               int64
+	UpdatedAt               int64
+	ResetAnchorAt           int64
+	StoredResetAnchorAt     int64
+	StoredResetAnchorPlanID int64
+	SubscriptionStartedAt   int64
+	LastTrafficResetAt      int64
+	PlanResetTrafficMethod  sql.NullInt64
 }
 
 type trafficResetCycle struct {
@@ -129,10 +133,11 @@ func (s *DBService) ResetAllTrafficUsage(ctx context.Context) (TrafficResetSweep
 		return TrafficResetSweepResult{}, ErrUnavailable
 	}
 
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
 	result, err := s.db.ExecContext(ctx, `UPDATE v2_user
-SET u = 0, d = 0, updated_at = $1
-WHERE plan_id IS NOT NULL AND expired_at > $1`, now)
+SET u = 0, d = 0, traffic_reset_at = $2, updated_at = $1
+WHERE plan_id IS NOT NULL AND expired_at > $1`, now, nowTime.UnixMilli())
 	if err != nil {
 		return TrafficResetSweepResult{}, fmt.Errorf("reset active user traffic usage: %w", err)
 	}
@@ -176,15 +181,37 @@ func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool, forc
 
 func (s *DBService) runTrafficResetSweepAt(ctx context.Context, now time.Time, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {
 	query := `SELECT u.id, u.plan_id, u.u, u.d, COALESCE(u.expired_at, 0), u.updated_at,
-COALESCE((
-  SELECT MAX(o.paid_at)
+COALESCE(NULLIF(CASE WHEN u.traffic_reset_anchor_plan_id = u.plan_id THEN u.traffic_reset_anchor_at ELSE 0 END, 0), (
+  SELECT MAX(COALESCE(o.paid_at, o.created_at))
   FROM v2_order o
   WHERE o.user_id = u.id
     AND o.status = 3
     AND o.plan_id = u.plan_id
-    AND o.period NOT IN ('reset_price', 'deposit')
-    AND o.paid_at IS NOT NULL
-), u.created_at, 0), p.reset_traffic_method
+    AND o.type IN (1, 3)
+    AND o.period NOT IN ('onetime_price', 'reset_price', 'deposit')
+), (
+  SELECT MIN(COALESCE(o.paid_at, o.created_at))
+  FROM v2_order o
+  WHERE o.user_id = u.id
+    AND o.status = 3
+    AND o.plan_id = u.plan_id
+    AND o.period NOT IN ('onetime_price', 'reset_price', 'deposit')
+), NULLIF(u.expired_at, 0), u.created_at, 0), COALESCE(u.traffic_reset_anchor_at, 0), COALESCE(u.traffic_reset_anchor_plan_id, 0), COALESCE((
+  SELECT MAX(COALESCE(o.paid_at, o.created_at))
+  FROM v2_order o
+  WHERE o.user_id = u.id
+    AND o.status = 3
+    AND o.plan_id = u.plan_id
+    AND o.type IN (1, 3)
+    AND o.period NOT IN ('onetime_price', 'reset_price', 'deposit')
+), (
+  SELECT MIN(COALESCE(o.paid_at, o.created_at))
+  FROM v2_order o
+  WHERE o.user_id = u.id
+    AND o.status = 3
+    AND o.plan_id = u.plan_id
+    AND o.period NOT IN ('onetime_price', 'reset_price', 'deposit')
+), u.created_at, 0), COALESCE(u.traffic_reset_at, 0), p.reset_traffic_method
 FROM v2_user u
 JOIN v2_plan p ON p.id = u.plan_id
 WHERE u.plan_id IS NOT NULL AND u.expired_at > $1
@@ -215,7 +242,11 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 			&item.D,
 			&item.ExpiredAt,
 			&item.UpdatedAt,
+			&item.ResetAnchorAt,
+			&item.StoredResetAnchorAt,
+			&item.StoredResetAnchorPlanID,
 			&item.SubscriptionStartedAt,
+			&item.LastTrafficResetAt,
 			&item.PlanResetTrafficMethod,
 		); err != nil {
 			return TrafficResetSweepResult{}, fmt.Errorf("scan traffic reset candidate: %w", err)
@@ -241,11 +272,21 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 }
 
 func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time, forceBackfill bool) (trafficResetApplyResult, error) {
+	resetAnchorAt := item.ResetAnchorAt
+	if resetAnchorAt <= 0 {
+		resetAnchorAt = item.UpdatedAt
+	}
+	if resetAnchorAt > 0 && (item.StoredResetAnchorAt != resetAnchorAt || item.StoredResetAnchorPlanID != item.PlanID) {
+		if err := s.saveUserTrafficResetAnchor(ctx, item.UserID, resetAnchorAt, item.PlanID); err != nil {
+			return trafficResetApplySkipped, err
+		}
+	}
+
 	method := s.runtimeValues().ResetTrafficMethod
 	if item.PlanResetTrafficMethod.Valid {
 		method = item.PlanResetTrafficMethod.Int64
 	}
-	cycle, ok := trafficResetCurrentCycle(item.PlanID, method, item.ExpiredAt, now)
+	cycle, ok := trafficResetCurrentCycle(item.PlanID, method, resetAnchorAt, item.ExpiredAt, now)
 	if !ok {
 		return trafficResetApplySkipped, nil
 	}
@@ -259,16 +300,25 @@ func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item traffic
 		return trafficResetApplySkipped, nil
 	}
 
-	applied := trafficResetApplyMarkedOnly
 	subscriptionStartedAt := item.SubscriptionStartedAt
+	if item.LastTrafficResetAt > 0 {
+		lastResetAt := item.LastTrafficResetAt / 1000
+		if lastResetAt > subscriptionStartedAt {
+			subscriptionStartedAt = lastResetAt
+		}
+	}
 	if subscriptionStartedAt <= 0 {
 		subscriptionStartedAt = item.UpdatedAt
 	}
-	if (forceBackfill || subscriptionStartedAt < cycle.StartAt) && (item.U > 0 || item.D > 0) {
-		if err := s.resetUserTrafficUsage(ctx, item.UserID); err != nil {
+
+	applied := trafficResetApplyMarkedOnly
+	if forceBackfill || subscriptionStartedAt < cycle.StartAt {
+		if err := s.resetUserTrafficUsage(ctx, item.UserID, resetAnchorAt, item.PlanID, now); err != nil {
 			return trafficResetApplySkipped, err
 		}
-		applied = trafficResetApplyReset
+		if item.U > 0 || item.D > 0 {
+			applied = trafficResetApplyReset
+		}
 	}
 	if err := s.kvSet(ctx, markerKey, cycle.Marker, trafficResetMarkerTTLSeconds); err != nil {
 		return trafficResetApplySkipped, fmt.Errorf("save traffic reset marker for user %d: %w", item.UserID, err)
@@ -276,9 +326,18 @@ func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item traffic
 	return applied, nil
 }
 
-func (s *DBService) resetUserTrafficUsage(ctx context.Context, userID int64) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE v2_user SET u = 0, d = 0, updated_at = $2 WHERE id = $1`, userID, time.Now().Unix()); err != nil {
+func (s *DBService) resetUserTrafficUsage(ctx context.Context, userID, resetAnchorAt, planID int64, now time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE v2_user
+SET u = 0, d = 0, traffic_reset_anchor_at = $2, traffic_reset_anchor_plan_id = $3, traffic_reset_at = $4, updated_at = $5
+WHERE id = $1`, userID, resetAnchorAt, planID, now.UnixMilli(), now.Unix()); err != nil {
 		return fmt.Errorf("reset user traffic usage: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) saveUserTrafficResetAnchor(ctx context.Context, userID, resetAnchorAt, planID int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE v2_user SET traffic_reset_anchor_at = $2, traffic_reset_anchor_plan_id = $3 WHERE id = $1`, userID, resetAnchorAt, planID); err != nil {
+		return fmt.Errorf("save user traffic reset anchor: %w", err)
 	}
 	return nil
 }
@@ -287,8 +346,11 @@ func trafficResetCycleKVKey(userID int64) string {
 	return fmt.Sprintf("TRAFFIC_RESET_CYCLE_USER_%d", userID)
 }
 
-func trafficResetCurrentCycle(planID, method, expiredAt int64, now time.Time) (trafficResetCycle, bool) {
-	if expiredAt <= 0 && method != 0 && method != 3 {
+func trafficResetCurrentCycle(planID, method, resetAnchorAt, expiredAt int64, now time.Time) (trafficResetCycle, bool) {
+	if method == 1 && resetAnchorAt <= 0 {
+		return trafficResetCycle{}, false
+	}
+	if method == 4 && expiredAt <= 0 {
 		return trafficResetCycle{}, false
 	}
 
@@ -297,7 +359,7 @@ func trafficResetCurrentCycle(planID, method, expiredAt int64, now time.Time) (t
 	case 0:
 		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	case 1:
-		start = trafficResetMonthlyAnchor(expiredAt, now)
+		start = trafficResetMonthlyAnchor(resetAnchorAt, now)
 	case 2:
 		return trafficResetCycle{}, false
 	case 3:
@@ -314,11 +376,11 @@ func trafficResetCurrentCycle(planID, method, expiredAt int64, now time.Time) (t
 	}, true
 }
 
-func trafficResetMonthlyAnchor(expiredAt int64, now time.Time) time.Time {
-	target := time.Unix(expiredAt, 0).In(now.Location())
+func trafficResetMonthlyAnchor(resetAnchorAt int64, now time.Time) time.Time {
+	target := time.Unix(resetAnchorAt, 0).In(now.Location())
 	candidate := trafficResetClippedDate(now.Year(), now.Month(), target.Day(), now.Location())
 	if candidate.After(now) {
-		prev := now.AddDate(0, -1, 0)
+		prev := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -1, 0)
 		return trafficResetClippedDate(prev.Year(), prev.Month(), target.Day(), now.Location())
 	}
 	return candidate

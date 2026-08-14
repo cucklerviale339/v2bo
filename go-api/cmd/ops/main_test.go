@@ -157,6 +157,32 @@ func TestPostgresSQLFilesIncludeTicketAutoCloseIndex(t *testing.T) {
 	}
 }
 
+func TestPostgresSQLFilesIncludeTrafficResetState(t *testing.T) {
+	t.Parallel()
+
+	installPath := filepath.Join(repoRootFromTestFile(t), "database", "install.pgsql.sql")
+	installRaw, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", installPath, err)
+	}
+	for _, column := range []string{`"traffic_reset_anchor_at" BIGINT NOT NULL DEFAULT '0'`, `"traffic_reset_anchor_plan_id" INTEGER NOT NULL DEFAULT '0'`, `"traffic_reset_at" BIGINT NOT NULL DEFAULT '0'`} {
+		if !strings.Contains(string(installRaw), column) {
+			t.Fatalf("%s should include %s", installPath, column)
+		}
+	}
+
+	updatePath := filepath.Join(repoRootFromTestFile(t), "database", "update.pgsql.sql")
+	updateRaw, err := os.ReadFile(updatePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", updatePath, err)
+	}
+	for _, column := range []string{`"traffic_reset_anchor_at" BIGINT`, `"traffic_reset_anchor_plan_id" INTEGER`, `"traffic_reset_at" BIGINT`} {
+		if !strings.Contains(string(updateRaw), column) {
+			t.Fatalf("%s should migrate %s", updatePath, column)
+		}
+	}
+}
+
 func TestInstallPostgresPlanTransferEnableUsesBigint(t *testing.T) {
 	t.Parallel()
 

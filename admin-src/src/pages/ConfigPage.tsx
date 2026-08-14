@@ -8,7 +8,7 @@ const groups = [
 ];
 
 const resetOptions = [
-  { label: '每月1号', value: 0 }, { label: '按月重置', value: 1 }, { label: '不重置', value: 2 },
+  { label: '每月1号', value: 0 }, { label: '按订单日每月重置', value: 1 }, { label: '不重置', value: 2 },
   { label: '每年1月1日', value: 3 }, { label: '按年重置', value: 4 }
 ];
 

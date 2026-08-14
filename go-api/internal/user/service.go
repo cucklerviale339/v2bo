@@ -231,10 +231,11 @@ type TrafficUsage struct {
 }
 
 type TrafficReport struct {
-	ServerID   int64
-	ServerType string
-	ServerRate float64
-	Traffic    map[int64]TrafficUsage
+	ServerID    int64
+	ServerType  string
+	ServerRate  float64
+	CollectedAt int64
+	Traffic     map[int64]TrafficUsage
 }
 
 type DBService struct {
@@ -458,19 +459,23 @@ func (s *DBService) Subscribe(ctx context.Context, userID int64) (Subscribe, err
 	}
 
 	var (
-		subscribe   Subscribe
-		planID      sql.NullInt64
-		expiredAt   sql.NullInt64
-		deviceLimit sql.NullInt64
+		subscribe     Subscribe
+		planID        sql.NullInt64
+		expiredAt     sql.NullInt64
+		resetAnchorAt sql.NullInt64
+		deviceLimit   sql.NullInt64
 	)
 
-	err := s.db.QueryRowContext(ctx, `SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid
+	err := s.db.QueryRowContext(ctx, `SELECT plan_id, token, expired_at,
+CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END AS traffic_reset_anchor_at,
+u, d, transfer_enable, device_limit, email, uuid
 FROM v2_user
 WHERE id = $1
 LIMIT 1`, userID).Scan(
 		&planID,
 		&subscribe.Token,
 		&expiredAt,
+		&resetAnchorAt,
 		&subscribe.U,
 		&subscribe.D,
 		&subscribe.TransferEnable,
@@ -516,7 +521,7 @@ LIMIT 1`, userID).Scan(
 		normalizePlanTransferEnableForFrontend(plan)
 		subscribe.Plan = plan
 
-		resetDay := s.calculateResetDay(plan, subscribe.ExpiredAt)
+		resetDay := s.calculateResetDay(plan, subscribe.ExpiredAt, nullInt64Ptr(resetAnchorAt))
 		subscribe.ResetDay = resetDay
 	}
 
@@ -968,7 +973,7 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 	return nil
 }
 
-func (s *DBService) calculateResetDay(plan map[string]any, expiredAt *int64) *int64 {
+func (s *DBService) calculateResetDay(plan map[string]any, expiredAt, resetAnchorAt *int64) *int64 {
 	if expiredAt == nil || *expiredAt <= time.Now().Unix() {
 		return nil
 	}
@@ -986,7 +991,11 @@ func (s *DBService) calculateResetDay(plan map[string]any, expiredAt *int64) *in
 	case 0:
 		result = calcResetDayByMonthFirstDay()
 	case 1:
-		result = calcResetDayByExpireDay(*expiredAt)
+		anchorAt := *expiredAt
+		if resetAnchorAt != nil && *resetAnchorAt > 0 {
+			anchorAt = *resetAnchorAt
+		}
+		result = calcResetDayByMonthlyAnchor(anchorAt)
 	case 3:
 		result = calcResetDayByYearFirstDay()
 	case 4:
@@ -1261,8 +1270,8 @@ func calcResetDayByMonthFirstDay() int64 {
 	return lastDay - today
 }
 
-func calcResetDayByExpireDay(expiredAt int64) int64 {
-	day, _ := strconv.ParseInt(time.Unix(expiredAt, 0).Format("02"), 10, 64)
+func calcResetDayByMonthlyAnchor(anchorAt int64) int64 {
+	day, _ := strconv.ParseInt(time.Unix(anchorAt, 0).Format("02"), 10, 64)
 	today, _ := strconv.ParseInt(time.Now().Format("02"), 10, 64)
 	lastDay, _ := strconv.ParseInt(time.Date(time.Now().Year(), time.Now().Month()+1, 0, 0, 0, 0, 0, time.Now().Location()).Format("02"), 10, 64)
 	if day >= today && day >= lastDay {

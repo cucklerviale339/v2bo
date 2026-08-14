@@ -90,9 +90,9 @@ func TestSubscribeFallsBackToLatestPaidPlanWhenUserPlanIDMissing(t *testing.T) {
 	defer db.Close()
 
 	userRows := sqlmock.NewRows([]string{
-		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
-	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(214748364800), nil, "life@example.com", "uuid-1")
-	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+		"plan_id", "token", "expired_at", "traffic_reset_anchor_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(0), int64(214748364800), nil, "life@example.com", "uuid-1")
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at,\s+CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END AS traffic_reset_anchor_at,\s+u, d, transfer_enable, device_limit, email, uuid`).
 		WithArgs(int64(8)).
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
@@ -146,10 +146,10 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 
 	service := NewDBService(cfg, db).WithRuntimeConfig(runtimeState)
 	userRows := sqlmock.NewRows([]string{
-		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
-	}).AddRow(nil, "token-1", nil, int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
+		"plan_id", "token", "expired_at", "traffic_reset_anchor_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", nil, int64(0), int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
 
-	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at,\s+CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END AS traffic_reset_anchor_at,\s+u, d, transfer_enable, device_limit, email, uuid`).
 		WithArgs(int64(1)).
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
@@ -173,10 +173,10 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	runtimeState.Reload()
 
 	userRows = sqlmock.NewRows([]string{
-		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
-	}).AddRow(nil, "token-1", nil, int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
+		"plan_id", "token", "expired_at", "traffic_reset_anchor_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", nil, int64(0), int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
 
-	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at,\s+CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END AS traffic_reset_anchor_at,\s+u, d, transfer_enable, device_limit, email, uuid`).
 		WithArgs(int64(1)).
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
@@ -216,10 +216,10 @@ func TestSubscribeTreatsZeroExpiredAtAsUnlimited(t *testing.T) {
 
 	service := NewDBService(cfg, db).WithRuntimeConfig(runtimeState)
 	userRows := sqlmock.NewRows([]string{
-		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
-	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
+		"plan_id", "token", "expired_at", "traffic_reset_anchor_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
 
-	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at,\s+CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END AS traffic_reset_anchor_at,\s+u, d, transfer_enable, device_limit, email, uuid`).
 		WithArgs(int64(2)).
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).

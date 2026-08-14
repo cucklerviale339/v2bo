@@ -116,7 +116,11 @@ func (s *DBService) NewPeriod(ctx context.Context, userID int64) (bool, error) {
 		return false, ErrPlanNotFound
 	}
 
-	resetDay := s.calculateResetDayForPlan(plan, userRow.ExpiredAt)
+	resetAnchorAt, err := s.loadUserTrafficResetAnchorTx(ctx, tx, userRow.ID)
+	if err != nil {
+		return false, errors.New("Save failed")
+	}
+	resetDay := s.calculateResetDayForPlan(plan, userRow.ExpiredAt, resetAnchorAt)
 	if resetDay == nil {
 		return false, errors.New("You do not allow to renew the subscription")
 	}
@@ -143,7 +147,8 @@ func (s *DBService) NewPeriod(ctx context.Context, userID int64) (bool, error) {
 		day = period
 	}
 
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
 	if !userRow.ExpiredAt.Valid || (period+1)*86400 >= userRow.ExpiredAt.Int64-now {
 		return false, errors.New("You do not have enough time to renew your subscription")
 	}
@@ -152,6 +157,9 @@ func (s *DBService) NewPeriod(ctx context.Context, userID int64) (bool, error) {
 	userRow.U = 0
 	userRow.D = 0
 	if err := s.updateUserSubscriptionTx(ctx, tx, userRow); err != nil {
+		return false, errors.New("Save failed")
+	}
+	if err := s.updateUserTrafficResetStateTx(ctx, tx, userRow.ID, sql.NullInt64{}, 0, true, nowTime); err != nil {
 		return false, errors.New("Save failed")
 	}
 	if err := tx.Commit(); err != nil {
@@ -189,7 +197,8 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 		return nil, errors.New("The gift card does not exist")
 	}
 
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
 	if giftcard.StartedAt > 0 && now < giftcard.StartedAt {
 		return nil, errors.New("The gift card is not yet valid")
 	}
@@ -207,6 +216,8 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 	usedUserIDs = append(usedUserIDs, userRow.ID)
 
 	giftcardValue := nullableInt64(giftcard.Value)
+	resetAnchorAt := sql.NullInt64{}
+	resetTraffic := false
 	switch giftcard.Type {
 	case 1:
 		userRow.Balance += giftcardValue
@@ -224,6 +235,7 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 	case 4:
 		userRow.U = 0
 		userRow.D = 0
+		resetTraffic = true
 	case 5:
 		if userRow.PlanID.Valid && (!userRow.ExpiredAt.Valid || userRow.ExpiredAt.Int64 >= now) {
 			return nil, errors.New("Not suitable gift card type")
@@ -244,10 +256,13 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 		userRow.DeviceLimit = plan.DeviceLimit
 		userRow.U = 0
 		userRow.D = 0
+		resetTraffic = true
 		if giftcardValue == 0 {
 			userRow.ExpiredAt = sql.NullInt64{}
+			resetAnchorAt = sql.NullInt64{Int64: 0, Valid: true}
 		} else {
 			userRow.ExpiredAt = sql.NullInt64{Int64: now + giftcardValue*86400, Valid: true}
+			resetAnchorAt = sql.NullInt64{Int64: now, Valid: true}
 		}
 	default:
 		return nil, errors.New("Unknown gift card type")
@@ -258,6 +273,13 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 	}
 
 	if err := s.updateUserSubscriptionTx(ctx, tx, userRow); err != nil {
+		return nil, errors.New("Save failed")
+	}
+	anchorPlanID := int64(0)
+	if userRow.PlanID.Valid {
+		anchorPlanID = userRow.PlanID.Int64
+	}
+	if err := s.updateUserTrafficResetStateTx(ctx, tx, userRow.ID, resetAnchorAt, anchorPlanID, resetTraffic, nowTime); err != nil {
 		return nil, errors.New("Save failed")
 	}
 	if err := s.updateGiftcardTx(ctx, tx, giftcard, usedUserIDs); err != nil {
@@ -273,7 +295,7 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 	}, nil
 }
 
-func (s *DBService) calculateResetDayForPlan(plan planRecord, expiredAt sql.NullInt64) *int64 {
+func (s *DBService) calculateResetDayForPlan(plan planRecord, expiredAt, resetAnchorAt sql.NullInt64) *int64 {
 	if !expiredAt.Valid || expiredAt.Int64 <= time.Now().Unix() {
 		return nil
 	}
@@ -291,7 +313,11 @@ func (s *DBService) calculateResetDayForPlan(plan planRecord, expiredAt sql.Null
 	case 0:
 		day = calcResetDayByMonthFirstDay()
 	case 1:
-		day = calcResetDayByExpireDay(expiredAt.Int64)
+		anchorAt := expiredAt.Int64
+		if resetAnchorAt.Valid && resetAnchorAt.Int64 > 0 {
+			anchorAt = resetAnchorAt.Int64
+		}
+		day = calcResetDayByMonthlyAnchor(anchorAt)
 	case 3:
 		day = calcResetDayByYearFirstDay()
 	case 4:
@@ -300,6 +326,14 @@ func (s *DBService) calculateResetDayForPlan(plan planRecord, expiredAt sql.Null
 		return nil
 	}
 	return &day
+}
+
+func (s *DBService) loadUserTrafficResetAnchorTx(ctx context.Context, tx *sql.Tx, userID int64) (sql.NullInt64, error) {
+	var anchorAt sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT NULLIF(CASE WHEN traffic_reset_anchor_plan_id = plan_id THEN traffic_reset_anchor_at ELSE 0 END, 0) FROM v2_user WHERE id = $1`, userID).Scan(&anchorAt); err != nil {
+		return sql.NullInt64{}, fmt.Errorf("query user traffic reset anchor: %w", err)
+	}
+	return anchorAt, nil
 }
 
 func (s *DBService) calculateResetPeriodForPlan(plan planRecord, expiredAt sql.NullInt64) *int64 {

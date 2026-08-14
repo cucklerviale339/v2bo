@@ -15,6 +15,9 @@ func (s *DBService) QueueTrafficReport(ctx context.Context, report TrafficReport
 	}
 
 	report.ServerType = strings.ToLower(strings.TrimSpace(report.ServerType))
+	if report.CollectedAt <= 0 {
+		report.CollectedAt = time.Now().UnixMilli()
+	}
 	if report.ServerID <= 0 || report.ServerType == "" || len(report.Traffic) == 0 {
 		return nil
 	}
@@ -48,6 +51,9 @@ func (s *DBService) applyTrafficFetch(ctx context.Context, report TrafficReport)
 	if s == nil || s.db == nil {
 		return ErrUnavailable
 	}
+	if report.CollectedAt <= 0 {
+		report.CollectedAt = time.Now().UnixMilli()
+	}
 
 	type delta struct {
 		userID int64
@@ -68,7 +74,7 @@ func (s *DBService) applyTrafficFetch(ctx context.Context, report TrafficReport)
 		return nil
 	}
 
-	args := make([]any, 0, len(changes)*3+1)
+	args := make([]any, 0, len(changes)*3+2)
 	values := make([]string, 0, len(changes))
 	for idx, item := range changes {
 		base := idx*3 + 1
@@ -76,15 +82,18 @@ func (s *DBService) applyTrafficFetch(ctx context.Context, report TrafficReport)
 		args = append(args, item.userID, item.u, item.d)
 	}
 	now := time.Now().Unix()
-	args = append(args, now)
+	args = append(args, report.CollectedAt, now)
+	collectedAtPlaceholder := strconv.Itoa(len(args) - 1)
+	nowPlaceholder := strconv.Itoa(len(args))
 
 	_, err := s.db.ExecContext(ctx, `UPDATE v2_user AS target
 SET u = target.u + delta.u,
 	d = target.d + delta.d,
-	t = $`+strconv.Itoa(len(args))+`,
-	updated_at = $`+strconv.Itoa(len(args))+`
+	t = $`+nowPlaceholder+`,
+	updated_at = $`+nowPlaceholder+`
 FROM (VALUES `+strings.Join(values, ",")+`) AS delta(id, u, d)
-WHERE target.id = delta.id`, args...)
+WHERE target.id = delta.id
+  AND COALESCE(target.traffic_reset_at, 0) < $`+collectedAtPlaceholder, args...)
 	if err != nil {
 		return fmt.Errorf("apply traffic fetch: %w", err)
 	}

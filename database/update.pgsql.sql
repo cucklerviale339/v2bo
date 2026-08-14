@@ -254,3 +254,29 @@ CREATE TABLE IF NOT EXISTS "v2_sensitive_access_log" (
 CREATE INDEX IF NOT EXISTS "idx_v2_sensitive_access_log_last_at" ON "v2_sensitive_access_log" ("last_at");
 CREATE INDEX IF NOT EXISTS "idx_v2_sensitive_access_log_user_id" ON "v2_sensitive_access_log" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_v2_sensitive_access_log_domain" ON "v2_sensitive_access_log" ("domain");
+
+ALTER TABLE "v2_user" ADD COLUMN IF NOT EXISTS "traffic_reset_anchor_at" BIGINT NOT NULL DEFAULT '0';
+ALTER TABLE "v2_user" ADD COLUMN IF NOT EXISTS "traffic_reset_anchor_plan_id" INTEGER NOT NULL DEFAULT '0';
+ALTER TABLE "v2_user" ADD COLUMN IF NOT EXISTS "traffic_reset_at" BIGINT NOT NULL DEFAULT '0';
+
+UPDATE "v2_user" AS u
+SET "traffic_reset_anchor_at" = COALESCE((
+  SELECT MAX(COALESCE(o."paid_at", o."created_at"))
+  FROM "v2_order" o
+  WHERE o."user_id" = u."id"
+    AND o."status" = 3
+    AND o."plan_id" = u."plan_id"
+    AND o."type" IN (1, 3)
+    AND o."period" NOT IN ('onetime_price', 'reset_price', 'deposit')
+), (
+  SELECT MIN(COALESCE(o."paid_at", o."created_at"))
+  FROM "v2_order" o
+  WHERE o."user_id" = u."id"
+    AND o."status" = 3
+    AND o."plan_id" = u."plan_id"
+    AND o."period" NOT IN ('onetime_price', 'reset_price', 'deposit')
+), NULLIF(u."expired_at", 0), u."created_at", 0),
+    "traffic_reset_anchor_plan_id" = u."plan_id"
+WHERE u."plan_id" IS NOT NULL
+  AND u."expired_at" > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT
+  AND (u."traffic_reset_anchor_at" = 0 OR u."traffic_reset_anchor_plan_id" <> u."plan_id");

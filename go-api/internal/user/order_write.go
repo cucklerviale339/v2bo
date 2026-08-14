@@ -779,7 +779,8 @@ func (s *DBService) setInviteTx(ctx context.Context, tx *sql.Tx, userRow userRec
 }
 
 func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRecord) error {
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
 	order.CallbackNo = sql.NullString{String: order.TradeNo, Valid: true}
 	order.PaidAt = sql.NullInt64{Int64: now, Valid: true}
 
@@ -805,6 +806,7 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	if !ok {
 		return ErrPlanNotFound
 	}
+	previousExpiredAt := userRow.ExpiredAt
 
 	if order.RefundAmount.Valid && order.RefundAmount.Int64 > 0 {
 		userRow.Balance += order.RefundAmount.Int64
@@ -828,6 +830,9 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 		userRow.SpeedLimit = sql.NullInt64{}
 	}
 	if err := s.updateUserSubscriptionTx(ctx, tx, userRow); err != nil {
+		return err
+	}
+	if err := s.syncOrderTrafficResetStateTx(ctx, tx, userRow.ID, *order, previousExpiredAt, nowTime); err != nil {
 		return err
 	}
 	if order.InviteCampaignID.Valid {
@@ -1384,6 +1389,53 @@ WHERE id = $1`,
 	)
 	if err != nil {
 		return fmt.Errorf("update user subscription: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) syncOrderTrafficResetStateTx(ctx context.Context, tx *sql.Tx, userID int64, order orderRecord, previousExpiredAt sql.NullInt64, now time.Time) error {
+	anchorAt := sql.NullInt64{}
+	switch order.Period {
+	case "onetime_price":
+		anchorAt = sql.NullInt64{Int64: 0, Valid: true}
+	case "reset_price":
+	default:
+		if order.Type == 1 || order.Type == 3 {
+			anchorAt = sql.NullInt64{Int64: now.Unix(), Valid: true}
+		}
+	}
+
+	resetTraffic := orderResetsTraffic(order, previousExpiredAt, now)
+	return s.updateUserTrafficResetStateTx(ctx, tx, userID, anchorAt, order.PlanID, resetTraffic, now)
+}
+
+func orderResetsTraffic(order orderRecord, previousExpiredAt sql.NullInt64, now time.Time) bool {
+	if order.Period == "onetime_price" || order.Period == "reset_price" {
+		return true
+	}
+	if !previousExpiredAt.Valid || order.Type == 1 {
+		return true
+	}
+	if order.Type != 2 {
+		return false
+	}
+
+	expired := time.Unix(previousExpiredAt.Int64, 0).In(now.Location())
+	return expired.Month() == now.Month() && expired.Day() == now.Day()
+}
+
+func (s *DBService) updateUserTrafficResetStateTx(ctx context.Context, tx *sql.Tx, userID int64, anchorAt sql.NullInt64, anchorPlanID int64, resetTraffic bool, now time.Time) error {
+	if !anchorAt.Valid && !resetTraffic {
+		return nil
+	}
+
+	_, err := tx.ExecContext(ctx, `UPDATE v2_user SET
+traffic_reset_anchor_at = CASE WHEN $2 THEN $3 ELSE traffic_reset_anchor_at END,
+traffic_reset_anchor_plan_id = CASE WHEN $2 THEN $4 ELSE traffic_reset_anchor_plan_id END,
+traffic_reset_at = CASE WHEN $5 THEN $6 ELSE traffic_reset_at END
+WHERE id = $1`, userID, anchorAt.Valid, nullableInt64(anchorAt), anchorPlanID, resetTraffic, now.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("update user traffic reset state: %w", err)
 	}
 	return nil
 }
