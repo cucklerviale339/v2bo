@@ -120,6 +120,8 @@ name varchar(255) NOT NULL DEFAULT '',
 host varchar(255) NOT NULL,
 match_user_ids text NOT NULL DEFAULT '[]',
 match_user_id_ranges text NOT NULL DEFAULT '[]',
+extra_nodes text NOT NULL DEFAULT '[]',
+extra_nodes_position varchar(16) NOT NULL DEFAULT 'after',
 enabled SMALLINT NOT NULL DEFAULT 1,
 sort INTEGER DEFAULT NULL,
 created_at INTEGER NOT NULL,
@@ -150,6 +152,9 @@ CONSTRAINT uniq_v2_node_address_binding UNIQUE (server_type, server_id)
 	if err := ensureNodeAddressRuleIDRangesColumn(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureNodeAddressRuleExtraNodeColumns(ctx, db); err != nil {
+		return err
+	}
 
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_address_rule_group ON v2_node_address_rule(group_id)`,
@@ -161,6 +166,28 @@ CONSTRAINT uniq_v2_node_address_binding UNIQUE (server_type, server_id)
 		}
 	}
 
+	return nil
+}
+
+func ensureNodeAddressRuleExtraNodeColumns(ctx context.Context, db *sql.DB) error {
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "extra_nodes", definition: `text NOT NULL DEFAULT '[]'`},
+		{name: "extra_nodes_position", definition: `varchar(16) NOT NULL DEFAULT 'after'`},
+	} {
+		exists, err := columnExists(ctx, db, "v2_node_address_rule", column.name)
+		if err != nil {
+			return fmt.Errorf("check node address rule %s column: %w", column.name, err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE v2_node_address_rule ADD COLUMN %s %s`, column.name, column.definition)); err != nil {
+			return fmt.Errorf("add node address rule %s column: %w", column.name, err)
+		}
+	}
 	return nil
 }
 

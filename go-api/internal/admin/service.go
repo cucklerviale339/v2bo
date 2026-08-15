@@ -217,16 +217,18 @@ type ServerRouteSaveRequest struct {
 }
 
 type NodeAddressRuleRecord struct {
-	ID                int64    `json:"id"`
-	GroupID           int64    `json:"group_id"`
-	Name              string   `json:"name"`
-	Host              string   `json:"host"`
-	MatchUserIDs      []string `json:"match_user_ids,omitempty"`
-	MatchUserIDRanges []string `json:"match_user_id_ranges,omitempty"`
-	Enabled           int64    `json:"enabled"`
-	Sort              *int64   `json:"sort,omitempty"`
-	CreatedAt         int64    `json:"created_at,omitempty"`
-	UpdatedAt         int64    `json:"updated_at,omitempty"`
+	ID                 int64    `json:"id"`
+	GroupID            int64    `json:"group_id"`
+	Name               string   `json:"name"`
+	Host               string   `json:"host"`
+	MatchUserIDs       []string `json:"match_user_ids,omitempty"`
+	MatchUserIDRanges  []string `json:"match_user_id_ranges,omitempty"`
+	ExtraNodes         []string `json:"extra_nodes,omitempty"`
+	ExtraNodesPosition string   `json:"extra_nodes_position"`
+	Enabled            int64    `json:"enabled"`
+	Sort               *int64   `json:"sort,omitempty"`
+	CreatedAt          int64    `json:"created_at,omitempty"`
+	UpdatedAt          int64    `json:"updated_at,omitempty"`
 }
 
 type NodeAddressBindingRecord struct {
@@ -246,13 +248,15 @@ type NodeAddressGroupRecord struct {
 }
 
 type NodeAddressRuleSaveRequest struct {
-	ID                *int64
-	Name              string
-	Host              string
-	MatchUserIDs      []string
-	MatchUserIDRanges []string
-	Enabled           *int64
-	Sort              *int64
+	ID                 *int64
+	Name               string
+	Host               string
+	MatchUserIDs       []string
+	MatchUserIDRanges  []string
+	ExtraNodes         []string
+	ExtraNodesPosition string
+	Enabled            *int64
+	Sort               *int64
 }
 
 type NodeAddressGroupSaveRequest struct {

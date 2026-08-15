@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
+import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
 
@@ -8,11 +8,18 @@ function splitList(value: any): string[] {
   return String(value || '').split(/[\n,]+/).map((item) => item.trim()).filter((item, index, arr) => !!item && arr.indexOf(item) === index);
 }
 
+function splitLines(value: any): string[] {
+  const values = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+  return values.map((item) => String(item).trim()).filter(Boolean);
+}
+
 function normalizeRule(rule: any = {}, index = 0) {
   return {
     ...rule,
     match_user_ids: splitList(rule.match_user_ids),
     match_user_id_ranges: splitList(rule.match_user_id_ranges),
+    extra_nodes: splitLines(rule.extra_nodes).join('\n'),
+    extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'after',
     enabled: rule.enabled === undefined ? true : !!Number(rule.enabled),
     sort: rule.sort ?? index,
   };
@@ -34,6 +41,8 @@ function savePayload(values: any) {
       ...rule,
       match_user_ids: splitList(rule.match_user_ids),
       match_user_id_ranges: splitList(rule.match_user_id_ranges),
+      extra_nodes: splitLines(rule.extra_nodes),
+      extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'after',
       enabled: rule.enabled ? 1 : 0,
       sort: rule.sort ?? index,
     })),
@@ -44,6 +53,8 @@ function ruleSummary(rule: any) {
   const parts: string[] = [];
   if (splitList(rule.match_user_ids).length) parts.push('明确ID');
   if (splitList(rule.match_user_id_ranges).length) parts.push('ID范围');
+  const extraNodeCount = splitLines(rule.extra_nodes).length;
+  if (extraNodeCount) parts.push(`额外节点 ${extraNodeCount}`);
   return parts.length ? parts.join(' / ') : '未配置条件';
 }
 
@@ -272,7 +283,7 @@ export default function NodeAddressPage() {
           {(fields, { add, remove }) => <>
             <div className="node-address-rule-head">
               <span>地址规则</span>
-              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', enabled: true, sort: fields.length })}>添加规则</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', extra_nodes: '', extra_nodes_position: 'after', enabled: true, sort: fields.length })}>添加规则</Button>
             </div>
             {fields.map((field, index) => <div key={field.key} className="node-address-rule-item">
               <div className="node-address-rule-title">
@@ -281,11 +292,16 @@ export default function NodeAddressPage() {
               </div>
               <div className="form-grid">
                 <div className="form-col-8"><Form.Item name={[field.name, 'name']} label="规则名称"><Input placeholder="规则名称" /></Form.Item></div>
-                <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="下发地址" rules={[{ required: true, message: '请输入下发地址' }]}><Input placeholder="example.com" /></Form.Item></div>
+                <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="本站节点下发地址" dependencies={[['rules', field.name, 'extra_nodes']]} extra="额外节点为空时使用。" rules={[{ validator: async (_, value) => {
+                  const extraNodes = splitLines(form.getFieldValue(['rules', field.name, 'extra_nodes']));
+                  if (!String(value || '').trim() && !extraNodes.length) throw new Error('下发地址和额外节点至少填写一个');
+                } }]}><Input placeholder="example.com" /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'sort']} label="排序"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></div>
                 <div className="form-col-3"><Form.Item name={[field.name, 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="明确用户" rules={[{ validator: validateUserIDs }]}><UserEmailSelect /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_id_ranges']} label="用户ID范围" rules={[{ validator: validateUserIDRanges }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1-100，回车确认" /></Form.Item></div>
+                <div className="form-col-24"><Form.Item name={[field.name, 'extra_nodes']} label="额外下发节点" extra="一行一个完整节点 URI；规则命中且有额外节点时，仅下发这些节点，不下发对应本站节点。"><Input.TextArea rows={4} placeholder={'trojan://password@example.com:443#备用节点\nvless://uuid@example.com:443?...'} /></Form.Item></div>
+                <div className="form-col-12"><Form.Item name={[field.name, 'extra_nodes_position']} label="额外节点位置"><Segmented block options={[{ label: '置于原节点之前', value: 'before' }, { label: '置于原节点之后', value: 'after' }]} /></Form.Item></div>
               </div>
             </div>)}
           </>}

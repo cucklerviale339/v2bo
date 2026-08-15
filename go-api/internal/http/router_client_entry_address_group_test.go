@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -62,5 +63,33 @@ func TestBuildForestEntryProviderProxiesUsesEntryIPWithoutAddressGroupMatch(t *t
 	}
 	if got := serverString(proxy, "server"); got != "entry-group.example.com" {
 		t.Fatalf("expected entry group host, got %q", got)
+	}
+}
+
+func TestMatchForestEntryGroupServersExcludesNodeAddressExtraNodes(t *testing.T) {
+	extra, err := subscribelink.Parse("trojan://fixed-secret@extra.example.com:443#Extra")
+	if err != nil {
+		t.Fatalf("parse extra node: %v", err)
+	}
+	extra["id"] = int64(-1001)
+
+	managed := map[string]any{
+		"id":   int64(7),
+		"type": "vmess",
+		"name": "Managed",
+	}
+	group := usersvc.ClientEntryGroup{
+		Members: []usersvc.ClientEntryGroupMember{
+			{ServerType: "vmess", ServerID: 7},
+			{ServerType: "trojan", ServerID: -1001},
+		},
+	}
+
+	servers, names := matchForestEntryGroupServers([]map[string]any{extra, managed}, group)
+	if len(servers) != 1 || servers[0]["id"] != int64(7) {
+		t.Fatalf("extra node entered client entry group: %#v", servers)
+	}
+	if len(names) != 1 || names[0] != "Managed" {
+		t.Fatalf("unexpected member names: %#v", names)
 	}
 }

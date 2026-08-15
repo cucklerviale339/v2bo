@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"forest/go-api/internal/subscribelink"
 )
 
 type AddressGroupHost string
@@ -15,10 +17,13 @@ type nodeAddressSelector struct {
 }
 
 type nodeAddressRule struct {
-	GroupID           int64
-	Host              string
-	MatchUserIDs      []string
-	MatchUserIDRanges []string
+	ID                 int64
+	GroupID            int64
+	Host               string
+	MatchUserIDs       []string
+	MatchUserIDRanges  []string
+	ExtraNodes         []string
+	ExtraNodesPosition string
 }
 
 func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSelector, error) {
@@ -34,7 +39,7 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 		rules:    make(map[int64][]nodeAddressRule),
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT r.group_id, r.host, r.match_user_ids, r.match_user_id_ranges
+	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.group_id, r.host, r.match_user_ids, r.match_user_id_ranges, r.extra_nodes, r.extra_nodes_position
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
 WHERE g.enabled = 1 AND r.enabled = 1
@@ -48,20 +53,32 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 		var rule nodeAddressRule
 		var matchUserIDs string
 		var matchUserIDRanges string
+		var extraNodesRaw string
 		if err := rows.Scan(
+			&rule.ID,
 			&rule.GroupID,
 			&rule.Host,
 			&matchUserIDs,
 			&matchUserIDRanges,
+			&extraNodesRaw,
+			&rule.ExtraNodesPosition,
 		); err != nil {
 			return nil, fmt.Errorf("scan node address rule: %w", err)
 		}
 		rule.Host = strings.TrimSpace(rule.Host)
-		if rule.Host == "" {
-			continue
-		}
 		rule.MatchUserIDs = parseServerStringList(matchUserIDs)
 		rule.MatchUserIDRanges = parseServerStringList(matchUserIDRanges)
+		rule.ExtraNodes, err = subscribelink.DecodeList(extraNodesRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode node address rule %d extra nodes: %w", rule.ID, err)
+		}
+		rule.ExtraNodesPosition, err = subscribelink.NormalizePosition(rule.ExtraNodesPosition)
+		if err != nil {
+			return nil, fmt.Errorf("decode node address rule %d extra node position: %w", rule.ID, err)
+		}
+		if rule.Host == "" && len(rule.ExtraNodes) == 0 {
+			continue
+		}
 		selector.rules[rule.GroupID] = append(selector.rules[rule.GroupID], rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -97,24 +114,32 @@ ORDER BY b.server_type ASC, b.server_id ASC`)
 }
 
 func (s *nodeAddressSelector) Resolve(serverType string, serverID int64, user serverFetchUser) (string, bool) {
-	if s == nil {
-		return "", false
-	}
-	groupID, ok := s.bindings[nodeAddressServerKey(serverType, serverID)]
+	rule, ok := s.ResolveRule(serverType, serverID, user)
 	if !ok {
 		return "", false
 	}
+	return rule.Host, true
+}
+
+func (s *nodeAddressSelector) ResolveRule(serverType string, serverID int64, user serverFetchUser) (nodeAddressRule, bool) {
+	if s == nil {
+		return nodeAddressRule{}, false
+	}
+	groupID, ok := s.bindings[nodeAddressServerKey(serverType, serverID)]
+	if !ok {
+		return nodeAddressRule{}, false
+	}
 	for _, rule := range s.rules[groupID] {
 		if rule.matchesExplicitUserID(user.ID) {
-			return rule.Host, true
+			return rule, true
 		}
 	}
 	for _, rule := range s.rules[groupID] {
 		if rule.matchesUserIDRange(user.ID) {
-			return rule.Host, true
+			return rule, true
 		}
 	}
-	return "", false
+	return nodeAddressRule{}, false
 }
 
 func (r nodeAddressRule) matches(user serverFetchUser) bool {

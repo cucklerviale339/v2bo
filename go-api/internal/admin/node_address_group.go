@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/subscribelink"
 )
 
 type nodeAddressGroupRow struct {
@@ -21,16 +23,18 @@ type nodeAddressGroupRow struct {
 }
 
 type nodeAddressRuleRow struct {
-	ID                int64
-	GroupID           int64
-	Name              string
-	Host              string
-	MatchUserIDs      string
-	MatchUserIDRanges string
-	Enabled           int64
-	Sort              sql.NullInt64
-	CreatedAt         int64
-	UpdatedAt         int64
+	ID                 int64
+	GroupID            int64
+	Name               string
+	Host               string
+	MatchUserIDs       string
+	MatchUserIDRanges  string
+	ExtraNodes         string
+	ExtraNodesPosition string
+	Enabled            int64
+	Sort               sql.NullInt64
+	CreatedAt          int64
+	UpdatedAt          int64
 }
 
 func (s *DBService) ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error) {
@@ -146,14 +150,20 @@ WHERE id = $1`, groupID, normalized.Name, normalized.Description, enabled, now)
 		if rule.Enabled != nil {
 			ruleEnabled = *rule.Enabled
 		}
+		extraNodes, err := subscribelink.EncodeList(rule.ExtraNodes)
+		if err != nil {
+			return false, err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_node_address_rule (
-group_id, name, host, match_user_ids, match_user_id_ranges, enabled, sort, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+group_id, name, host, match_user_ids, match_user_id_ranges, extra_nodes, extra_nodes_position, enabled, sort, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			groupID,
 			rule.Name,
 			rule.Host,
 			encodeNodeAddressStringList(rule.MatchUserIDs),
 			encodeNodeAddressStringList(rule.MatchUserIDRanges),
+			extraNodes,
+			rule.ExtraNodesPosition,
 			ruleEnabled,
 			nullableInt64(sortValue),
 			now,
@@ -292,7 +302,7 @@ func (s *DBService) loadNodeAddressRules(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return result, nil
 	}
-	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_user_id_ranges, enabled, sort, created_at, updated_at
+	query, args := buildInt64InQuery(`SELECT id, group_id, name, host, match_user_ids, match_user_id_ranges, extra_nodes, extra_nodes_position, enabled, sort, created_at, updated_at
 FROM v2_node_address_rule
 WHERE group_id IN (%s)
 ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
@@ -306,7 +316,11 @@ ORDER BY group_id ASC, sort ASC NULLS LAST, id ASC`, ids)
 		if err != nil {
 			return nil, err
 		}
-		result[row.GroupID] = append(result[row.GroupID], nodeAddressRuleRecord(row))
+		record, err := nodeAddressRuleRecord(row)
+		if err != nil {
+			return nil, err
+		}
+		result[row.GroupID] = append(result[row.GroupID], record)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate node address rules: %w", err)
@@ -356,9 +370,6 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 		rule := &req.Rules[index]
 		rule.Name = strings.TrimSpace(rule.Name)
 		rule.Host = strings.TrimSpace(rule.Host)
-		if rule.Host == "" {
-			return req, errors.New("规则地址不能为空")
-		}
 		rule.MatchUserIDs, err = normalizeNodeAddressUserIDs(rule.MatchUserIDs)
 		if err != nil {
 			return req, err
@@ -366,6 +377,17 @@ func normalizeNodeAddressGroupSaveRequest(req NodeAddressGroupSaveRequest) (Node
 		rule.MatchUserIDRanges, err = normalizeNodeAddressUserIDRanges(rule.MatchUserIDRanges)
 		if err != nil {
 			return req, err
+		}
+		rule.ExtraNodes, err = subscribelink.NormalizeList(rule.ExtraNodes)
+		if err != nil {
+			return req, err
+		}
+		rule.ExtraNodesPosition, err = subscribelink.NormalizePosition(rule.ExtraNodesPosition)
+		if err != nil {
+			return req, err
+		}
+		if rule.Host == "" && len(rule.ExtraNodes) == 0 {
+			return req, errors.New("下发地址和额外节点至少需要填写一个")
 		}
 		if rule.Enabled != nil && (*rule.Enabled < 0 || *rule.Enabled > 1) {
 			return req, errors.New("规则启用状态格式不正确")
@@ -394,6 +416,8 @@ func scanNodeAddressRuleRow(scanner interface{ Scan(...any) error }) (nodeAddres
 		&row.Host,
 		&row.MatchUserIDs,
 		&row.MatchUserIDRanges,
+		&row.ExtraNodes,
+		&row.ExtraNodesPosition,
 		&row.Enabled,
 		&row.Sort,
 		&row.CreatedAt,
@@ -417,19 +441,29 @@ func nodeAddressGroupRecord(row nodeAddressGroupRow) NodeAddressGroupRecord {
 	}
 }
 
-func nodeAddressRuleRecord(row nodeAddressRuleRow) NodeAddressRuleRecord {
-	return NodeAddressRuleRecord{
-		ID:                row.ID,
-		GroupID:           row.GroupID,
-		Name:              row.Name,
-		Host:              row.Host,
-		MatchUserIDs:      parseServerStringList(row.MatchUserIDs),
-		MatchUserIDRanges: parseServerStringList(row.MatchUserIDRanges),
-		Enabled:           row.Enabled,
-		Sort:              nullInt64Ptr(row.Sort),
-		CreatedAt:         row.CreatedAt,
-		UpdatedAt:         row.UpdatedAt,
+func nodeAddressRuleRecord(row nodeAddressRuleRow) (NodeAddressRuleRecord, error) {
+	extraNodes, err := subscribelink.DecodeList(row.ExtraNodes)
+	if err != nil {
+		return NodeAddressRuleRecord{}, fmt.Errorf("decode node address rule %d extra nodes: %w", row.ID, err)
 	}
+	extraNodesPosition, err := subscribelink.NormalizePosition(row.ExtraNodesPosition)
+	if err != nil {
+		return NodeAddressRuleRecord{}, fmt.Errorf("decode node address rule %d extra node position: %w", row.ID, err)
+	}
+	return NodeAddressRuleRecord{
+		ID:                 row.ID,
+		GroupID:            row.GroupID,
+		Name:               row.Name,
+		Host:               row.Host,
+		MatchUserIDs:       parseServerStringList(row.MatchUserIDs),
+		MatchUserIDRanges:  parseServerStringList(row.MatchUserIDRanges),
+		ExtraNodes:         extraNodes,
+		ExtraNodesPosition: extraNodesPosition,
+		Enabled:            row.Enabled,
+		Sort:               nullInt64Ptr(row.Sort),
+		CreatedAt:          row.CreatedAt,
+		UpdatedAt:          row.UpdatedAt,
+	}, nil
 }
 
 func nodeAddressRuleHasCondition(rule NodeAddressRuleSaveRequest) bool {

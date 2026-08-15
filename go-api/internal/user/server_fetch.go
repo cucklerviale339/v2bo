@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"slices"
@@ -17,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/subscribelink"
 )
 
 type serverFetchUser struct {
@@ -115,17 +118,18 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	})
 
 	filtered := make([]map[string]any, 0, len(servers))
+	matchedExtraRules := make([]nodeAddressRule, 0)
+	matchedExtraRuleIDs := make(map[int64]struct{})
 	for _, item := range servers {
-		if hostValue, ok := item["host"].(string); ok {
-			if host, matched := addressSelector.Resolve(fmt.Sprint(item["type"]), mapInt64(item["id"]), userRow); matched {
-				item["host"] = AddressGroupHost(host)
-			} else {
-				host, hostOK := parseServerHostByCondition(hostValue, userRow, ua, now)
-				if !hostOK {
-					continue
-				}
-				item["host"] = host
+		extraRule, keepManagedNode := applyNodeAddressSelection(item, addressSelector, userRow, ua, now)
+		if extraRule != nil {
+			if _, exists := matchedExtraRuleIDs[extraRule.ID]; !exists {
+				matchedExtraRuleIDs[extraRule.ID] = struct{}{}
+				matchedExtraRules = append(matchedExtraRules, *extraRule)
 			}
+		}
+		if !keepManagedNode {
+			continue
 		}
 
 		if rawPort, isRange := serverPortRange(item["port"]); isRange {
@@ -144,7 +148,112 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		filtered = append(filtered, item)
 	}
 
-	return filtered, nil
+	return appendNodeAddressExtraNodes(filtered, matchedExtraRules), nil
+}
+
+func applyNodeAddressSelection(item map[string]any, selector *nodeAddressSelector, user serverFetchUser, ua string, now int64) (*nodeAddressRule, bool) {
+	hostValue, ok := item["host"].(string)
+	if !ok {
+		return nil, true
+	}
+
+	if rule, matched := selector.ResolveRule(fmt.Sprint(item["type"]), mapInt64(item["id"]), user); matched {
+		if len(rule.ExtraNodes) > 0 {
+			return &rule, false
+		}
+		item["host"] = AddressGroupHost(rule.Host)
+		return nil, true
+	}
+
+	host, hostOK := parseServerHostByCondition(hostValue, user, ua, now)
+	if !hostOK {
+		return nil, false
+	}
+	item["host"] = host
+	return nil, true
+}
+
+func appendNodeAddressExtraNodes(servers []map[string]any, rules []nodeAddressRule) []map[string]any {
+	if len(rules) == 0 {
+		return servers
+	}
+
+	before := make([]map[string]any, 0)
+	after := make([]map[string]any, 0)
+	for _, rule := range rules {
+		for index, raw := range rule.ExtraNodes {
+			extra, err := subscribelink.Parse(raw)
+			if err != nil {
+				continue
+			}
+			extra["id"] = -((rule.ID * 1000) + int64(index+1))
+			extra["node_address_rule_id"] = rule.ID
+			if rule.ExtraNodesPosition == subscribelink.PositionBefore {
+				before = append(before, extra)
+			} else {
+				after = append(after, extra)
+			}
+		}
+	}
+
+	beforeSort := nodeAddressExtraNodeSortStart(servers, subscribelink.PositionBefore, len(before))
+	for index, extra := range before {
+		extra["sort"] = beforeSort + int64(index)
+	}
+	afterSort := nodeAddressExtraNodeSortStart(servers, subscribelink.PositionAfter, len(after))
+	for index, extra := range after {
+		extra["sort"] = afterSort + int64(index)
+	}
+
+	result := make([]map[string]any, 0, len(before)+len(servers)+len(after))
+	result = append(result, before...)
+	result = append(result, servers...)
+	result = append(result, after...)
+	return result
+}
+
+func nodeAddressExtraNodeSortStart(servers []map[string]any, position string, count int) int64 {
+	if count <= 0 {
+		return 0
+	}
+
+	var bound int64
+	found := false
+	for _, server := range servers {
+		value, ok := serverSortValue(server["sort"])
+		if !ok {
+			continue
+		}
+		if !found {
+			bound = value
+			found = true
+			continue
+		}
+		if position == subscribelink.PositionBefore && value < bound {
+			bound = value
+		}
+		if position != subscribelink.PositionBefore && value > bound {
+			bound = value
+		}
+	}
+
+	delta := int64(count)
+	if position == subscribelink.PositionBefore {
+		if !found {
+			return -delta
+		}
+		if bound < math.MinInt64+delta {
+			return math.MinInt64
+		}
+		return bound - delta
+	}
+	if !found {
+		return 1
+	}
+	if bound > math.MaxInt64-delta {
+		return math.MaxInt64 - delta + 1
+	}
+	return bound + 1
 }
 
 func (s *DBService) loadServerFetchUser(ctx context.Context, userID int64) (serverFetchUser, error) {

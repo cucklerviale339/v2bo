@@ -19,13 +19,15 @@ type nodeAddressGroupPayload struct {
 }
 
 type nodeAddressRulePayload struct {
-	ID                *json.Number `json:"id"`
-	Name              string       `json:"name"`
-	Host              string       `json:"host"`
-	MatchUserIDs      []string     `json:"match_user_ids"`
-	MatchUserIDRanges []string     `json:"match_user_id_ranges"`
-	Enabled           *json.Number `json:"enabled"`
-	Sort              *json.Number `json:"sort"`
+	ID                 *json.Number `json:"id"`
+	Name               string       `json:"name"`
+	Host               string       `json:"host"`
+	MatchUserIDs       []string     `json:"match_user_ids"`
+	MatchUserIDRanges  []string     `json:"match_user_id_ranges"`
+	ExtraNodes         []string     `json:"extra_nodes"`
+	ExtraNodesPosition string       `json:"extra_nodes_position"`
+	Enabled            *json.Number `json:"enabled"`
+	Sort               *json.Number `json:"sort"`
 }
 
 func handleAdminNodeAddressGroupFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
@@ -179,12 +181,14 @@ func buildNodeAddressRuleSaveRequest(w http.ResponseWriter, item nodeAddressRule
 	}
 
 	return admin.NodeAddressRuleSaveRequest{
-		ID:                id,
-		Name:              item.Name,
-		Host:              item.Host,
-		MatchUserIDs:      item.MatchUserIDs,
-		MatchUserIDRanges: item.MatchUserIDRanges,
-		Enabled:           enabled,
-		Sort:              sortValue,
+		ID:                 id,
+		Name:               item.Name,
+		Host:               item.Host,
+		MatchUserIDs:       item.MatchUserIDs,
+		MatchUserIDRanges:  item.MatchUserIDRanges,
+		ExtraNodes:         item.ExtraNodes,
+		ExtraNodesPosition: item.ExtraNodesPosition,
+		Enabled:            enabled,
+		Sort:               sortValue,
 	}, true
 }

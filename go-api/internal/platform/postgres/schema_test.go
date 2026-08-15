@@ -106,7 +106,7 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 	}
 }
 
-func TestEnsureNodeAddressSchemaAddsUserIDRangesColumn(t *testing.T) {
+func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 	t.Parallel()
 
 	db, mock, err := sqlmock.New()
@@ -135,6 +135,17 @@ func TestEnsureNodeAddressSchemaAddsUserIDRangesColumn(t *testing.T) {
 		WithArgs("v2_node_address_rule", "match_user_id_ranges").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN match_user_id_ranges text NOT NULL DEFAULT '\[\]'`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_node_address_rule", "extra_nodes").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN extra_nodes text NOT NULL DEFAULT '\[\]'`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_node_address_rule", "extra_nodes_position").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN extra_nodes_position varchar\(16\) NOT NULL DEFAULT 'after'`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_rule_group ON v2_node_address_rule\(group_id\)`).
