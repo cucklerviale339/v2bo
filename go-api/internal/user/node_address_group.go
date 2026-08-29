@@ -24,6 +24,7 @@ type nodeAddressRule struct {
 	MatchUserIDRanges  []string
 	ExtraNodes         []string
 	ExtraNodesPosition string
+	ExtraNodeSource    string
 }
 
 func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSelector, error) {

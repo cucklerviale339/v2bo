@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -91,6 +92,11 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 		return true
+	}
+	if recorder, ok := service.(interface {
+		RecordSubscribeAccess(context.Context, int64, string, string) error
+	}); ok {
+		_ = recorder.RecordSubscribeAccess(r.Context(), userID, subscribeAccessClientIP(r), r.UserAgent())
 	}
 
 	flag := clientSubscribeFlag(r)
@@ -193,6 +199,15 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	writePlainText(w, http.StatusOK, buildGeneralSubscribePayload(subscribe.UUID, servers))
 	return true
+}
+
+func subscribeAccessClientIP(r *http.Request) string {
+	for _, header := range []string{"CF-Connecting-IP", "True-Client-IP"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+			return value
+		}
+	}
+	return requestIP(r)
 }
 
 func withClientSubscribePathToken(cfg config.Config, r *http.Request) *http.Request {

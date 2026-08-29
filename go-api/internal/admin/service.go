@@ -21,7 +21,10 @@ import (
 	"forest/go-api/internal/session"
 )
 
-var ErrUnavailable = errors.New("admin service unavailable")
+var (
+	ErrUnavailable        = errors.New("admin service unavailable")
+	ErrInvalidInsiderRule = errors.New("invalid insider rule")
+)
 
 const scheduleLastCheckKey = "SCHEDULE_LAST_CHECK_AT_"
 const statRefreshLastCheckKey = "STAT_REFRESH_LAST_AT_"
@@ -156,6 +159,13 @@ type TicketReplyRequest struct {
 
 type ConfigMailTestLog map[string]any
 
+type SubscribeAccessStatsRequest struct {
+	Keyword  string
+	Current  int64
+	PageSize int64
+	Sort     string
+}
+
 type InviteCampaignFilter struct {
 	Key       string
 	Condition string
@@ -267,6 +277,37 @@ type NodeAddressGroupSaveRequest struct {
 	Rules       []NodeAddressRuleSaveRequest
 }
 
+type InsiderRuleMember struct {
+	ServerType string `json:"server_type"`
+	ServerID   int64  `json:"server_id"`
+}
+
+type InsiderRuleRecord struct {
+	ID                 int64               `json:"id"`
+	Name               string              `json:"name"`
+	MatchUserIDs       []string            `json:"match_user_ids"`
+	MatchUserIDRanges  []string            `json:"match_user_id_ranges"`
+	Members            []InsiderRuleMember `json:"members"`
+	Host               string              `json:"host"`
+	ExtraNodes         []string            `json:"extra_nodes"`
+	ExtraNodesPosition string              `json:"extra_nodes_position"`
+	Enabled            int64               `json:"enabled"`
+	Sort               *int64              `json:"sort,omitempty"`
+	CreatedAt          int64               `json:"created_at"`
+	UpdatedAt          int64               `json:"updated_at"`
+}
+
+type InsiderRuleSaveRequest struct {
+	ID                              *int64
+	Name                            string
+	MatchUserIDs, MatchUserIDRanges []string
+	Members                         []InsiderRuleMember
+	Host                            string
+	ExtraNodes                      []string
+	ExtraNodesPosition              string
+	Enabled, Sort                   *int64
+}
+
 type ClientEntryGroupMemberRecord struct {
 	ServerType string `json:"server_type"`
 	ServerID   int64  `json:"server_id"`
@@ -356,6 +397,12 @@ type Service interface {
 	ListUsers(ctx context.Context, req UserFetchRequest) (UserListResult, error)
 	LookupUsers(ctx context.Context, req UserLookupRequest) ([]UserLookupRecord, error)
 	GetUserInfoByID(ctx context.Context, id int64) (map[string]any, error)
+	GetSubscribeAccessStats(ctx context.Context, req SubscribeAccessStatsRequest) (map[string]any, error)
+	GetSubscribeAccessUserDetail(ctx context.Context, userID int64) (map[string]any, error)
+	SearchSubscribeAccessByUA(ctx context.Context, keyword string, current, pageSize int64) (map[string]any, error)
+	SetSubscribeAccessRetention(ctx context.Context, days int64) (bool, error)
+	GetDailyLowTrafficUsers(ctx context.Context, current, pageSize, thresholdBytes int64) (map[string]any, error)
+	GetConsecutiveLowTrafficUsers(ctx context.Context, current, pageSize, thresholdBytes, days int64) (map[string]any, error)
 	UpdateUser(ctx context.Context, req UserUpdateRequest) (bool, error)
 	SetUserBanned(ctx context.Context, id int64, banned int64) (bool, error)
 	GenerateUsers(ctx context.Context, req UserGenerateRequest) (string, bool, error)
@@ -380,6 +427,9 @@ type Service interface {
 	ListNodeAddressGroups(ctx context.Context, id *int64) ([]NodeAddressGroupRecord, error)
 	SaveNodeAddressGroup(ctx context.Context, req NodeAddressGroupSaveRequest) (bool, error)
 	DeleteNodeAddressGroup(ctx context.Context, id int64) (bool, error)
+	ListInsiderRules(ctx context.Context) ([]InsiderRuleRecord, error)
+	SaveInsiderRule(ctx context.Context, req InsiderRuleSaveRequest) (bool, error)
+	DeleteInsiderRule(ctx context.Context, id int64) (bool, error)
 	ListManagedServers(ctx context.Context) ([]map[string]any, error)
 	SortManagedServers(ctx context.Context, values map[string]map[int64]int64) (bool, error)
 	UpdateManagedServerHost(ctx context.Context, oldHost, newHost string) (ManagedServerHostUpdateResult, error)
@@ -458,6 +508,8 @@ type DBService struct {
 	clientEntryEnsureErr  error
 	nodeAddressEnsureOnce sync.Once
 	nodeAddressEnsureErr  error
+	subscribeAccessOnce   sync.Once
+	subscribeAccessErr    error
 }
 
 type paymentRow struct {

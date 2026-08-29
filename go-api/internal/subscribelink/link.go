@@ -22,14 +22,14 @@ const (
 	maxExtraNodes = 200
 	maxURILength  = 8192
 
-	PositionAfter  = "after"
-	PositionBefore = "before"
+	PositionReplace = "replace"
+	PositionBefore  = "before"
 )
 
 func NormalizePosition(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", PositionAfter:
-		return PositionAfter, nil
+	case "", PositionReplace, "after":
+		return PositionReplace, nil
 	case PositionBefore:
 		return PositionBefore, nil
 	default:

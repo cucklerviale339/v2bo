@@ -714,6 +714,18 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminNodeAddressGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/insider/fetch":
+			if handleAdminInsiderRuleFetch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/insider/save":
+			if handleAdminInsiderRuleSave(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/insider/drop":
+			if handleAdminInsiderRuleDrop(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/manage/getNodes":
 			if handleAdminServerManageGetNodes(w, r, state.session, state.admin) {
 				return
@@ -732,6 +744,30 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/config/fetch":
 			if handleAdminConfigFetch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/stats":
+			if handleAdminSubscribeAccessStats(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/user-detail":
+			if handleAdminSubscribeAccessUserDetail(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/ua-search":
+			if handleAdminSubscribeAccessUASearch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/retention":
+			if handleAdminSubscribeAccessRetention(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/low-traffic":
+			if handleAdminDailyLowTrafficUsers(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-access/consecutive-low-traffic":
+			if handleAdminConsecutiveLowTrafficUsers(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/config/save":

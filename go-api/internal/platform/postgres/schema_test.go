@@ -121,6 +121,8 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_binding`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_insider_rule`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
@@ -145,7 +147,11 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_node_address_rule", "extra_nodes_position").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN extra_nodes_position varchar\(16\) NOT NULL DEFAULT 'after'`).
+	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ADD COLUMN extra_nodes_position varchar\(16\) NOT NULL DEFAULT 'replace'`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE v2_node_address_rule SET extra_nodes_position = 'replace' WHERE extra_nodes_position = 'after'`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_node_address_rule ALTER COLUMN extra_nodes_position SET DEFAULT 'replace'`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_rule_group ON v2_node_address_rule\(group_id\)`).
@@ -153,6 +159,8 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_binding_group ON v2_node_address_binding\(address_group_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_node_address_binding_server ON v2_node_address_binding\(server_type, server_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_insider_rule_sort ON v2_insider_rule\(sort, id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := EnsureNodeAddressSchema(context.Background(), db); err != nil {

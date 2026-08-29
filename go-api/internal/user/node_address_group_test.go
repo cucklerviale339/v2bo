@@ -60,13 +60,13 @@ func TestNodeAddressSelectorPrefersExplicitUserIDOverRange(t *testing.T) {
 	}
 }
 
-func TestAppendNodeAddressExtraNodesPreservesConfiguredPositionAndCredential(t *testing.T) {
+func TestAppendNodeAddressExtraNodesPreservesConfiguredModeAndCredential(t *testing.T) {
 	beforeURI := "trojan://before-secret@before.example.com:443#Before"
-	afterURI := "trojan://after-secret@after.example.com:443#After"
+	replaceURI := "trojan://replace-secret@replace.example.com:443#Replace"
 	servers := []map[string]any{{"id": int64(7), "name": "Managed", "sort": int64(10)}}
 	rules := []nodeAddressRule{
 		{ID: 2, ExtraNodes: []string{beforeURI}, ExtraNodesPosition: subscribelink.PositionBefore},
-		{ID: 3, ExtraNodes: []string{afterURI}, ExtraNodesPosition: subscribelink.PositionAfter},
+		{ID: 3, ExtraNodes: []string{replaceURI}, ExtraNodesPosition: subscribelink.PositionReplace},
 	}
 
 	result := appendNodeAddressExtraNodes(servers, rules)
@@ -79,11 +79,55 @@ func TestAppendNodeAddressExtraNodesPreservesConfiguredPositionAndCredential(t *
 	if result[1]["name"] != "Managed" {
 		t.Fatalf("managed node moved unexpectedly: %#v", result)
 	}
-	if got := subscribelink.RawURI(result[2]); got != afterURI {
-		t.Fatalf("after URI = %q", got)
+	if got := subscribelink.RawURI(result[2]); got != replaceURI {
+		t.Fatalf("replacement URI = %q", got)
 	}
 	if got := subscribelink.Credential("subscriber-uuid", result[0]); got != "before-secret" {
 		t.Fatalf("extra credential = %q", got)
+	}
+}
+
+func TestApplyNodeAddressSelectionKeepsManagedNodeInBeforeMode(t *testing.T) {
+	selector := &nodeAddressSelector{
+		bindings: map[string]int64{"vmess-7": 3},
+		rules: map[int64][]nodeAddressRule{3: {{
+			ID: 9, MatchUserIDs: []string{"10"},
+			ExtraNodes:         []string{"trojan://secret@extra.example.com:443#Extra"},
+			ExtraNodesPosition: subscribelink.PositionBefore,
+		}}},
+	}
+	managed := map[string]any{"id": int64(7), "type": "vmess", "host": "original.example.com"}
+
+	extraRule, keepManaged := applyNodeAddressSelection(managed, selector, serverFetchUser{ID: 10}, "", 0)
+	if !keepManaged || extraRule == nil {
+		t.Fatalf("before mode must retain managed node: keep=%v rule=%#v", keepManaged, extraRule)
+	}
+}
+
+func TestInsiderSelectionHasPriorityBehavior(t *testing.T) {
+	selector := &insiderSelector{rules: []insiderRule{{
+		nodeAddressRule: nodeAddressRule{ID: 5, Host: "insider.example.com", MatchUserIDs: []string{"10"}},
+	}}}
+	managed := map[string]any{"id": int64(7), "type": "vmess", "host": "original.example.com"}
+
+	extra, keep, matched := applyInsiderSelection(managed, selector, 10)
+	if !matched || !keep || extra != nil {
+		t.Fatalf("unexpected insider result: matched=%v keep=%v extra=%#v", matched, keep, extra)
+	}
+	if host, ok := managed["host"].(AddressGroupHost); !ok || host != "insider.example.com" {
+		t.Fatalf("insider host was not applied: %#v", managed["host"])
+	}
+}
+
+func TestInsiderSelectionCanReplaceManagedNode(t *testing.T) {
+	selector := &insiderSelector{rules: []insiderRule{{
+		nodeAddressRule: nodeAddressRule{ID: 5, MatchUserIDRanges: []string{"1-20"}, ExtraNodes: []string{"trojan://secret@extra.example.com:443#Extra"}, ExtraNodesPosition: subscribelink.PositionReplace},
+	}}}
+	managed := map[string]any{"id": int64(7), "type": "vmess", "host": "original.example.com"}
+
+	extra, keep, matched := applyInsiderSelection(managed, selector, 10)
+	if !matched || keep || extra == nil || extra.ID != 5 {
+		t.Fatalf("replace mode did not replace managed node: matched=%v keep=%v extra=%#v", matched, keep, extra)
 	}
 }
 

@@ -19,7 +19,7 @@ function normalizeRule(rule: any = {}, index = 0) {
     match_user_ids: splitList(rule.match_user_ids),
     match_user_id_ranges: splitList(rule.match_user_id_ranges),
     extra_nodes: splitLines(rule.extra_nodes).join('\n'),
-    extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'after',
+    extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'replace',
     enabled: rule.enabled === undefined ? true : !!Number(rule.enabled),
     sort: rule.sort ?? index,
   };
@@ -42,7 +42,7 @@ function savePayload(values: any) {
       match_user_ids: splitList(rule.match_user_ids),
       match_user_id_ranges: splitList(rule.match_user_id_ranges),
       extra_nodes: splitLines(rule.extra_nodes),
-      extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'after',
+      extra_nodes_position: rule.extra_nodes_position === 'before' ? 'before' : 'replace',
       enabled: rule.enabled ? 1 : 0,
       sort: rule.sort ?? index,
     })),
@@ -85,7 +85,7 @@ function mergeUserLookupOptions(current: UserLookupOption[], rows: any): UserLoo
   return Array.from(next.values());
 }
 
-function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (value: string[]) => void }) {
+export function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (value: string[]) => void }) {
   const selectedIDs = splitList(value);
   const selectedKey = selectedIDs.join(',');
   const [options, setOptions] = useState<UserLookupOption[]>([]);
@@ -283,7 +283,7 @@ export default function NodeAddressPage() {
           {(fields, { add, remove }) => <>
             <div className="node-address-rule-head">
               <span>地址规则</span>
-              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', extra_nodes: '', extra_nodes_position: 'after', enabled: true, sort: fields.length })}>添加规则</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ name: '', host: '', extra_nodes: '', extra_nodes_position: 'replace', enabled: true, sort: fields.length })}>添加规则</Button>
             </div>
             {fields.map((field, index) => <div key={field.key} className="node-address-rule-item">
               <div className="node-address-rule-title">
@@ -292,7 +292,7 @@ export default function NodeAddressPage() {
               </div>
               <div className="form-grid">
                 <div className="form-col-8"><Form.Item name={[field.name, 'name']} label="规则名称"><Input placeholder="规则名称" /></Form.Item></div>
-                <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="本站节点下发地址" dependencies={[['rules', field.name, 'extra_nodes']]} extra="额外节点为空时使用。" rules={[{ validator: async (_, value) => {
+                <div className="form-col-10"><Form.Item name={[field.name, 'host']} label="节点下发地址" dependencies={[['rules', field.name, 'extra_nodes']]} extra="额外节点为空时使用。" rules={[{ validator: async (_, value) => {
                   const extraNodes = splitLines(form.getFieldValue(['rules', field.name, 'extra_nodes']));
                   if (!String(value || '').trim() && !extraNodes.length) throw new Error('下发地址和额外节点至少填写一个');
                 } }]}><Input placeholder="example.com" /></Form.Item></div>
@@ -300,8 +300,8 @@ export default function NodeAddressPage() {
                 <div className="form-col-3"><Form.Item name={[field.name, 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_ids']} label="明确用户" rules={[{ validator: validateUserIDs }]}><UserEmailSelect /></Form.Item></div>
                 <div className="form-col-8"><Form.Item name={[field.name, 'match_user_id_ranges']} label="用户ID范围" rules={[{ validator: validateUserIDRanges }]}><Select mode="tags" tokenSeparators={[',']} placeholder="例如 1-100，回车确认" /></Form.Item></div>
-                <div className="form-col-24"><Form.Item name={[field.name, 'extra_nodes']} label="额外下发节点" extra="一行一个完整节点 URI；规则命中且有额外节点时，仅下发这些节点，不下发对应本站节点。"><Input.TextArea rows={4} placeholder={'trojan://password@example.com:443#备用节点\nvless://uuid@example.com:443?...'} /></Form.Item></div>
-                <div className="form-col-12"><Form.Item name={[field.name, 'extra_nodes_position']} label="额外节点位置"><Segmented block options={[{ label: '置于原节点之前', value: 'before' }, { label: '置于原节点之后', value: 'after' }]} /></Form.Item></div>
+                <div className="form-col-24"><Form.Item name={[field.name, 'extra_nodes']} label="额外下发节点" extra="一行一个完整节点 URI；可覆盖命中规则绑定的本站节点，或保留本站节点并置于其之前。"><Input.TextArea rows={4} placeholder={'trojan://password@example.com:443#备用节点\nvless://uuid@example.com:443?...'} /></Form.Item></div>
+                <div className="form-col-12"><Form.Item name={[field.name, 'extra_nodes_position']} label="额外节点方式"><Segmented block options={[{ label: '覆盖原节点', value: 'replace' }, { label: '置于原节点之前', value: 'before' }]} /></Form.Item></div>
               </div>
             </div>)}
           </>}

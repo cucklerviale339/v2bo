@@ -75,9 +75,12 @@ func TestNormalizeListKeepsConfiguredOrderIncludingDuplicates(t *testing.T) {
 	}
 }
 
-func TestNormalizePositionDefaultsAfterAndAllowsBefore(t *testing.T) {
-	if got, err := NormalizePosition(""); err != nil || got != PositionAfter {
+func TestNormalizePositionDefaultsReplaceAndAllowsBefore(t *testing.T) {
+	if got, err := NormalizePosition(""); err != nil || got != PositionReplace {
 		t.Fatalf("default position = %q, %v", got, err)
+	}
+	if got, err := NormalizePosition("after"); err != nil || got != PositionReplace {
+		t.Fatalf("legacy after position = %q, %v", got, err)
 	}
 	if got, err := NormalizePosition(" BEFORE "); err != nil || got != PositionBefore {
 		t.Fatalf("before position = %q, %v", got, err)

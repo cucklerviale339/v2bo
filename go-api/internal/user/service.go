@@ -250,6 +250,10 @@ type DBService struct {
 	clientEntryEnsureErr  error
 	nodeAddressEnsureOnce sync.Once
 	nodeAddressEnsureErr  error
+	subscribeAccessOnce   sync.Once
+	subscribeAccessErr    error
+	subscribeCleanupMu    sync.Mutex
+	subscribeCleanupAt    int64
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {

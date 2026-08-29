@@ -769,162 +769,175 @@ func (f *fakeUserService) CancelOrder(_ context.Context, userID int64, tradeNo s
 }
 
 type fakeAdminService struct {
-	systemStatus            admin.SystemStatus
-	queueStats              admin.QueueStats
-	workload                []map[string]any
-	systemLogs              []map[string]any
-	systemLogsTotal         int64
-	statOverride            map[string]any
-	statOrder               []map[string]any
-	statSummary             map[string]any
-	statRanking             []map[string]any
-	statRecords             []map[string]any
-	serverLastRank          []map[string]any
-	serverTodayRank         []map[string]any
-	inviteLastRank          []map[string]any
-	inviteTodayRank         []map[string]any
-	userLastRank            []map[string]any
-	userTodayRank           []map[string]any
-	statUserRecords         []map[string]any
-	statUserTotal           int64
-	inviteList              admin.InviteCampaignListResult
-	inviteDetail            map[string]any
-	inviteRecords           admin.InviteCampaignRecordListResult
-	serverGroups            []admin.ServerGroupRecord
-	clientEntryGroups       []admin.ClientEntryGroupRecord
-	nodeAddressGroups       []admin.NodeAddressGroupRecord
-	serverRoutes            []admin.ServerRouteRecord
-	managedServers          []map[string]any
-	hostUpdateResult        admin.ManagedServerHostUpdateResult
-	configData              map[string]any
-	themes                  map[string]any
-	themeConfig             map[string]any
-	emailTemplates          []string
-	themeTemplates          []string
-	mailTestLog             admin.ConfigMailTestLog
-	telegramBotInfo         map[string]any
-	telegramStatus          admin.TelegramAdminStatus
-	telegramTestOK          bool
-	unbindTelegramOK        bool
-	lastTelegramAdminID     int64
-	plans                   []admin.PlanRecord
-	notices                 []admin.NoticeRecord
-	couponList              admin.CouponListResult
-	giftcardList            admin.GiftcardListResult
-	knowledges              []admin.KnowledgeRecord
-	knowledgeDetail         admin.KnowledgeRecord
-	knowledgeCats           []string
-	payments                []admin.PaymentRecord
-	methods                 []string
-	form                    map[string]admin.PaymentFormField
-	orderList               admin.OrderListResult
-	orderDetail             map[string]any
-	ticketList              admin.TicketListResult
-	ticketDetail            admin.TicketDetail
-	lastPlanSave            admin.PlanSaveRequest
-	lastPlanDropID          int64
-	lastPlanUpdate          admin.PlanToggleRequest
-	lastPlanSortIDs         []int64
-	lastNoticeSave          admin.NoticeSaveRequest
-	lastNoticeDrop          int64
-	lastNoticeShow          int64
-	lastCouponList          admin.CouponListRequest
-	lastCouponSave          admin.CouponGenerateRequest
-	lastCouponDrop          int64
-	lastCouponShow          int64
-	couponCSV               string
-	lastGiftcardList        admin.GiftcardListRequest
-	lastGiftcardSave        admin.GiftcardGenerateRequest
-	lastGiftcardDrop        int64
-	giftcardCSV             string
-	lastKnowledgeID         int64
-	lastKnowledgeSave       admin.KnowledgeSaveRequest
-	lastKnowledgeShow       int64
-	lastKnowledgeDrop       int64
-	lastKnowledgeSort       []int64
-	lastFormID              *int64
-	lastGateway             string
-	lastSave                admin.PaymentSaveRequest
-	lastDropID              int64
-	lastShowID              int64
-	lastSortIDs             []int64
-	lastFetch               admin.OrderFetchRequest
-	lastDetailID            int64
-	lastUpdate              admin.OrderUpdateRequest
-	lastPaid                string
-	lastCancel              string
-	lastRefund              string
-	lastAssign              admin.OrderAssignRequest
-	lastTicketFetch         admin.TicketListRequest
-	lastTicketID            int64
-	lastTicketReply         admin.TicketReplyRequest
-	lastTicketClose         int64
-	lastLogCurrent          int64
-	lastLogPageSize         int64
-	lastLogLevel            string
-	lastStatStartAt         int64
-	lastStatEndAt           int64
-	lastRankingType         string
-	lastRankingLimit        int64
-	lastRecordType          string
-	lastRecordStartAt       int64
-	lastRecordEndAt         int64
-	lastStatUserID          int64
-	lastStatCurrent         int64
-	lastStatPageSize        int64
-	lastInviteList          admin.InviteCampaignListRequest
-	lastInviteID            int64
-	lastInviteRecords       admin.InviteCampaignRecordListRequest
-	lastGroupID             *int64
-	lastGroupSave           admin.ServerGroupSaveRequest
-	lastGroupDrop           int64
-	lastClientEntryID       *int64
-	lastClientEntrySave     admin.ClientEntryGroupSaveRequest
-	lastClientEntryDrop     int64
-	lastNodeAddressID       *int64
-	lastNodeAddressSave     admin.NodeAddressGroupSaveRequest
-	lastNodeAddressDrop     int64
-	lastRouteSave           admin.ServerRouteSaveRequest
-	lastRouteDrop           int64
-	lastManagedSort         map[string]map[int64]int64
-	lastOldHost             string
-	lastNewHost             string
-	lastNodeSaveType        string
-	lastNodeSave            map[string]any
-	lastNodeDropType        string
-	lastNodeDropID          int64
-	lastNodeUpdateType      string
-	lastNodeUpdateID        int64
-	lastNodeUpdate          map[string]any
-	lastNodeCopyType        string
-	lastNodeCopyID          int64
-	lastConfigKey           string
-	lastConfigSave          map[string]any
-	lastWebhookToken        string
-	lastSupportWebhookToken string
-	lastBotToken            string
-	lastMailTestEmail       string
-	userList                admin.UserListResult
-	userLookup              []admin.UserLookupRecord
-	userInfoDetail          map[string]any
-	userGenerateCSV         string
-	userGenerateBatch       bool
-	userDumpCSV             string
-	lastUserFetch           admin.UserFetchRequest
-	lastUserLookup          admin.UserLookupRequest
-	lastUserInfoID          int64
-	lastUserUpdate          admin.UserUpdateRequest
-	lastUserGenerate        admin.UserGenerateRequest
-	lastUserMail            admin.UserMailRequest
-	lastUserDump            []admin.UserFilter
-	lastUserBan             []admin.UserFilter
-	lastUserBannedID        int64
-	lastUserBannedValue     int64
-	lastUserResetID         int64
-	lastUserDeleteID        int64
-	lastUserDeleteAll       []admin.UserFilter
-	assignTrade             string
-	err                     error
+	systemStatus             admin.SystemStatus
+	queueStats               admin.QueueStats
+	workload                 []map[string]any
+	systemLogs               []map[string]any
+	systemLogsTotal          int64
+	statOverride             map[string]any
+	statOrder                []map[string]any
+	statSummary              map[string]any
+	statRanking              []map[string]any
+	statRecords              []map[string]any
+	serverLastRank           []map[string]any
+	serverTodayRank          []map[string]any
+	inviteLastRank           []map[string]any
+	inviteTodayRank          []map[string]any
+	userLastRank             []map[string]any
+	userTodayRank            []map[string]any
+	statUserRecords          []map[string]any
+	statUserTotal            int64
+	inviteList               admin.InviteCampaignListResult
+	inviteDetail             map[string]any
+	inviteRecords            admin.InviteCampaignRecordListResult
+	serverGroups             []admin.ServerGroupRecord
+	clientEntryGroups        []admin.ClientEntryGroupRecord
+	nodeAddressGroups        []admin.NodeAddressGroupRecord
+	serverRoutes             []admin.ServerRouteRecord
+	managedServers           []map[string]any
+	hostUpdateResult         admin.ManagedServerHostUpdateResult
+	configData               map[string]any
+	themes                   map[string]any
+	themeConfig              map[string]any
+	emailTemplates           []string
+	themeTemplates           []string
+	mailTestLog              admin.ConfigMailTestLog
+	telegramBotInfo          map[string]any
+	telegramStatus           admin.TelegramAdminStatus
+	telegramTestOK           bool
+	unbindTelegramOK         bool
+	lastTelegramAdminID      int64
+	plans                    []admin.PlanRecord
+	notices                  []admin.NoticeRecord
+	couponList               admin.CouponListResult
+	giftcardList             admin.GiftcardListResult
+	knowledges               []admin.KnowledgeRecord
+	knowledgeDetail          admin.KnowledgeRecord
+	knowledgeCats            []string
+	payments                 []admin.PaymentRecord
+	methods                  []string
+	form                     map[string]admin.PaymentFormField
+	orderList                admin.OrderListResult
+	orderDetail              map[string]any
+	ticketList               admin.TicketListResult
+	ticketDetail             admin.TicketDetail
+	lastPlanSave             admin.PlanSaveRequest
+	lastPlanDropID           int64
+	lastPlanUpdate           admin.PlanToggleRequest
+	lastPlanSortIDs          []int64
+	lastNoticeSave           admin.NoticeSaveRequest
+	lastNoticeDrop           int64
+	lastNoticeShow           int64
+	lastCouponList           admin.CouponListRequest
+	lastCouponSave           admin.CouponGenerateRequest
+	lastCouponDrop           int64
+	lastCouponShow           int64
+	couponCSV                string
+	lastGiftcardList         admin.GiftcardListRequest
+	lastGiftcardSave         admin.GiftcardGenerateRequest
+	lastGiftcardDrop         int64
+	giftcardCSV              string
+	lastKnowledgeID          int64
+	lastKnowledgeSave        admin.KnowledgeSaveRequest
+	lastKnowledgeShow        int64
+	lastKnowledgeDrop        int64
+	lastKnowledgeSort        []int64
+	lastFormID               *int64
+	lastGateway              string
+	lastSave                 admin.PaymentSaveRequest
+	lastDropID               int64
+	lastShowID               int64
+	lastSortIDs              []int64
+	lastFetch                admin.OrderFetchRequest
+	lastDetailID             int64
+	lastUpdate               admin.OrderUpdateRequest
+	lastPaid                 string
+	lastCancel               string
+	lastRefund               string
+	lastAssign               admin.OrderAssignRequest
+	lastTicketFetch          admin.TicketListRequest
+	lastTicketID             int64
+	lastTicketReply          admin.TicketReplyRequest
+	lastTicketClose          int64
+	lastLogCurrent           int64
+	lastLogPageSize          int64
+	lastLogLevel             string
+	lastStatStartAt          int64
+	lastStatEndAt            int64
+	lastRankingType          string
+	lastRankingLimit         int64
+	lastRecordType           string
+	lastRecordStartAt        int64
+	lastRecordEndAt          int64
+	lastStatUserID           int64
+	lastStatCurrent          int64
+	lastStatPageSize         int64
+	lastInviteList           admin.InviteCampaignListRequest
+	lastInviteID             int64
+	lastInviteRecords        admin.InviteCampaignRecordListRequest
+	lastGroupID              *int64
+	lastGroupSave            admin.ServerGroupSaveRequest
+	lastGroupDrop            int64
+	lastClientEntryID        *int64
+	lastClientEntrySave      admin.ClientEntryGroupSaveRequest
+	lastClientEntryDrop      int64
+	lastNodeAddressID        *int64
+	lastNodeAddressSave      admin.NodeAddressGroupSaveRequest
+	lastNodeAddressDrop      int64
+	lastRouteSave            admin.ServerRouteSaveRequest
+	lastRouteDrop            int64
+	lastManagedSort          map[string]map[int64]int64
+	lastOldHost              string
+	lastNewHost              string
+	lastNodeSaveType         string
+	lastNodeSave             map[string]any
+	lastNodeDropType         string
+	lastNodeDropID           int64
+	lastNodeUpdateType       string
+	lastNodeUpdateID         int64
+	lastNodeUpdate           map[string]any
+	lastNodeCopyType         string
+	lastNodeCopyID           int64
+	lastConfigKey            string
+	lastConfigSave           map[string]any
+	lastWebhookToken         string
+	lastSupportWebhookToken  string
+	lastBotToken             string
+	lastMailTestEmail        string
+	userList                 admin.UserListResult
+	userLookup               []admin.UserLookupRecord
+	userInfoDetail           map[string]any
+	userGenerateCSV          string
+	userGenerateBatch        bool
+	userDumpCSV              string
+	lastUserFetch            admin.UserFetchRequest
+	lastUserLookup           admin.UserLookupRequest
+	lastUserInfoID           int64
+	lastSubscribeAccess      admin.SubscribeAccessStatsRequest
+	lastSubscribeDetailID    int64
+	lastSubscribeUAKeyword   string
+	lastSubscribeUACurrent   int64
+	lastSubscribeUAPageSize  int64
+	lastSubscribeKeepDays    int64
+	lastLowTrafficCurrent    int64
+	lastLowTrafficPageSize   int64
+	lastLowTrafficThreshold  int64
+	lastConsecutiveCurrent   int64
+	lastConsecutivePageSize  int64
+	lastConsecutiveThreshold int64
+	lastConsecutiveDays      int64
+	lastUserUpdate           admin.UserUpdateRequest
+	lastUserGenerate         admin.UserGenerateRequest
+	lastUserMail             admin.UserMailRequest
+	lastUserDump             []admin.UserFilter
+	lastUserBan              []admin.UserFilter
+	lastUserBannedID         int64
+	lastUserBannedValue      int64
+	lastUserResetID          int64
+	lastUserDeleteID         int64
+	lastUserDeleteAll        []admin.UserFilter
+	assignTrade              string
+	err                      error
 }
 
 type fakePaymentService struct {
@@ -1171,6 +1184,61 @@ func (f *fakeAdminService) LookupUsers(_ context.Context, req admin.UserLookupRe
 func (f *fakeAdminService) GetUserInfoByID(_ context.Context, id int64) (map[string]any, error) {
 	f.lastUserInfoID = id
 	return f.userInfoDetail, f.err
+}
+
+func (f *fakeAdminService) GetSubscribeAccessStats(_ context.Context, req admin.SubscribeAccessStatsRequest) (map[string]any, error) {
+	f.lastSubscribeAccess = req
+	return map[string]any{
+		"summary": map[string]any{}, "data": []map[string]any{},
+		"total": int64(0), "current": req.Current, "page_size": req.PageSize,
+	}, f.err
+}
+
+func (f *fakeAdminService) ListInsiderRules(context.Context) ([]admin.InsiderRuleRecord, error) {
+	return nil, f.err
+}
+func (f *fakeAdminService) SaveInsiderRule(context.Context, admin.InsiderRuleSaveRequest) (bool, error) {
+	return true, f.err
+}
+func (f *fakeAdminService) DeleteInsiderRule(context.Context, int64) (bool, error) {
+	return true, f.err
+}
+
+func (f *fakeAdminService) GetSubscribeAccessUserDetail(_ context.Context, userID int64) (map[string]any, error) {
+	f.lastSubscribeDetailID = userID
+	return map[string]any{"user_id": userID}, f.err
+}
+
+func (f *fakeAdminService) SearchSubscribeAccessByUA(_ context.Context, keyword string, current, pageSize int64) (map[string]any, error) {
+	f.lastSubscribeUAKeyword = keyword
+	f.lastSubscribeUACurrent = current
+	f.lastSubscribeUAPageSize = pageSize
+	return map[string]any{"keyword": keyword, "current": current, "page_size": pageSize}, f.err
+}
+
+func (f *fakeAdminService) SetSubscribeAccessRetention(_ context.Context, days int64) (bool, error) {
+	f.lastSubscribeKeepDays = days
+	return true, f.err
+}
+
+func (f *fakeAdminService) GetDailyLowTrafficUsers(_ context.Context, current, pageSize, thresholdBytes int64) (map[string]any, error) {
+	f.lastLowTrafficCurrent = current
+	f.lastLowTrafficPageSize = pageSize
+	f.lastLowTrafficThreshold = thresholdBytes
+	return map[string]any{
+		"data": []map[string]any{}, "total": int64(0), "current": current, "page_size": pageSize,
+	}, f.err
+}
+
+func (f *fakeAdminService) GetConsecutiveLowTrafficUsers(_ context.Context, current, pageSize, thresholdBytes, days int64) (map[string]any, error) {
+	f.lastConsecutiveCurrent = current
+	f.lastConsecutivePageSize = pageSize
+	f.lastConsecutiveThreshold = thresholdBytes
+	f.lastConsecutiveDays = days
+	return map[string]any{
+		"data": []map[string]any{}, "total": int64(0), "current": current,
+		"page_size": pageSize, "threshold_bytes": thresholdBytes, "days": days,
+	}, f.err
 }
 
 func (f *fakeAdminService) UpdateUser(_ context.Context, req admin.UserUpdateRequest) (bool, error) {

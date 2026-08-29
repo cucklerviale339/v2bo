@@ -80,6 +80,10 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if err != nil {
 		return nil, err
 	}
+	insiderRules, err := s.loadInsiderSelector(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	servers := make([]map[string]any, 0)
 	for _, table := range serverFetchTables {
@@ -119,12 +123,16 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 
 	filtered := make([]map[string]any, 0, len(servers))
 	matchedExtraRules := make([]nodeAddressRule, 0)
-	matchedExtraRuleIDs := make(map[int64]struct{})
+	matchedExtraRuleIDs := make(map[string]struct{})
 	for _, item := range servers {
-		extraRule, keepManagedNode := applyNodeAddressSelection(item, addressSelector, userRow, ua, now)
+		extraRule, keepManagedNode, insiderMatched := applyInsiderSelection(item, insiderRules, userRow.ID)
+		if !insiderMatched {
+			extraRule, keepManagedNode = applyNodeAddressSelection(item, addressSelector, userRow, ua, now)
+		}
 		if extraRule != nil {
-			if _, exists := matchedExtraRuleIDs[extraRule.ID]; !exists {
-				matchedExtraRuleIDs[extraRule.ID] = struct{}{}
+			ruleKey := fmt.Sprintf("%s:%d", extraRule.ExtraNodeSource, extraRule.ID)
+			if _, exists := matchedExtraRuleIDs[ruleKey]; !exists {
+				matchedExtraRuleIDs[ruleKey] = struct{}{}
 				matchedExtraRules = append(matchedExtraRules, *extraRule)
 			}
 		}
@@ -159,7 +167,7 @@ func applyNodeAddressSelection(item map[string]any, selector *nodeAddressSelecto
 
 	if rule, matched := selector.ResolveRule(fmt.Sprint(item["type"]), mapInt64(item["id"]), user); matched {
 		if len(rule.ExtraNodes) > 0 {
-			return &rule, false
+			return &rule, rule.ExtraNodesPosition == subscribelink.PositionBefore
 		}
 		item["host"] = AddressGroupHost(rule.Host)
 		return nil, true
@@ -179,19 +187,23 @@ func appendNodeAddressExtraNodes(servers []map[string]any, rules []nodeAddressRu
 	}
 
 	before := make([]map[string]any, 0)
-	after := make([]map[string]any, 0)
+	replacements := make([]map[string]any, 0)
 	for _, rule := range rules {
 		for index, raw := range rule.ExtraNodes {
 			extra, err := subscribelink.Parse(raw)
 			if err != nil {
 				continue
 			}
-			extra["id"] = -((rule.ID * 1000) + int64(index+1))
+			idBase := rule.ID
+			if rule.ExtraNodeSource == "insider" {
+				idBase += 3_000_000_000
+			}
+			extra["id"] = -((idBase * 1000) + int64(index+1))
 			extra["node_address_rule_id"] = rule.ID
 			if rule.ExtraNodesPosition == subscribelink.PositionBefore {
 				before = append(before, extra)
 			} else {
-				after = append(after, extra)
+				replacements = append(replacements, extra)
 			}
 		}
 	}
@@ -200,15 +212,15 @@ func appendNodeAddressExtraNodes(servers []map[string]any, rules []nodeAddressRu
 	for index, extra := range before {
 		extra["sort"] = beforeSort + int64(index)
 	}
-	afterSort := nodeAddressExtraNodeSortStart(servers, subscribelink.PositionAfter, len(after))
-	for index, extra := range after {
-		extra["sort"] = afterSort + int64(index)
+	replacementSort := nodeAddressExtraNodeSortStart(servers, subscribelink.PositionReplace, len(replacements))
+	for index, extra := range replacements {
+		extra["sort"] = replacementSort + int64(index)
 	}
 
-	result := make([]map[string]any, 0, len(before)+len(servers)+len(after))
+	result := make([]map[string]any, 0, len(before)+len(servers)+len(replacements))
 	result = append(result, before...)
 	result = append(result, servers...)
-	result = append(result, after...)
+	result = append(result, replacements...)
 	return result
 }
 

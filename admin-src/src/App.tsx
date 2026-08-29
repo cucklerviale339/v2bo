@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, BarChartOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -26,6 +26,8 @@ import KnowledgePage from './pages/KnowledgePage';
 import ServerRoutePage from './pages/ServerRoutePage';
 import ClientEntryPage from './pages/ClientEntryPage';
 import NodeAddressPage from './pages/NodeAddressPage';
+import SubscribeAccessPage from './pages/SubscribeAccessPage';
+import InsiderPage from './pages/InsiderPage';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -47,6 +49,8 @@ const menu = [
   { type: 'item', key: '/server/route', icon: <ShareAltOutlined />, label: '路由管理' },
   { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
   { type: 'item', key: '/server/address', icon: <DatabaseOutlined />, label: '节点地址' },
+  { type: 'item', key: '/server/insider', icon: <UserOutlined />, label: '内鬼管理' },
+  { type: 'item', key: '/subscribe-access', icon: <BarChartOutlined />, label: '订阅统计' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
@@ -85,6 +89,7 @@ function Page({ path }: { path: string }) {
   if (route === '/server/route') return <ServerRoutePage />;
   if (route === '/server/client-entry') return <ClientEntryPage />;
   if (route === '/server/address') return <NodeAddressPage />;
+  if (route === '/server/insider') return <InsiderPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
   const ticketMatch = route.match(/^\/ticket\/(\d+)/);
@@ -95,6 +100,7 @@ function Page({ path }: { path: string }) {
   if (route === '/giftcard') return <GiftcardPage />;
   if (route === '/knowledge') return <KnowledgePage />;
   if (route === '/queue') return <QueuePage />;
+  if (route === '/subscribe-access') return <SubscribeAccessPage />;
   if (route === '/invite-campaign') return <InviteCampaignPage />;
   return <Dashboard />;
 }
