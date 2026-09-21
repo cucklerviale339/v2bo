@@ -48,6 +48,9 @@ type routerState struct {
 	user              usersvc.Service
 	payment           payment.Service
 	admin             admin.Service
+	dnsProbe          admin.DNSProbeService
+	dnsAdmin          admin.DNSManagementService
+	dnsProbeIP        probeRequestIPResolver
 	node              nodeapi.Service
 	jobs              queue.Enqueuer
 	telegram          telegramWebhookService
@@ -110,6 +113,12 @@ func WithPaymentService(service payment.Service) Option {
 func WithAdminService(service admin.Service) Option {
 	return func(state *routerState) {
 		state.admin = service
+		if dnsService, ok := service.(admin.DNSManagementService); ok {
+			state.dnsAdmin = dnsService
+		}
+		if probeService, ok := service.(admin.DNSProbeService); ok {
+			state.dnsProbe = probeService
+		}
 	}
 }
 
@@ -140,6 +149,7 @@ func WithClientEntryRemoteResolver(resolver clientEntryRemoteResolver) Option {
 func NewRouter(cfg config.Config, options ...Option) http.Handler {
 	state := &routerState{
 		clientEntryRemote: newHTTPClientEntryRemoteResolver(),
+		dnsProbeIP:        newProbeRequestIPResolver(cfg.ProbeTrustedProxyCIDRs),
 	}
 	for _, option := range options {
 		option(state)
@@ -210,6 +220,24 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		w, r = guardWriter, guardRequest
 
 		switch {
+		case r.URL.Path == "/probe/install.sh" || strings.HasPrefix(r.URL.Path, "/probe/download/"):
+			http.NotFound(w, r)
+			return
+		case r.URL.Path == "/api/v1/probe/install.sh":
+			handleProbeInstall(w, r)
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/probe/download/"):
+			handleProbeDownload(w, r, cfg)
+			return
+		case r.URL.Path == "/api/v1/probe/heartbeat":
+			handleDNSProbeHeartbeat(w, r, state.dnsProbe, state.dnsProbeIP)
+			return
+		case r.URL.Path == "/api/v1/probe/tasks":
+			handleDNSProbeTasks(w, r, state.dnsProbe)
+			return
+		case r.URL.Path == "/api/v1/probe/results":
+			handleDNSProbeResults(w, r, state.dnsProbe)
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/subscribe-access/guard/"):
 			handleAdminSubscribeGuard(w, r, state, cfg, strings.TrimPrefix(r.URL.Path, adminPrefix+"/subscribe-access/guard/"))
 			return
@@ -734,6 +762,50 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/server/insider/drop":
 			if handleAdminInsiderRuleDrop(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/config":
+			if handleAdminDNSPodConfig(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/config/save":
+			if handleAdminDNSPodConfigSave(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/config/test":
+			if handleAdminDNSPodConfigTest(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/domain/list":
+			if handleAdminDNSPodDomainList(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/list":
+			if handleAdminDNSPodRecordList(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/types":
+			if handleAdminDNSPodRecordTypes(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/lines":
+			if handleAdminDNSPodRecordLines(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/save":
+			if handleAdminDNSPodRecordSave(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/delete":
+			if handleAdminDNSPodRecordDelete(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/status":
+			if handleAdminDNSPodRecordStatus(w, r, state.session, state.dnsAdmin) {
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
+			if handleAdminDNSFailover(w, r, state.session, state.dnsAdmin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/server/manage/getNodes":

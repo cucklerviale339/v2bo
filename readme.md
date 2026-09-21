@@ -12,6 +12,7 @@
 
 - 安装文档 `docs/install.md`
 - 更新文档 `docs/update.md`
+- 订阅中心、域名解析与备用监控 `docs/subscription-center-dns.md`
 
 ## 一行命令
 

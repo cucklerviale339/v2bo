@@ -17,6 +17,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/payment"
+	platformpostgres "forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
 )
@@ -504,6 +505,26 @@ type DBService struct {
 	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
 	sleep      func(context.Context, time.Duration) error
 
+	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
+	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
+	dnsFailoverEvaluator      DNSFailoverEvaluationRequester
+	dnsFailoverNotifier       DNSFailoverNotifier
+	dnsFailoverAPI            dnspodAPI
+	dnsFailoverTickInterval   time.Duration
+	dnsFailoverCycle          func(context.Context) error
+	dnsFailoverLogf           func(string, ...any)
+	dnsFailoverLogWriter      func(context.Context, []dnsFailoverLogEntry) error
+	dnsFailoverEnsureMu       sync.Mutex
+	dnsFailoverSchemaOK       bool
+	dnsFailoverWakeMu         sync.Mutex
+	dnsFailoverWakeQueued     bool
+	dnsFailoverStopping       bool
+	dnsFailoverStartOnce      sync.Once
+	dnsFailoverWorkerCtx      context.Context
+	dnsFailoverWorkerCancel   context.CancelFunc
+	dnsFailoverWorkerWG       sync.WaitGroup
+	dnsFailoverJobWG          sync.WaitGroup
+
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
 	nodeAddressEnsureOnce sync.Once
@@ -533,7 +554,33 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 	if len(orders) > 0 {
 		runtime = orders[0]
 	}
-	return &DBService{cfg: cfg, db: db, orders: runtime}
+	service := &DBService{cfg: cfg, db: db, orders: runtime}
+	if db != nil {
+		service.dnsFailoverLogWriter = func(ctx context.Context, entries []dnsFailoverLogEntry) error {
+			return insertDNSFailoverLogs(ctx, db, entries)
+		}
+	}
+	return service
+}
+
+func (s *DBService) ensureDNSFailoverSchema(ctx context.Context) error {
+	if s.db == nil {
+		return ErrUnavailable
+	}
+	s.dnsFailoverEnsureMu.Lock()
+	defer s.dnsFailoverEnsureMu.Unlock()
+	if s.dnsFailoverSchemaOK {
+		return nil
+	}
+	if err := platformpostgres.EnsureDNSFailoverSchema(ctx, s.db); err != nil {
+		return fmt.Errorf("ensure DNS failover schema: %w", err)
+	}
+	s.dnsFailoverSchemaOK = true
+	return nil
+}
+
+func (s *DBService) InitializeDNSFailoverSchema(ctx context.Context) error {
+	return s.ensureDNSFailoverSchema(ctx)
 }
 
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {

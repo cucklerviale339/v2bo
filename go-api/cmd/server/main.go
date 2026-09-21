@@ -28,6 +28,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := config.ValidateProbeTrustedProxyCIDRs(cfg.ProbeTrustedProxyCIDRs); err != nil {
+		log.Printf("invalid probe proxy configuration; forwarded probe addresses will not be trusted: %v", err)
+		cfg.ProbeTrustedProxyCIDRs = []string{}
+	}
 	runtimeConfig := config.NewRuntimeState(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -77,6 +81,18 @@ func main() {
 		userService = userDBService
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
+			log.Printf("DNS failover initialization deferred; subscriptions remain available: %v", err)
+		}
+		adminDBService.WithDNSFailoverEvaluationRequester(adminDBService).WithDNSFailoverNotifier(telegramService.DirectNotifier())
+		startDNSFailoverAutomationAfterSchema(ctx, adminDBService)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			if err := stopDNSFailoverAutomationBeforeDependencies(shutdownCtx, adminDBService); err != nil {
+				log.Printf("stop DNS failover automation: %v", err)
+			}
+		}()
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
@@ -121,6 +137,40 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen and serve: %v", err)
 	}
+}
+
+type dnsFailoverSchemaInitializer interface {
+	InitializeDNSFailoverSchema(context.Context) error
+}
+
+type dnsFailoverAutomationStarter interface {
+	StartDNSFailoverAutomation(context.Context)
+}
+
+type dnsFailoverAutomationStopper interface {
+	StopDNSFailoverAutomation(context.Context) error
+}
+
+func initializeDNSFailoverBeforeServe(ctx context.Context, initializer dnsFailoverSchemaInitializer) error {
+	if initializer == nil {
+		return nil
+	}
+	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return initializer.InitializeDNSFailoverSchema(initCtx)
+}
+
+func startDNSFailoverAutomationAfterSchema(ctx context.Context, starter dnsFailoverAutomationStarter) {
+	if starter != nil {
+		starter.StartDNSFailoverAutomation(ctx)
+	}
+}
+
+func stopDNSFailoverAutomationBeforeDependencies(ctx context.Context, stopper dnsFailoverAutomationStopper) error {
+	if stopper == nil {
+		return nil
+	}
+	return stopper.StopDNSFailoverAutomation(ctx)
 }
 
 func dbReadyCheck(db *sql.DB) func(context.Context) error {

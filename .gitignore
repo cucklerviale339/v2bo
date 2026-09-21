@@ -23,6 +23,7 @@ docker-compose.yml
 .DS_Store
 public/clients/*
 go-api/bin/
+storage/probe/
 go-api/run/
 go-api/internal/storage/logs/
 .local/

@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, BarChartOutlined, SafetyCertificateOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -26,9 +26,11 @@ import KnowledgePage from './pages/KnowledgePage';
 import ServerRoutePage from './pages/ServerRoutePage';
 import ClientEntryPage from './pages/ClientEntryPage';
 import NodeAddressPage from './pages/NodeAddressPage';
-import SubscribeAccessPage from './pages/SubscribeAccessPage';
 import InsiderPage from './pages/InsiderPage';
-import SubscribeGuardPage from './pages/SubscribeGuardPanel';
+import SubscribeCenterPage from './pages/SubscribeCenterPage';
+import DNSPodPage from './pages/DNSPodPage';
+import DNSFailoverPage from './pages/DNSFailoverPage';
+import './styles/dns.css';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -44,7 +46,6 @@ const menu = [
   { type: 'heading', key: 'setting-heading', label: '设置' },
   { type: 'item', key: '/config/system', icon: <SettingOutlined />, label: '系统配置' },
   { type: 'item', key: '/config/payment', icon: <CreditCardOutlined />, label: '支付配置' },
-  { type: 'item', key: '/config/subscribe-guard', icon: <SafetyCertificateOutlined />, label: '订阅防护' },
   { type: 'heading', key: 'server-heading', label: '服务器' },
   { type: 'item', key: '/server/manage', icon: <DeploymentUnitOutlined />, label: '节点管理' },
   { type: 'item', key: '/server/group', icon: <DatabaseOutlined />, label: '权限组管理' },
@@ -52,7 +53,9 @@ const menu = [
   { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
   { type: 'item', key: '/server/address', icon: <DatabaseOutlined />, label: '节点地址' },
   { type: 'item', key: '/server/insider', icon: <UserOutlined />, label: '内鬼管理' },
-  { type: 'item', key: '/subscribe-access', icon: <BarChartOutlined />, label: '订阅统计' },
+  { type: 'item', key: '/subscribe-center', icon: <SafetyCertificateOutlined />, label: '订阅中心' },
+  { type: 'item', key: '/dns', icon: <GlobalOutlined />, label: '域名解析' },
+  { type: 'item', key: '/dns-failover', icon: <GlobalOutlined />, label: '备用监控' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
@@ -94,7 +97,8 @@ function Page({ path }: { path: string }) {
   if (route === '/server/insider') return <InsiderPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
-  if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;
+  if (route === '/config/subscribe-guard') return <SubscribeCenterPage initialTab="settings" />;
+  if (route === '/subscribe-center') return <SubscribeCenterPage />;
   const ticketMatch = route.match(/^\/ticket\/(\d+)/);
   if (ticketMatch) return <TicketDetailPage ticketId={ticketMatch[1]} />;
   if (route === '/ticket') return <TicketPage />;
@@ -103,7 +107,9 @@ function Page({ path }: { path: string }) {
   if (route === '/giftcard') return <GiftcardPage />;
   if (route === '/knowledge') return <KnowledgePage />;
   if (route === '/queue') return <QueuePage />;
-  if (route === '/subscribe-access') return <SubscribeAccessPage />;
+  if (route === '/subscribe-access') return <SubscribeCenterPage />;
+  if (route === '/dns') return <DNSPodPage />;
+  if (route === '/dns-failover') return <DNSFailoverPage />;
   if (route === '/invite-campaign') return <InviteCampaignPage />;
   return <Dashboard />;
 }
@@ -166,6 +172,7 @@ export default function App() {
 
   const selected = useMemo(() => {
     const route = path.split('?')[0];
+    if (route === '/subscribe-access' || route === '/config/subscribe-guard') return ['/subscribe-center'];
     return [route.startsWith('/ticket/') ? '/ticket' : route];
   }, [path]);
   const navigate = (key: string) => { if (!key.startsWith('/')) return; history.pushState(null, '', `/${adminPath}${key}`); setPath(key); if (isMobile) setCollapsed(true); };

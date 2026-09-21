@@ -230,6 +230,8 @@ func (s *DBService) fetchConfigFromStore(cfg *phpConfigFile, key string) map[str
 }
 
 func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, error) {
+	adminConfigUpdateMu.Lock()
+	defer adminConfigUpdateMu.Unlock()
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	if err != nil {
 		return false, err
@@ -264,7 +266,7 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 	sort.Strings(newKeys)
 	cfg.order = appendMissingConfigKeys(cfg.order, newKeys, cfg.values)
 
-	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
+	if err := writeJSONConfigFileAtomic(adminConfigPath(), cfg); err != nil {
 		return false, errors.New("修改失败")
 	}
 	if s.runtime != nil {

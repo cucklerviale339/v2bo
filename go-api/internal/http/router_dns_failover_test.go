@@ -1,0 +1,166 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"forest/go-api/internal/admin"
+	"forest/go-api/internal/config"
+	"forest/go-api/internal/session"
+)
+
+func dnsFailoverRouter(service *fakeDNSAdminService) http.Handler {
+	return NewRouter(config.Config{AdminPath: "control"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}), WithAdminService(service))
+}
+
+func dnsFailoverRequest(router http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer good")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestDNSFailoverRoutesRejectUnauthenticatedRequests(t *testing.T) {
+	router := NewRouter(config.Config{AdminPath: "control"}, WithSessionService(&fakeSessionService{authErr: session.ErrUnauthorized}), WithAdminService(&fakeDNSAdminService{}))
+	rec := dnsFailoverRequest(router, http.MethodGet, "/api/v1/control/dns-failover/settings", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDNSAdminBodiesAreBoundedBeforeAuthenticationReadsThem(t *testing.T) {
+	service := &fakeDNSAdminService{}
+	router := dnsFailoverRouter(service)
+	body := `{"name":"` + strings.Repeat("x", maxDNSFailoverJSONBody) + `"}`
+	for _, path := range []string{"/api/v1/control/dns-failover/probes", "/api/v1/control/dns/config/save"} {
+		recorder := dnsFailoverRequest(router, http.MethodPost, path, body)
+		if recorder.Code < 400 {
+			t.Fatalf("oversized body accepted at %s", path)
+		}
+		if !strings.Contains(recorder.Header().Get("Cache-Control"), "no-store") {
+			t.Fatal("DNS admin responses must not be cached")
+		}
+	}
+	if service.lastDNSProbeCreate.Name != "" || service.lastDNSPodConfigSave.SecretID != "" {
+		t.Fatal("oversized request reached admin service")
+	}
+}
+
+func TestDNSFailoverSettingsAndPersistentProbeSecretAreMapped(t *testing.T) {
+	service := &fakeDNSAdminService{dnsFailoverSettings: admin.DNSFailoverSettings{ProbeAPIURL: "https://probe.example/api"}, dnsProbeCreate: admin.DNSProbeCreateResult{Probe: admin.DNSProbeRecord{ID: 7, Name: "cn-a"}, Secret: "s p'ec"}, dnsProbes: []admin.DNSProbeRecord{{ID: 7, Name: "cn-a", Secret: "s p'ec"}}}
+	router := dnsFailoverRouter(service)
+	for _, tc := range []struct{ method, path, body string }{{http.MethodGet, "/api/v1/control/dns-failover/settings", ""}, {http.MethodPut, "/api/v1/control/dns-failover/settings", `{"dns_probe_api_url":"https://new.example"}`}, {http.MethodPost, "/api/v1/control/dns-failover/probes", `{"name":"cn-a"}`}, {http.MethodGet, "/api/v1/control/dns-failover/probes", ""}} {
+		rec := dnsFailoverRequest(router, tc.method, tc.path, tc.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+		if tc.method == http.MethodPost && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), "/api/v1/probe/install.sh")) {
+			t.Fatalf("create response=%s", rec.Body.String())
+		}
+		if tc.method == http.MethodGet && tc.path != "/api/v1/control/dns-failover/settings" && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), `"install_command"`)) {
+			t.Fatalf("listed probe omitted reusable installation data: %s", rec.Body.String())
+		}
+	}
+	if service.lastDNSFailoverSettingsSave.ProbeAPIURL != "https://new.example" || service.lastDNSProbeCreate.Name != "cn-a" {
+		t.Fatalf("request mapping failed: %#v %#v", service.lastDNSFailoverSettingsSave, service.lastDNSProbeCreate)
+	}
+}
+
+func TestDNSFailoverProbeDeleteRoute(t *testing.T) {
+	service := &fakeDNSAdminService{}
+	router := dnsFailoverRouter(service)
+	rec := dnsFailoverRequest(router, http.MethodDelete, "/api/v1/control/dns-failover/probes/7", "")
+	if rec.Code != http.StatusOK || service.lastDNSProbeDeleteID != 7 {
+		t.Fatalf("delete: status=%d id=%d body=%s", rec.Code, service.lastDNSProbeDeleteID, rec.Body.String())
+	}
+}
+
+func TestDNSFailoverRuleStatusRoute(t *testing.T) {
+	service := &fakeDNSAdminService{dnsStatus: admin.DNSFailoverStatus{Rule: admin.DNSFailoverRuleRecord{ID: 9}, Decision: admin.DNSFailoverDecisionStatus{Reason: "failure_threshold_pending"}}}
+	rec := dnsFailoverRequest(dnsFailoverRouter(service), http.MethodGet, "/api/v1/control/dns-failover/rules/9/status", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "failure_threshold_pending") || service.lastDNSRuleStatusID != 9 {
+		t.Fatalf("status=%d id=%d body=%s", rec.Code, service.lastDNSRuleStatusID, rec.Body.String())
+	}
+}
+
+func TestDNSFailoverLogRouteMapsFilters(t *testing.T) {
+	service := &fakeDNSAdminService{dnsLogs: admin.DNSFailoverLogListResult{Total: 1, Data: []admin.DNSFailoverLogRecord{{ID: 8, Outcome: "failure"}}}}
+	rec := dnsFailoverRequest(dnsFailoverRouter(service), http.MethodGet, "/api/v1/control/dns-failover/logs?group=9&stage=probe_result&current=2&page_size=10", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"outcome":"failure"`) || service.lastDNSLogs.GroupID == nil || *service.lastDNSLogs.GroupID != 9 || service.lastDNSLogs.Current != 2 {
+		t.Fatalf("status=%d request=%#v body=%s", rec.Code, service.lastDNSLogs, rec.Body.String())
+	}
+}
+
+func TestDNSFailoverRuleEventsAndManualRoutesMapRequests(t *testing.T) {
+	service := &fakeDNSAdminService{dnsRule: admin.DNSFailoverRuleRecord{ID: 9}, dnsEvents: admin.DNSFailoverEventListResult{Total: 31, Current: 2, PageSize: 10}}
+	router := dnsFailoverRouter(service)
+	requests := []struct{ method, path, body string }{{http.MethodGet, "/api/v1/control/dns-failover/rules", ""}, {http.MethodGet, "/api/v1/control/dns-failover/rules/9", ""}, {http.MethodPost, "/api/v1/control/dns-failover/rules", `{"name":"r","domain_id":1,"domain":"example.com","record_id":2,"subdomain":"@","targets":[{"sort":0,"name":"primary","dns_type":"A","dns_value":"1.1.1.1","check_host":"1.1.1.1","check_port":443,"enabled":true}],"probe_ids":[7]}`}, {http.MethodPut, "/api/v1/control/dns-failover/rules/9", `{"name":"r","domain_id":1,"domain":"example.com","record_id":2,"subdomain":"@","targets":[{"id":2,"sort":3,"name":"primary","dns_type":"A","dns_value":"1.1.1.1","check_host":"1.1.1.1","check_port":443,"enabled":true}]}`}, {http.MethodPatch, "/api/v1/control/dns-failover/rules/9/enabled", `{"enabled":false}`}, {http.MethodPost, "/api/v1/control/dns-failover/rules/9/manual-switch", `{"target_id":2}`}, {http.MethodDelete, "/api/v1/control/dns-failover/rules/9", ""}, {http.MethodGet, "/api/v1/control/dns-failover/events?group=9&event_type=switch&current=2&page_size=10", ""}}
+	for _, tc := range requests {
+		rec := dnsFailoverRequest(router, tc.method, tc.path, tc.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	if service.lastDNSRuleSave.ID == nil || *service.lastDNSRuleSave.ID != 9 || len(service.lastDNSRuleSave.Targets) != 1 || service.lastDNSRuleSave.Targets[0].Sort != 3 {
+		t.Fatalf("rule mapping=%#v", service.lastDNSRuleSave)
+	}
+	if service.lastDNSManualGroupID != 9 || service.lastDNSManualTargetID != 2 {
+		t.Fatalf("manual mapping=%d/%d", service.lastDNSManualGroupID, service.lastDNSManualTargetID)
+	}
+	if service.lastDNSEvents.GroupID == nil || *service.lastDNSEvents.GroupID != 9 || service.lastDNSEvents.EventType != "switch" || service.lastDNSEvents.Current != 2 || service.lastDNSEvents.PageSize != 10 {
+		t.Fatalf("events mapping=%#v", service.lastDNSEvents)
+	}
+}
+
+func TestDNSFailoverProbeEnabledAndRevokeMapToDisable(t *testing.T) {
+	service := &fakeDNSAdminService{}
+	router := dnsFailoverRouter(service)
+	if rec := dnsFailoverRequest(router, http.MethodPatch, "/api/v1/control/dns-failover/probes/7/enabled", `{"enabled":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", rec.Code, rec.Body.String())
+	}
+	if service.lastDNSProbeID != 7 || !service.lastDNSProbeEnabled {
+		t.Fatalf("enable mapping: id=%d enabled=%v", service.lastDNSProbeID, service.lastDNSProbeEnabled)
+	}
+	if rec := dnsFailoverRequest(router, http.MethodPatch, "/api/v1/control/dns-failover/probes/7/revoke", ""); rec.Code != http.StatusOK {
+		t.Fatalf("revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	if service.lastDNSProbeID != 7 || service.lastDNSProbeEnabled {
+		t.Fatalf("revoke mapping: id=%d enabled=%v", service.lastDNSProbeID, service.lastDNSProbeEnabled)
+	}
+}
+
+func TestDNSFailoverRoutesRejectMalformedJSONAndSurfaceManualConflict(t *testing.T) {
+	service := &fakeDNSAdminService{err: errors.New("busy DNS failover group")}
+	router := dnsFailoverRouter(service)
+	rec := dnsFailoverRequest(router, http.MethodPost, "/api/v1/control/dns-failover/probes", `{"name":`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = dnsFailoverRequest(router, http.MethodPost, "/api/v1/control/dns-failover/rules/1/manual-switch", `{"target_id":2}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("manual status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &payload)
+	if !strings.Contains(payload["message"].(string), "进行") {
+		t.Fatalf("manual message=%#v", payload)
+	}
+}
+
+func TestDNSFailoverInstallCommandEscapesURLAndParameters(t *testing.T) {
+	command := dnsFailoverInstallCommand("https://probe.example/a b/", "secret'; touch /tmp/pwned", "cn west")
+	for _, want := range []string{"https://probe.example/a b/api/v1/probe/install.sh?", "api_url=https%3A%2F%2Fprobe.example%2Fa+b", "token=secret%27%3B+touch+%2Ftmp%2Fpwned"} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("install command missing %q: %s", want, command)
+		}
+	}
+	if strings.Contains(command, "--token") || strings.Contains(command, "touch /tmp/pwned") {
+		t.Fatalf("install command must pass validated values in the request query: %s", command)
+	}
+}

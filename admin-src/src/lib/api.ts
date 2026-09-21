@@ -150,6 +150,21 @@ export async function apiPost(path: string, body: AnyRecord = {}, options: { for
   return parseResponse(res, { raw: options.raw });
 }
 
+async function apiJsonRequest(method: string, path: string, body?: AnyRecord) {
+  const res = await fetch(`/api/v1/${getAdminPath()}${path}`, {
+    method,
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Authorization: getAuth() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return parseResponse(res);
+}
+
+export const apiJsonPost = (path: string, body: AnyRecord = {}) => apiJsonRequest('POST', path, body);
+export const apiPut = (path: string, body: AnyRecord = {}) => apiJsonRequest('PUT', path, body);
+export const apiPatch = (path: string, body: AnyRecord = {}) => apiJsonRequest('PATCH', path, body);
+export const apiDelete = (path: string) => apiJsonRequest('DELETE', path);
+
 export async function passportLogin(email: string, password: string) {
   const res = await fetch('/api/v1/passport/auth/login', {
     method: 'POST',

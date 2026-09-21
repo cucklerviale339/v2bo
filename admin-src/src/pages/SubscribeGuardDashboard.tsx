@@ -9,7 +9,7 @@ const accountStatus = (row: any) => Number(row.banned) ? <Tag color="red">封禁
 const insiderText = (row: any) => row.insider_rule ? `${row.insider_rule.name} · ${row.insider_rule.host || '额外节点'} · ${row.insider_rule.extra_nodes_count} 个额外节点` : '按原节点地址规则下发';
 const countColumns = (label: string) => [{ title: label, dataIndex: 'value', render: copyText }, { title: '次数', dataIndex: 'count', width: 80 }];
 
-export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, onRule, refreshKey, children }: { selectedUserID: number; onUserSelect: (id: number) => void; onRule: (kind: string, value: string) => void; refreshKey: number; children: React.ReactNode }) {
+export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, onRule, refreshKey, children, showOverview = true }: { showOverview?: boolean; selectedUserID: number; onUserSelect: (id: number) => void; onRule: (kind: string, value: string) => void; refreshKey: number; children: React.ReactNode }) {
   const [stats, setStats] = useState<any>({});
   const [statsError, setStatsError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -122,6 +122,7 @@ export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, 
   const detailUser = detail?.user || {};
   const detailStats = detail?.stats || {};
   return <Space direction="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
+    {showOverview && <>
     <Space><Button loading={loading} onClick={() => { loadStats(); loadRank(); }}>刷新统计</Button><Typography.Text type="secondary">保留期内请求；关闭拦截时仍记录访问，观察模式记录命中但不拦截。</Typography.Text></Space>
     {statsError && <Alert type="error" showIcon message={statsError} />}
     <Row gutter={[16, 16]}>{[['总请求', stats.total], ['已放行', stats.allowed], ['已拦截', stats.blocked], ['频率限制', stats.rate_limited]].map(([label, value]) => <Col xs={12} md={6} key={label}><Card size="small"><Statistic title={label} value={value || 0} /></Card></Col>)}</Row>
@@ -142,7 +143,8 @@ export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, 
       {uaApplied && <Typography.Text type="secondary">匹配 {uaResult.matched} 条请求，关联 {uaResult.total} 位用户；{uaResult.unresolved} 条请求未识别用户。</Typography.Text>}
       <Table size="small" rowKey="user_id" loading={uaLoading} dataSource={uaResult.data} columns={[...rankColumns.slice(0, -1), { title: '操作', width: 220, render: (_: any, row: any) => <Space><Button size="small" onClick={() => onUserSelect(row.user_id)}>查看用户</Button><Button size="small" onClick={() => showMatching(row)}>匹配记录</Button></Space> }]} scroll={{ x: 1250 }} pagination={{ current: uaResult.current, total: uaResult.total, pageSize: 20, showSizeChanger: false, onChange: current => searchUA(uaApplied, current) }} />
     </Space></Card>
-    <Card size="small" title="订阅防控用户排行" extra={<Segmented value={rankSort} options={[{ label: '请求数最多', value: 'count' }, { label: 'IP 数最多', value: 'ip_count' }]} onChange={value => loadRank(String(value), 1)} />}><Table size="small" rowKey="user_id" loading={rankLoading} dataSource={rank.data} columns={rankColumns} scroll={{ x: 1250 }} pagination={{ current: rankPage, total: rank.total, pageSize: 20, showSizeChanger: false, onChange: current => loadRank(rankSort, current) }} /></Card>
+    <Card size="small" title="订阅请求用户排行" extra={<Segmented value={rankSort} options={[{ label: '请求数最多', value: 'count' }, { label: 'IP 数最多', value: 'ip_count' }]} onChange={value => loadRank(String(value), 1)} />}><Table size="small" rowKey="user_id" loading={rankLoading} dataSource={rank.data} columns={rankColumns} scroll={{ x: 1250 }} pagination={{ current: rankPage, total: rank.total, pageSize: 20, showSizeChanger: false, onChange: current => loadRank(rankSort, current) }} /></Card>
+    </>}
     {children}
     <Modal open={!!selectedUserID} title="订阅防护用户详情" width={1000} onCancel={() => onUserSelect(0)} footer={<Space>{detail && banButton(detailUser)}<Button onClick={() => onUserSelect(0)}>关闭</Button></Space>} destroyOnClose>
       <Spin spinning={detailLoading}>{detailError ? <Alert type="error" message={detailError} /> : detail && <Space direction="vertical" size="middle" style={{ width: '100%' }}>

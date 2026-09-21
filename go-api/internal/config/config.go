@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,6 +75,8 @@ type Config struct {
 	AndroidVersion                     string
 	AndroidDownloadURL                 string
 	PostgresDSN                        string
+	ProbeTrustedProxyCIDRs             []string
+	ProbeStorageDir                    string
 	QueueWorkers                       int
 	AppKey                             string
 	AccessLogEnabled                   bool
@@ -214,6 +217,8 @@ func Load() Config {
 		AndroidVersion:                     managedString("ANDROID_VERSION", "android_version", ""),
 		AndroidDownloadURL:                 managedString("ANDROID_DOWNLOAD_URL", "android_download_url", ""),
 		PostgresDSN:                        os.Getenv("POSTGRES_DSN"),
+		ProbeTrustedProxyCIDRs:             getEnvList("PROBE_TRUSTED_PROXY_CIDRS", DefaultProbeTrustedProxyCIDRs()),
+		ProbeStorageDir:                    getEnv("PROBE_STORAGE_DIR", "../storage/probe"),
 		QueueWorkers:                       int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                             os.Getenv("APP_KEY"),
 		AccessLogEnabled:                   getEnvBool("ACCESS_LOG_ENABLE", false),
@@ -274,6 +279,30 @@ func Load() Config {
 	}
 
 	return cfg
+}
+
+func DefaultProbeTrustedProxyCIDRs() []string {
+	return []string{
+		"127.0.0.0/8",
+		"::1/128",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"fc00::/7",
+	}
+}
+
+func ValidateProbeTrustedProxyCIDRs(values []string) error {
+	for index, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("PROBE_TRUSTED_PROXY_CIDRS entry %d is empty", index+1)
+		}
+		if _, err := netip.ParsePrefix(value); err != nil {
+			return fmt.Errorf("PROBE_TRUSTED_PROXY_CIDRS entry %d %q is invalid: %w", index+1, value, err)
+		}
+	}
+	return nil
 }
 
 func getEnv(key, fallback string) string {

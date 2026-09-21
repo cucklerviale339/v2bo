@@ -11,7 +11,7 @@ const modes: Record<string, string> = { off: '关闭', observe: '仅观察', enf
 const reasons: Record<string, string> = { ip: 'IP 黑名单', token: 'Token 黑名单', user: '用户订阅限制', empty_ua: '空 UA', crawler_ua: '脚本 UA', ua: 'UA 黑名单', ip_rate: 'IP 超频', token_rate: 'Token 超频', guard_unavailable: '防护异常，已放行' };
 const dateText = (value: number) => value ? new Date(value * 1000).toLocaleString() : '-';
 
-export default function SubscribeGuardPage() {
+export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requests' | 'crawler' | 'settings' }) {
   const [selectedUserID, setSelectedUserID] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const [policy, setPolicy] = useState<Policy | null>(null);
@@ -126,15 +126,14 @@ export default function SubscribeGuardPage() {
   </Card>;
 
   return <div className="legacy-page config-page subscribe-guard-page">
-    <h2 className="content-heading">订阅防护</h2>
     <Card className="block-card"><div className="block-content">
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Alert type="info" showIcon message="升级后默认关闭，现有订阅继续使用。建议先观察，再按需启用拦截。" description="防护请求单独记录，原有订阅统计和低流量统计继续保留。用户订阅限制只限制获取节点，不会封禁账号或踢掉已经连接的设备。" />
       {forceOff && <Alert type="warning" showIcon message="服务器已启用紧急关闭，当前所有防护规则均不执行。" />}
       {failure && <Alert type="error" showIcon message={failure} action={<Button onClick={loadConfig}>重试</Button>} />}
-      <SubscribeGuardDashboard selectedUserID={selectedUserID} onUserSelect={setSelectedUserID} onRule={quickRule} refreshKey={refreshKey}>
-      <SubscribeCrawlerPanel refreshKey={refreshKey} onUserSelect={setSelectedUserID} />
-      <Card title="最近订阅防护记录">
+      <SubscribeGuardDashboard showOverview={view === 'requests'} selectedUserID={selectedUserID} onUserSelect={setSelectedUserID} onRule={quickRule} refreshKey={refreshKey}>
+      {view === 'crawler' && <SubscribeCrawlerPanel refreshKey={refreshKey} onUserSelect={setSelectedUserID} />}
+      {view === 'requests' && <Card title="最近订阅请求与拦截记录">
       <Space wrap>
         <Input value={keyword} maxLength={255} style={{ width: 290 }} onChange={event => setKeyword(event.target.value)} placeholder="用户 ID / 邮箱 / 完整 IP / UA 关键词" onPressEnter={() => loadEvents()} />
         <Select value={outcome} style={{ width: 160 }} onChange={value => { setOutcome(value); loadEvents(0, keyword, value); }} options={[{ value: '', label: '全部请求' }, { value: 'matched', label: '命中规则' }, { value: 'blocked', label: '实际拦截' }, { value: 'allowed', label: '放行且成功' }, { value: 'failed', label: '业务失败' }]} />
@@ -158,9 +157,9 @@ export default function SubscribeGuardPage() {
         </Space> },
       ]} />
       <Space><Button disabled={!cursor || loading} onClick={() => loadEvents(0, appliedFilter.keyword, appliedFilter.outcome)}>最新记录</Button><Button disabled={loading || events.data?.length !== 50} onClick={() => loadEvents(events.data[events.data.length - 1].id, appliedFilter.keyword, appliedFilter.outcome)}>更早记录</Button></Space>
-      </Card>
+      </Card>}
       </SubscribeGuardDashboard>
-      {settings}
+      {view === 'settings' && settings}
     </Space>
     </div></Card>
   </div>;

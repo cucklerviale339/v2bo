@@ -235,7 +235,6 @@ export default function SubscribeAccessPage() {
   ];
 
   return <div className="legacy-page subscribe-access-page">
-    <div className="content-heading">订阅统计</div>
     <div className="block block-rounded">
       <div className="block-content p-0">
         <div className="row no-gutters">
