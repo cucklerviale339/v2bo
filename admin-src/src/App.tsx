@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, BarChartOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, BarChartOutlined, SafetyCertificateOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -28,6 +28,7 @@ import ClientEntryPage from './pages/ClientEntryPage';
 import NodeAddressPage from './pages/NodeAddressPage';
 import SubscribeAccessPage from './pages/SubscribeAccessPage';
 import InsiderPage from './pages/InsiderPage';
+import SubscribeGuardPage from './pages/SubscribeGuardPanel';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -43,6 +44,7 @@ const menu = [
   { type: 'heading', key: 'setting-heading', label: '设置' },
   { type: 'item', key: '/config/system', icon: <SettingOutlined />, label: '系统配置' },
   { type: 'item', key: '/config/payment', icon: <CreditCardOutlined />, label: '支付配置' },
+  { type: 'item', key: '/config/subscribe-guard', icon: <SafetyCertificateOutlined />, label: '订阅防护' },
   { type: 'heading', key: 'server-heading', label: '服务器' },
   { type: 'item', key: '/server/manage', icon: <DeploymentUnitOutlined />, label: '节点管理' },
   { type: 'item', key: '/server/group', icon: <DatabaseOutlined />, label: '权限组管理' },
@@ -92,6 +94,7 @@ function Page({ path }: { path: string }) {
   if (route === '/server/insider') return <InsiderPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
+  if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;
   const ticketMatch = route.match(/^\/ticket\/(\d+)/);
   if (ticketMatch) return <TicketDetailPage ticketId={ticketMatch[1]} />;
   if (route === '/ticket') return <TicketPage />;

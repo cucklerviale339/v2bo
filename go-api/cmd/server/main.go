@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"forest/go-api/internal/admin"
 	"forest/go-api/internal/background"
@@ -20,6 +21,7 @@ import (
 	"forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
+	"forest/go-api/internal/subscribeguard"
 	"forest/go-api/internal/telegram"
 	usersvc "forest/go-api/internal/user"
 )
@@ -49,6 +51,19 @@ func main() {
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
 	var backgroundRunner *background.Runner
+	guardOptions := []httpapi.Option{}
+	if db != nil {
+		guard := subscribeguard.NewStore(db, cfg.AppKey)
+		guardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		guardErr := guard.Ensure(guardCtx)
+		cancel()
+		if guardErr != nil {
+			log.Print("subscribe guard initialization failed; subscriptions remain available")
+		} else {
+			guardOptions = append(guardOptions, httpapi.WithSubscribeGuard(guard))
+			go guard.Run(ctx)
+		}
+	}
 	authCache := session.NewAuthCache(session.DefaultAuthCacheTTL)
 	jobQueue := queue.NewRuntime(cfg.QueueWorkers, 0)
 	jobQueue.Start()
@@ -70,8 +85,7 @@ func main() {
 
 	server := &http.Server{
 		Addr: cfg.Addr,
-		Handler: httpapi.NewRouter(
-			cfg,
+		Handler: httpapi.NewRouter(cfg, append(guardOptions,
 			httpapi.WithRuntimeConfig(runtimeConfig),
 			httpapi.WithReadyCheck(dbReadyCheck(db)),
 			httpapi.WithGuestService(guest.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)),
@@ -83,7 +97,7 @@ func main() {
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
 			httpapi.WithTelegramService(telegramService),
-		),
+		)...),
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 	}

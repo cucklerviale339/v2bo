@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Descriptions, Input, InputNumber, Modal, Select, Space, Table, Typography, message } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { apiGet, apiPost, bytes } from '../lib/api';
@@ -31,8 +31,14 @@ export default function SubscribeAccessPage() {
   const [appliedConsecutiveThresholdKB, setAppliedConsecutiveThresholdKB] = useState(200);
   const [consecutiveDays, setConsecutiveDays] = useState(3);
   const [appliedConsecutiveDays, setAppliedConsecutiveDays] = useState(3);
+  const statsRequest = useRef(0);
+  const detailRequest = useRef(0);
+  const uaRequest = useRef(0);
+  const lowTrafficRequest = useRef(0);
+  const consecutiveRequest = useRef(0);
 
   const load = async (current = 1, pageSize = payload.page_size || 20, search = appliedKeyword, order = sort) => {
+    const request = ++statsRequest.current;
     setLoading(true);
     try {
       const response = await apiGet('/subscribe-access/stats', {
@@ -41,37 +47,49 @@ export default function SubscribeAccessPage() {
         page_size: pageSize,
         sort: order,
       });
+      if (request !== statsRequest.current) return;
       const data = response?.data || { summary: {}, data: [], total: 0, current, page_size: pageSize };
       setPayload(data);
       setKeepDays(Number(data.log_keep_days || 7));
     } catch (error: any) {
-      message.error(error.message || '订阅统计加载失败');
+      if (request === statsRequest.current) message.error(error.message || '订阅统计加载失败');
     } finally {
-      setLoading(false);
+      if (request === statsRequest.current) setLoading(false);
     }
   };
 
   const showUserDetail = async (userID: number) => {
+    const request = ++detailRequest.current;
     setDetailLoading(true);
     setUserDetail({ user_id: userID });
     try {
       const response = await apiGet('/subscribe-access/user-detail', { id: userID });
+      if (request !== detailRequest.current) return;
       setUserDetail(response?.data || null);
     } catch (error: any) {
-      message.error(error.message || '用户订阅详情加载失败');
-      setUserDetail(null);
-    } finally { setDetailLoading(false); }
+      if (request === detailRequest.current) {
+        message.error(error.message || '用户订阅详情加载失败');
+        setUserDetail(null);
+      }
+    } finally {
+      if (request === detailRequest.current) setDetailLoading(false);
+    }
   };
 
   const searchUA = async (current = 1, pageSize = uaResult.page_size || 20, search = appliedUAKeyword) => {
     const value = search.trim();
     if (!value) { message.warning('请输入 User-Agent 关键词'); return; }
+    const request = ++uaRequest.current;
     setUALoading(true);
     try {
       const response = await apiGet('/subscribe-access/ua-search', { keyword: value, current, page_size: pageSize });
+      if (request !== uaRequest.current) return;
       setUAResult(response?.data || { data: [], total: 0, current, page_size: pageSize });
-    } catch (error: any) { message.error(error.message || 'UA 反查失败'); }
-    finally { setUALoading(false); }
+    } catch (error: any) {
+      if (request === uaRequest.current) message.error(error.message || 'UA 反查失败');
+    } finally {
+      if (request === uaRequest.current) setUALoading(false);
+    }
   };
 
   const applyUASearch = () => {
@@ -100,26 +118,30 @@ export default function SubscribeAccessPage() {
   };
 
   const loadLowTraffic = async (current = 1, pageSize = lowTraffic.page_size || 20, threshold = appliedTodayThresholdKB) => {
+    const request = ++lowTrafficRequest.current;
     setLowTrafficLoading(true);
     try {
       const response = await apiGet('/subscribe-access/low-traffic', { current, page_size: pageSize, threshold_kb: threshold });
+      if (request !== lowTrafficRequest.current) return;
       setLowTraffic(response?.data || { data: [], total: 0, current, page_size: pageSize, threshold_bytes: threshold * 1024 });
     } catch (error: any) {
-      message.error(error.message || '今日低流量用户加载失败');
+      if (request === lowTrafficRequest.current) message.error(error.message || '今日低流量用户加载失败');
     } finally {
-      setLowTrafficLoading(false);
+      if (request === lowTrafficRequest.current) setLowTrafficLoading(false);
     }
   };
 
   const loadConsecutiveTraffic = async (current = 1, pageSize = consecutiveTraffic.page_size || 20, threshold = appliedConsecutiveThresholdKB, days = appliedConsecutiveDays) => {
+    const request = ++consecutiveRequest.current;
     setConsecutiveLoading(true);
     try {
       const response = await apiGet('/subscribe-access/consecutive-low-traffic', { current, page_size: pageSize, threshold_kb: threshold, days });
+      if (request !== consecutiveRequest.current) return;
       setConsecutiveTraffic(response?.data || { data: [], total: 0, current, page_size: pageSize, threshold_bytes: threshold * 1024, days, dates: [] });
     } catch (error: any) {
-      message.error(error.message || '连续低流量用户加载失败');
+      if (request === consecutiveRequest.current) message.error(error.message || '连续低流量用户加载失败');
     } finally {
-      setConsecutiveLoading(false);
+      if (request === consecutiveRequest.current) setConsecutiveLoading(false);
     }
   };
 
@@ -127,6 +149,13 @@ export default function SubscribeAccessPage() {
     load(1, 20, '');
     loadLowTraffic(1, 20);
     loadConsecutiveTraffic(1, 20);
+    return () => {
+      statsRequest.current++;
+      detailRequest.current++;
+      uaRequest.current++;
+      lowTrafficRequest.current++;
+      consecutiveRequest.current++;
+    };
   }, []);
 
   const search = () => {

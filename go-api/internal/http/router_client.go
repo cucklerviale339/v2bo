@@ -343,6 +343,9 @@ func authenticateClientUser(w http.ResponseWriter, r *http.Request, service user
 		writeJSON(w, http.StatusForbidden, map[string]any{"message": "token is error"})
 		return 0, false
 	}
+	if !subscribeGuardAuthenticated(w, r, userID) {
+		return 0, false
+	}
 	return userID, true
 }
 

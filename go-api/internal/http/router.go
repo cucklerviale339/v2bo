@@ -39,6 +39,7 @@ type telegramWebhookService interface {
 }
 
 type routerState struct {
+	subscribeGuard    subscriptionGuardStore
 	readyCheck        func(context.Context) error
 	runtime           *config.RuntimeState
 	guest             guest.Service
@@ -201,8 +202,17 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			cfg = state.runtime.CurrentConfig()
 		}
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
+		guardWriter, guardRequest, guardFinish, guardBlocked := beginSubscribeGuard(w, r, cfg, state)
+		defer guardFinish()
+		if guardBlocked {
+			return
+		}
+		w, r = guardWriter, guardRequest
 
 		switch {
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/subscribe-access/guard/"):
+			handleAdminSubscribeGuard(w, r, state, cfg, strings.TrimPrefix(r.URL.Path, adminPrefix+"/subscribe-access/guard/"))
+			return
 		case r.URL.Path == "/healthz", r.URL.Path == "/readyz", r.URL.Path == "/api/_meta/runtime", r.URL.Path == "/monitor/api/stats":
 			mux.ServeHTTP(w, r)
 			return
@@ -6737,6 +6747,9 @@ func authenticateRequest(w http.ResponseWriter, r *http.Request, service session
 	identity, err := service.Authenticate(r.Context(), authToken, requireAdmin)
 	if err != nil {
 		handleSessionError(w, err)
+		return nil, false
+	}
+	if identity != nil && !subscribeGuardAuthenticated(w, r, identity.ID) {
 		return nil, false
 	}
 	return identity, true

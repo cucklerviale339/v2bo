@@ -97,27 +97,7 @@ func handleServerUniProxyAlive(w http.ResponseWriter, r *http.Request, cfg confi
 }
 
 func handleServerUniProxySensitive(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {
-	server, ok := lookupNodeServerQuery(w, r, cfg, service, "")
-	if !ok {
-		return true
-	}
-
-	events, err := decodeSensitiveAccessPayload(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
-		return true
-	}
-
-	if err := service.ReportSensitiveAccess(r.Context(), nodeapi.SensitiveAccessReportRequest{
-		NodeID:   server.ID,
-		NodeType: server.NodeType,
-		Events:   events,
-	}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
-		return true
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"data": true})
+	writeJSON(w, http.StatusGone, map[string]any{"message": "敏感访问功能已移除"})
 	return true
 }
 
@@ -387,16 +367,12 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 	return payload
 }
 
-func buildSensitiveAuditConfig(cfg config.Config) map[string]any {
-	interval := cfg.SubscribeGuardSensitiveInterval
-	if interval <= 0 {
-		interval = 60
-	}
+func buildSensitiveAuditConfig(_ config.Config) map[string]any {
 	return map[string]any{
-		"enable":          cfg.SubscribeGuardSensitiveEnable,
-		"rules":           cfg.SubscribeGuardSensitiveRules,
-		"report_interval": interval,
-		"log_client_ip":   cfg.SubscribeGuardSensitiveLogIP,
+		"enable":          false,
+		"rules":           []string{},
+		"report_interval": 60,
+		"log_client_ip":   false,
 	}
 }
 

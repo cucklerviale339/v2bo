@@ -159,7 +159,7 @@ func TestRouterServerUniProxyConfigEndpoint(t *testing.T) {
 	}
 }
 
-func TestRouterServerUniProxyConfigIncludesSensitiveAuditRules(t *testing.T) {
+func TestRouterServerUniProxyConfigDisablesLegacySensitiveAudit(t *testing.T) {
 	nodeService := &fakeNodeService{
 		server: nodeapi.ServerRecord{
 			ID:       7,
@@ -199,11 +199,11 @@ func TestRouterServerUniProxyConfigIncludesSensitiveAuditRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected sensitive_audit object, got %#v", payload["sensitive_audit"])
 	}
-	if sensitiveAudit["enable"] != true || sensitiveAudit["report_interval"] != float64(45) || sensitiveAudit["log_client_ip"] != true {
+	if sensitiveAudit["enable"] != false || sensitiveAudit["report_interval"] != float64(60) || sensitiveAudit["log_client_ip"] != false {
 		t.Fatalf("unexpected sensitive_audit config: %#v", sensitiveAudit)
 	}
 	rules, ok := sensitiveAudit["rules"].([]any)
-	if !ok || len(rules) != 2 || rules[0] != "suffix:example.com" || rules[1] != "keyword:test" {
+	if !ok || len(rules) != 0 {
 		t.Fatalf("unexpected sensitive rules: %#v", sensitiveAudit["rules"])
 	}
 }

@@ -1687,11 +1687,11 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected sensitive_audit object, got %#v", payload["sensitive_audit"])
 	}
-	if sensitiveAudit["enable"] != true || sensitiveAudit["report_interval"] != float64(30) || sensitiveAudit["log_client_ip"] != true {
+	if sensitiveAudit["enable"] != false || sensitiveAudit["report_interval"] != float64(60) || sensitiveAudit["log_client_ip"] != false {
 		t.Fatalf("unexpected sensitive audit: %#v", sensitiveAudit)
 	}
 	rules, ok := sensitiveAudit["rules"].([]any)
-	if !ok || len(rules) != 1 || rules[0] != "suffix:example.com" {
+	if !ok || len(rules) != 0 {
 		t.Fatalf("unexpected sensitive audit rules: %#v", sensitiveAudit["rules"])
 	}
 }
