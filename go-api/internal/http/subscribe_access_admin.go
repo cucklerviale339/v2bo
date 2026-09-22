@@ -9,7 +9,7 @@ import (
 	"forest/go-api/internal/session"
 )
 
-func handleAdminSubscribeAccessStats(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminSubscribeAccessStats(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -55,7 +55,7 @@ func handleAdminSubscribeAccessStats(w http.ResponseWriter, r *http.Request, ses
 	return true
 }
 
-func handleAdminSubscribeAccessUserDetail(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminSubscribeAccessUserDetail(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -82,7 +82,7 @@ func handleAdminSubscribeAccessUserDetail(w http.ResponseWriter, r *http.Request
 	return true
 }
 
-func handleAdminSubscribeAccessUASearch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminSubscribeAccessUASearch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -119,7 +119,7 @@ func handleAdminSubscribeAccessUASearch(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
-func handleAdminSubscribeAccessRetention(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminSubscribeAccessRetention(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -152,7 +152,7 @@ func handleAdminSubscribeAccessRetention(w http.ResponseWriter, r *http.Request,
 	return true
 }
 
-func handleAdminDailyLowTrafficUsers(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminDailyLowTrafficUsers(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -190,7 +190,7 @@ func handleAdminDailyLowTrafficUsers(w http.ResponseWriter, r *http.Request, ses
 	return true
 }
 
-func handleAdminConsecutiveLowTrafficUsers(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminConsecutiveLowTrafficUsers(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.SubscribeAccessService) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)

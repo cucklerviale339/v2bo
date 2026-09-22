@@ -112,7 +112,7 @@ export default function SubscribeAccessPage() {
     try {
       await apiPost('/subscribe-access/retention', { days });
       setKeepDays(days);
-      message.success(`日志保留期已设为 ${days} 天，过期记录已清理`);
+      message.success(`成功订阅日志保留期已设为 ${days} 天，过期记录已清理`);
       load(payload.current || 1);
     } catch (error: any) { message.error(error.message || '保存失败'); }
   };
@@ -254,7 +254,7 @@ export default function SubscribeAccessPage() {
       <div className="block-content p-0"><Table rowKey="user_id" loading={uaLoading} columns={uaUserColumns} dataSource={uaResult.data || []} pagination={{ current: uaResult.current || 1, pageSize: uaResult.page_size || 20, total: uaResult.total || 0, showSizeChanger: true }} onChange={(page) => searchUA(Number(page.current || 1), Number(page.pageSize || 20), appliedUAKeyword)} /></div>
     </div>
     <div className="block block-rounded">
-      <div className="block-header block-header-default"><div><h3 className="block-title">最近订阅请求</h3><Typography.Text type="secondary">展示最近 100 条成功订阅请求。</Typography.Text></div><Space><InputNumber value={keepDays} min={1} max={3650} precision={0} addonAfter="天保留" onChange={(value) => setKeepDays(Number(value || 7))} /><Button type="primary" onClick={saveRetention}>保存保留期</Button></Space></div>
+      <div className="block-header block-header-default"><div><h3 className="block-title">成功订阅日志</h3><Typography.Text type="secondary">展示最近 100 条成功订阅请求；这里的保留期只影响成功订阅日志。</Typography.Text></div><Space><InputNumber value={keepDays} min={1} max={3650} precision={0} addonAfter="天保留" onChange={(value) => setKeepDays(Number(value || 7))} /><Button type="primary" onClick={saveRetention}>保存成功订阅日志保留期</Button></Space></div>
       <div className="block-content p-0"><Table rowKey="id" pagination={false} columns={recentColumns} dataSource={payload.recent || []} scroll={{ x: 1000 }} /></div>
     </div>
     <div className="block block-rounded">

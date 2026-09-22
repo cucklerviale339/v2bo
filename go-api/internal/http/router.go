@@ -48,6 +48,7 @@ type routerState struct {
 	user              usersvc.Service
 	payment           payment.Service
 	admin             admin.Service
+	subscribeAccess   admin.SubscribeAccessService
 	dnsProbe          admin.DNSProbeService
 	dnsAdmin          admin.DNSManagementService
 	dnsProbeIP        probeRequestIPResolver
@@ -113,6 +114,9 @@ func WithPaymentService(service payment.Service) Option {
 func WithAdminService(service admin.Service) Option {
 	return func(state *routerState) {
 		state.admin = service
+		if subscribeAccess, ok := service.(admin.SubscribeAccessService); ok {
+			state.subscribeAccess = subscribeAccess
+		}
 		if dnsService, ok := service.(admin.DNSManagementService); ok {
 			state.dnsAdmin = dnsService
 		}
@@ -829,27 +833,27 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/stats":
-			if handleAdminSubscribeAccessStats(w, r, state.session, state.admin) {
+			if handleAdminSubscribeAccessStats(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/user-detail":
-			if handleAdminSubscribeAccessUserDetail(w, r, state.session, state.admin) {
+			if handleAdminSubscribeAccessUserDetail(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/ua-search":
-			if handleAdminSubscribeAccessUASearch(w, r, state.session, state.admin) {
+			if handleAdminSubscribeAccessUASearch(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/retention":
-			if handleAdminSubscribeAccessRetention(w, r, state.session, state.admin) {
+			if handleAdminSubscribeAccessRetention(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/low-traffic":
-			if handleAdminDailyLowTrafficUsers(w, r, state.session, state.admin) {
+			if handleAdminDailyLowTrafficUsers(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-access/consecutive-low-traffic":
-			if handleAdminConsecutiveLowTrafficUsers(w, r, state.session, state.admin) {
+			if handleAdminConsecutiveLowTrafficUsers(w, r, state.session, state.subscribeAccess) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/config/save":

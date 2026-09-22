@@ -114,7 +114,7 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
         ['mode', '订阅防护模式', '关闭：只记录访问，不执行规则；仅观察：记录命中，不拦截；正式拦截：按规则执行。', <Select style={{ width: 200 }} options={Object.entries(modes).map(([value, label]) => ({ value, label }))} />],
         ['ip_limit', 'IP 频率限制', '每 IP 每分钟请求数，0 不限制。共享出口可能有多个正常用户。', <InputNumber min={0} max={100000} precision={0} />],
         ['token_limit', 'Token 频率限制', '每 Token 每分钟请求数，0 不限制。', <InputNumber min={0} max={100000} precision={0} />],
-        ['keep_days', '请求日志保留天数', '仅清理新防护记录，不影响原订阅统计。', <InputNumber min={1} max={365} precision={0} />],
+        ['keep_days', '风控请求日志保留天数', '仅清理风控请求记录，不影响成功订阅日志和流量统计。', <InputNumber min={1} max={365} precision={0} />],
         ['block_empty_ua', '拦截空 UA', '开启后没有 User-Agent 的订阅请求会被拒绝。', <Switch />],
         ['block_crawler_ua', '拦截常见爬虫 UA', '默认只记录和统计。开启后，且防护模式为“正式拦截”时才会拦截；仅识别常用于拉取订阅或入口信息的 curl、wget、HTTPie、aria2、Python、aiohttp、urllib、requests、Go-http-client、Java、OkHttp、Apache HttpClient、libwww-perl、mechanize、Scrapy、Spider、Crawler、Bot。', <Switch />],
       ].map(([key, label, description, control]) => <div className="config-row" key={String(key)}><div className="config-row-copy"><div className="config-row-title">{label}</div><div className="config-row-desc">{description}</div></div><div className="config-row-control"><Form.Item name={String(key)} valuePropName={String(key).startsWith('block_') ? 'checked' : 'value'} rules={[{ required: true }]} style={{ marginBottom: 0 }}>{control}</Form.Item></div></div>)}
