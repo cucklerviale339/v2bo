@@ -1,0 +1,21 @@
+.subscribe-center-page{overflow-x:hidden;padding-bottom:24px}
+.subscribe-center-page>.ant-typography{margin:0 24px 8px;max-width:1100px}
+.subscribe-center-page>.ant-tabs{margin:0 24px 16px}
+.subscribe-center-page .subscribe-access-page,.subscribe-center-page .subscribe-guard-page{padding-bottom:0;min-width:0;max-width:100%;overflow-x:hidden}
+.subscribe-center-page .subscribe-access-page>.row{margin-left:0;margin-right:0}
+.subscribe-center-page .ant-space-vertical,.subscribe-center-page .ant-space-item,.subscribe-center-page .ant-card-body{min-width:0;max-width:100%}
+.subscribe-center-page .ant-table-wrapper{max-width:100%;overflow-x:auto}
+.subscribe-center-page .ant-table{min-width:0}
+.subscribe-center-page .config-row-copy{min-width:0}
+.subscribe-events-card .ant-card-body{min-width:0;overflow:hidden}
+.subscribe-events-toolbar{width:100%;align-items:center}
+.subscribe-events-summary{flex:1 1 260px;min-width:260px}
+.subscribe-events-table .ant-table-cell{vertical-align:top}
+.subscribe-event-user,.subscribe-event-ua,.subscribe-event-endpoint{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subscribe-event-user{text-align:left;padding-left:0;padding-right:0}
+.subscribe-event-result{align-items:flex-start}
+.subscribe-event-result .ant-space-item{max-width:100%}
+.subscribe-event-reason{display:block;max-width:100%;line-height:1.35;overflow-wrap:anywhere}
+.subscribe-event-token{white-space:nowrap}
+.subscribe-event-actions{max-width:100%}
+@media(max-width:768px){.subscribe-center-page>.ant-typography,.subscribe-center-page>.ant-tabs{margin-left:12px;margin-right:12px}.subscribe-center-page .subscribe-access-page>.row{margin-left:0;margin-right:0}.subscribe-center-page .config-row{padding:14px 8px}}

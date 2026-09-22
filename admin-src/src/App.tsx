@@ -31,6 +31,7 @@ import SubscribeCenterPage from './pages/SubscribeCenterPage';
 import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
 import './styles/dns.css';
+import './styles/subscribe.css';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;

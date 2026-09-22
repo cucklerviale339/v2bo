@@ -128,28 +128,27 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
   return <div className="legacy-page config-page subscribe-guard-page">
     <Card className="block-card"><div className="block-content">
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="升级后默认关闭，现有订阅继续使用。建议先观察，再按需启用拦截。" description="防护请求单独记录，原有订阅统计和低流量统计继续保留。用户订阅限制只限制获取节点，不会封禁账号或踢掉已经连接的设备。" />
       {forceOff && <Alert type="warning" showIcon message="服务器已启用紧急关闭，当前所有防护规则均不执行。" />}
       {failure && <Alert type="error" showIcon message={failure} action={<Button onClick={loadConfig}>重试</Button>} />}
-      <SubscribeGuardDashboard showOverview={view === 'requests'} selectedUserID={selectedUserID} onUserSelect={setSelectedUserID} onRule={quickRule} refreshKey={refreshKey}>
-      {view === 'crawler' && <SubscribeCrawlerPanel refreshKey={refreshKey} onUserSelect={setSelectedUserID} />}
-      {view === 'requests' && <Card title="最近订阅请求与拦截记录">
-      <Space wrap>
-        <Input value={keyword} maxLength={255} style={{ width: 290 }} onChange={event => setKeyword(event.target.value)} placeholder="用户 ID / 邮箱 / 完整 IP / UA 关键词" onPressEnter={() => loadEvents()} />
+      {view === 'settings' ? settings : <SubscribeGuardDashboard showOverview={view === 'requests'} selectedUserID={selectedUserID} onUserSelect={setSelectedUserID} onRule={quickRule} refreshKey={refreshKey}>
+        {view === 'crawler' && <SubscribeCrawlerPanel refreshKey={refreshKey} onUserSelect={setSelectedUserID} />}
+        {view === 'requests' && <Card className="subscribe-events-card" title="最近订阅请求与拦截记录">
+      <Space className="subscribe-events-toolbar" wrap>
+        <Input className="subscribe-events-keyword" value={keyword} maxLength={255} style={{ width: 290 }} onChange={event => setKeyword(event.target.value)} placeholder="用户 ID / 邮箱 / 完整 IP / UA 关键词" onPressEnter={() => loadEvents()} />
         <Select value={outcome} style={{ width: 160 }} onChange={value => { setOutcome(value); loadEvents(0, keyword, value); }} options={[{ value: '', label: '全部请求' }, { value: 'matched', label: '命中规则' }, { value: 'blocked', label: '实际拦截' }, { value: 'allowed', label: '放行且成功' }, { value: 'failed', label: '业务失败' }]} />
         <Button onClick={() => { loadEvents(); setRefreshKey(value => value + 1); }}>查询 / 刷新</Button>
-        <Typography.Text>保留期内匹配请求 {events.total || 0} · 命中 {events.matched || 0} · 拦截 {events.blocked || 0} · 业务失败 {events.failed || 0}</Typography.Text>
+        <Typography.Text className="subscribe-events-summary">保留期内匹配请求 {events.total || 0} · 命中 {events.matched || 0} · 拦截 {events.blocked || 0} · 业务失败 {events.failed || 0}</Typography.Text>
       </Space>
       {events.dropped > 0 && <Alert type="warning" message={`本进程因写入失败或队列繁忙未保存 ${events.dropped} 条风控记录，订阅响应未因此阻塞。`} />}
-      <Table loading={loading} rowKey="id" size="small" pagination={false} scroll={{ x: 1450 }} dataSource={events.data || []} columns={[
+      <Table className="subscribe-events-table" loading={loading} rowKey="id" size="small" pagination={false} scroll={{ x: 1555 }} dataSource={events.data || []} columns={[
         { title: '时间', dataIndex: 'time', width: 175, render: dateText },
-        { title: '用户', width: 200, render: (_: any, row: any) => row.user_id ? <Button type="link" onClick={() => setSelectedUserID(row.user_id)}>{row.email || `#${row.user_id}`}</Button> : '未识别用户' },
-        { title: '结果', width: 180, render: (_: any, row: any) => <Space direction="vertical" size={0}><Tag color={row.blocked ? 'red' : row.reason ? 'orange' : 'green'}>{row.blocked ? '拦截' : row.status >= 400 ? '业务失败' : '放行'} · {row.status}</Tag>{reasons[row.reason] || ''}{row.mode === 'observe' && <Typography.Text type="secondary">仅观察</Typography.Text>}</Space> },
+        { title: '用户', width: 200, render: (_: any, row: any) => row.user_id ? <Button type="link" className="subscribe-event-user" title={row.email || `#${row.user_id}`} onClick={() => setSelectedUserID(row.user_id)}>{row.email || `#${row.user_id}`}</Button> : '未识别用户' },
+        { title: '结果', width: 180, render: (_: any, row: any) => <Space className="subscribe-event-result" direction="vertical" size={2}><Tag color={row.blocked ? 'red' : row.reason ? 'orange' : 'green'}>{row.blocked ? '拦截' : row.status >= 400 ? '业务失败' : '放行'} · {row.status}</Tag>{reasons[row.reason] && <Typography.Text className="subscribe-event-reason" type="secondary">{reasons[row.reason]}</Typography.Text>}{row.mode === 'observe' && <Typography.Text className="subscribe-event-reason" type="secondary">仅观察</Typography.Text>}</Space> },
         { title: 'IP', dataIndex: 'ip', width: 160 },
-        { title: 'Token 指纹', dataIndex: 'token_hash', width: 140, render: (value: string) => value ? <Typography.Text copyable={{ text: value }}>{value.slice(0, 10)}…</Typography.Text> : '-' },
-        { title: 'UA', dataIndex: 'ua', ellipsis: true, width: 250 },
-        { title: '入口', dataIndex: 'endpoint', width: 130 },
-        { title: '操作', width: 320, render: (_: any, row: any) => <Space wrap size={4}>
+        { title: 'Token 指纹', dataIndex: 'token_hash', width: 140, render: (value: string) => value ? <Typography.Text className="subscribe-event-token" copyable={{ text: value }} title={value}>{value.slice(0, 10)}…</Typography.Text> : '-' },
+        { title: 'UA', dataIndex: 'ua', ellipsis: true, width: 250, render: (value: string) => <Typography.Text className="subscribe-event-ua" ellipsis={{ tooltip: value }} title={value}>{value || '-'}</Typography.Text> },
+        { title: '入口', dataIndex: 'endpoint', width: 130, render: (value: string) => <Typography.Text className="subscribe-event-endpoint" title={value}>{value || '-'}</Typography.Text> },
+        { title: '操作', width: 320, render: (_: any, row: any) => <Space className="subscribe-event-actions" wrap size={4}>
           <Button size="small" disabled={!policy || saving || !row.ip} onClick={() => quickRule('ip_block', row.ip)}>封 IP</Button>
           <Button size="small" disabled={!policy || saving || !row.ua} onClick={() => quickRule('ua_block', row.ua)}>封 UA</Button>
           <Button size="small" disabled={!policy || saving || !row.token_hash} onClick={() => quickRule('token_block', row.token_hash)}>封 Token</Button>
@@ -157,9 +156,8 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
         </Space> },
       ]} />
       <Space><Button disabled={!cursor || loading} onClick={() => loadEvents(0, appliedFilter.keyword, appliedFilter.outcome)}>最新记录</Button><Button disabled={loading || events.data?.length !== 50} onClick={() => loadEvents(events.data[events.data.length - 1].id, appliedFilter.keyword, appliedFilter.outcome)}>更早记录</Button></Space>
-      </Card>}
-      </SubscribeGuardDashboard>
-      {view === 'settings' && settings}
+        </Card>}
+      </SubscribeGuardDashboard>}
     </Space>
     </div></Card>
   </div>;
