@@ -512,12 +512,12 @@ type DBService struct {
 	dnsFailoverWorkerWG       sync.WaitGroup
 	dnsFailoverJobWG          sync.WaitGroup
 
-	clientEntryEnsureOnce sync.Once
-	clientEntryEnsureErr  error
-	nodeAddressEnsureOnce sync.Once
-	nodeAddressEnsureErr  error
-	subscribeAccessOnce   sync.Once
-	subscribeAccessErr    error
+	clientEntryEnsureOnce   sync.Once
+	clientEntryEnsureErr    error
+	nodeAddressEnsureOnce   sync.Once
+	nodeAddressEnsureErr    error
+	subscribeAccessEnsureMu sync.Mutex
+	subscribeAccessSchemaOK bool
 }
 
 type paymentRow struct {

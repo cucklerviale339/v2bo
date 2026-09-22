@@ -12,15 +12,25 @@ import (
 
 const dailyLowTrafficThresholdBytes int64 = 200 * 1024
 
-func (s *DBService) GetSubscribeAccessStats(ctx context.Context, req SubscribeAccessStatsRequest) (map[string]any, error) {
+func (s *DBService) ensureSubscribeAccessSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
-		return nil, ErrUnavailable
+		return ErrUnavailable
 	}
-	s.subscribeAccessOnce.Do(func() {
-		s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db)
-	})
-	if s.subscribeAccessErr != nil {
-		return nil, s.subscribeAccessErr
+	s.subscribeAccessEnsureMu.Lock()
+	defer s.subscribeAccessEnsureMu.Unlock()
+	if s.subscribeAccessSchemaOK {
+		return nil
+	}
+	if err := postgres.EnsureSubscribeAccessSchema(ctx, s.db); err != nil {
+		return err
+	}
+	s.subscribeAccessSchemaOK = true
+	return nil
+}
+
+func (s *DBService) GetSubscribeAccessStats(ctx context.Context, req SubscribeAccessStatsRequest) (map[string]any, error) {
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return nil, err
 	}
 
 	current := req.Current
@@ -179,9 +189,8 @@ func (s *DBService) GetSubscribeAccessUserDetail(ctx context.Context, userID int
 	if userID <= 0 {
 		return nil, fmt.Errorf("用户 ID 无效")
 	}
-	s.subscribeAccessOnce.Do(func() { s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db) })
-	if s.subscribeAccessErr != nil {
-		return nil, s.subscribeAccessErr
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return nil, err
 	}
 	var email, planName string
 	var planID, expiredAt, transferEnable, used, banned int64
@@ -235,9 +244,8 @@ func (s *DBService) SearchSubscribeAccessByUA(ctx context.Context, keyword strin
 	if s == nil || s.db == nil {
 		return nil, ErrUnavailable
 	}
-	s.subscribeAccessOnce.Do(func() { s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db) })
-	if s.subscribeAccessErr != nil {
-		return nil, s.subscribeAccessErr
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return nil, err
 	}
 	keyword = strings.TrimSpace(keyword)
 	if current <= 0 {
@@ -279,9 +287,8 @@ func (s *DBService) SetSubscribeAccessRetention(ctx context.Context, days int64)
 	if days < 1 || days > 3650 {
 		return false, fmt.Errorf("保留天数无效")
 	}
-	s.subscribeAccessOnce.Do(func() { s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db) })
-	if s.subscribeAccessErr != nil {
-		return false, s.subscribeAccessErr
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return false, err
 	}
 	now := time.Now().Unix()
 	if _, err := s.db.ExecContext(ctx, `UPDATE v2_subscribe_access_config SET log_keep_days = $1, updated_at = $2 WHERE id = 1`, days, now); err != nil {
@@ -294,14 +301,8 @@ func (s *DBService) SetSubscribeAccessRetention(ctx context.Context, days int64)
 }
 
 func (s *DBService) GetDailyLowTrafficUsers(ctx context.Context, current, pageSize, thresholdBytes int64) (map[string]any, error) {
-	if s == nil || s.db == nil {
-		return nil, ErrUnavailable
-	}
-	s.subscribeAccessOnce.Do(func() {
-		s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db)
-	})
-	if s.subscribeAccessErr != nil {
-		return nil, s.subscribeAccessErr
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return nil, err
 	}
 	if current <= 0 {
 		current = 1
@@ -374,14 +375,8 @@ LIMIT $4 OFFSET $5`, dayStart, dayEnd, thresholdBytes, pageSize, (current-1)*pag
 }
 
 func (s *DBService) GetConsecutiveLowTrafficUsers(ctx context.Context, current, pageSize, thresholdBytes, days int64) (map[string]any, error) {
-	if s == nil || s.db == nil {
-		return nil, ErrUnavailable
-	}
-	s.subscribeAccessOnce.Do(func() {
-		s.subscribeAccessErr = postgres.EnsureSubscribeAccessSchema(ctx, s.db)
-	})
-	if s.subscribeAccessErr != nil {
-		return nil, s.subscribeAccessErr
+	if err := s.ensureSubscribeAccessSchema(ctx); err != nil {
+		return nil, err
 	}
 	if current <= 0 {
 		current = 1

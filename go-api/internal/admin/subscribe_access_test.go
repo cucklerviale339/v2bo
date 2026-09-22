@@ -2,11 +2,33 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestEnsureSubscribeAccessSchemaRetriesAfterFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_subscribe_access_log`).WillReturnError(errors.New("temporary database failure"))
+	expectSubscribeAccessSchema(mock)
+	service := &DBService{db: db}
+	if err := service.ensureSubscribeAccessSchema(context.Background()); err == nil {
+		t.Fatal("first schema initialization unexpectedly succeeded")
+	}
+	if err := service.ensureSubscribeAccessSchema(context.Background()); err != nil {
+		t.Fatalf("schema initialization did not retry: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
 
 func expectSubscribeAccessSchema(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_subscribe_access_log`).
