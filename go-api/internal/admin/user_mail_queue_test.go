@@ -15,11 +15,17 @@ type captureQueue struct {
 	queueNames []string
 	jobNames   []string
 	runNow     bool
+	jobs       []queue.JobFunc
+	err        error
 }
 
 func (c *captureQueue) Enqueue(queueName, jobName string, fn queue.JobFunc) error {
 	c.queueNames = append(c.queueNames, queueName)
 	c.jobNames = append(c.jobNames, jobName)
+	if c.err != nil {
+		return c.err
+	}
+	c.jobs = append(c.jobs, fn)
 	if c.runNow {
 		return fn(context.Background())
 	}
@@ -31,7 +37,10 @@ func (c *captureQueue) Snapshot() queue.Snapshot {
 }
 
 func TestDispatchUserMailJobsEnqueuesSingleBatchJob(t *testing.T) {
-	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
+	service, mock := newBulkMailTestService(t)
+	service.WithQueueRuntime(&captureQueue{runNow: true})
+	expectAllowedMail(mock, 1, "a@example.com", nil)
+	expectAllowedMail(mock, 2, "b@example.com", nil)
 	var sent []string
 	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
 		sent = append(sent, to)
@@ -40,7 +49,7 @@ func TestDispatchUserMailJobsEnqueuesSingleBatchJob(t *testing.T) {
 
 	err := service.dispatchUserMailJobs(
 		context.Background(),
-		[]string{"a@example.com", "b@example.com"},
+		[]bulkMailRecipient{{1, "a@example.com"}, {2, "b@example.com"}},
 		"Notice",
 		"Hello",
 		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "default"},
@@ -59,7 +68,11 @@ func TestDispatchUserMailJobsEnqueuesSingleBatchJob(t *testing.T) {
 }
 
 func TestDispatchUserMailJobsWaitsBetweenEmails(t *testing.T) {
-	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
+	service, mock := newBulkMailTestService(t)
+	service.WithQueueRuntime(&captureQueue{runNow: true})
+	expectAllowedMail(mock, 1, "a@example.com", nil)
+	expectAllowedMail(mock, 2, "b@example.com", nil)
+	expectAllowedMail(mock, 3, "c@example.com", nil)
 	var sent []string
 	var waits []string
 	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
@@ -73,7 +86,7 @@ func TestDispatchUserMailJobsWaitsBetweenEmails(t *testing.T) {
 
 	err := service.dispatchUserMailJobs(
 		context.Background(),
-		[]string{"a@example.com", "b@example.com", "c@example.com"},
+		[]bulkMailRecipient{{1, "a@example.com"}, {2, "b@example.com"}, {3, "c@example.com"}},
 		"Notice",
 		"Hello",
 		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "default", bulkIntervalSeconds: 2},
@@ -101,7 +114,9 @@ func TestDispatchUserMailJobsRendersNotifyTemplate(t *testing.T) {
 		t.Fatalf("write notify template: %v", err)
 	}
 
-	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
+	service, mock := newBulkMailTestService(t)
+	service.WithQueueRuntime(&captureQueue{runNow: true})
+	expectAllowedMail(mock, 1, "a@example.com", nil)
 	var body string
 	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, renderedBody string) error {
 		body = renderedBody
@@ -110,7 +125,7 @@ func TestDispatchUserMailJobsRendersNotifyTemplate(t *testing.T) {
 
 	err := service.dispatchUserMailJobs(
 		context.Background(),
-		[]string{"a@example.com"},
+		[]bulkMailRecipient{{1, "a@example.com"}},
 		"Notice",
 		"Line1\nLine2",
 		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "forest-v2"},

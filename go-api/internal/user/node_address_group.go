@@ -3,9 +3,9 @@ package user
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
+	"forest/go-api/internal/platform/userselector"
 	"forest/go-api/internal/subscribelink"
 )
 
@@ -160,51 +160,13 @@ func nodeAddressServerKey(serverType string, serverID int64) string {
 }
 
 func nodeAddressExactIDTokensMatch(tokens []string, value int64) bool {
-	if value <= 0 {
-		return false
-	}
-	for _, token := range tokens {
-		for _, part := range strings.Split(token, ",") {
-			next, err := strconv.ParseInt(strings.TrimSpace(strings.Trim(part, `"'`)), 10, 64)
-			if err == nil && next == value {
-				return true
-			}
-		}
-	}
-	return false
+	return userselector.MatchesIDs(tokens, value)
 }
 
 func nodeAddressIDRangeTokensMatch(tokens []string, value int64) bool {
-	if value <= 0 {
-		return false
-	}
-	for _, token := range tokens {
-		for _, part := range strings.Split(token, ",") {
-			start, end, ok := parseNodeAddressIDRange(part)
-			if ok && value >= start && value <= end {
-				return true
-			}
-		}
-	}
-	return false
+	return userselector.MatchesRanges(tokens, value)
 }
 
 func parseNodeAddressIDRange(token string) (int64, int64, bool) {
-	token = strings.TrimSpace(strings.Trim(token, `"'`))
-	parts := strings.Split(token, "-")
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-	start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
-	if err != nil || start <= 0 {
-		return 0, 0, false
-	}
-	end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-	if err != nil || end <= 0 {
-		return 0, 0, false
-	}
-	if end < start {
-		start, end = end, start
-	}
-	return start, end, true
+	return userselector.ParseRange(token)
 }

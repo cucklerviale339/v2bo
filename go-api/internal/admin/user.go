@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/mail"
 	"net/url"
@@ -960,31 +961,12 @@ func (s *DBService) SendUserMail(ctx context.Context, req UserMailRequest) (bool
 		return false, errors.New("发送内容不能为空")
 	}
 
-	whereClause, args, err := s.buildUserWhere(ctx, req.Filters)
+	recipients, preview, err := s.selectBulkMailRecipients(ctx, req)
 	if err != nil {
 		return false, err
 	}
-	sortExpr := sanitizeUserSort(req.Sort)
-	sortType := sanitizeAdminSortType(req.SortType)
-	rows, err := s.db.QueryContext(ctx, `SELECT email FROM v2_user u`+whereClause+` ORDER BY `+sortExpr+` `+sortType, args...)
-	if err != nil {
-		return false, fmt.Errorf("query admin mail users: %w", err)
-	}
-	defer rows.Close()
-
-	emails := make([]string, 0)
-	for rows.Next() {
-		var email string
-		if err := rows.Scan(&email); err != nil {
-			return false, fmt.Errorf("scan admin mail user: %w", err)
-		}
-		email = strings.TrimSpace(email)
-		if email != "" {
-			emails = append(emails, email)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterate admin mail users: %w", err)
+	if preview.Eligible == 0 {
+		return false, errors.New("排除内鬼名单及无收件地址用户后，没有可发送用户")
 	}
 
 	mailConfig, err := s.loadBulkMailConfig()
@@ -992,7 +974,7 @@ func (s *DBService) SendUserMail(ctx context.Context, req UserMailRequest) (bool
 		return false, err
 	}
 
-	if err := s.dispatchUserMailJobs(ctx, emails, req.Subject, req.Content, mailConfig); err != nil {
+	if err := s.dispatchUserMailJobs(ctx, recipients, req.Subject, req.Content, mailConfig); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1150,55 +1132,73 @@ type bulkMailConfig struct {
 	bulkIntervalSeconds int64
 }
 
-func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, subject, content string, cfg bulkMailConfig) error {
-	emailList := make([]string, 0, len(emails))
-	for _, email := range emails {
-		email = strings.TrimSpace(email)
-		if email != "" {
-			emailList = append(emailList, email)
-		}
+func (s *DBService) dispatchUserMailJobs(ctx context.Context, recipients []bulkMailRecipient, subject, content string, cfg bulkMailConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if len(emailList) == 0 {
-		return nil
+	if len(recipients) == 0 {
+		return errors.New("没有可发送用户")
 	}
+	recipientList := append([]bulkMailRecipient(nil), recipients...)
 	if cfg.bulkIntervalSeconds < 0 {
 		cfg.bulkIntervalSeconds = 0
 	}
 
 	runBatch := func(jobCtx context.Context) error {
 		var batchErr error
-		for idx, email := range emailList {
+		var sent, failed, skipped int
+		defer func() {
+			log.Printf("bulk mail batch: selected=%d sent=%d failed=%d skipped=%d remaining=%d", len(recipientList), sent, failed, skipped, len(recipientList)-sent-failed-skipped)
+		}()
+		waitBeforeNext := false
+		renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
+		for _, recipient := range recipientList {
+			if err := jobCtx.Err(); err != nil {
+				return err
+			}
+			if waitBeforeNext && cfg.bulkIntervalSeconds > 0 {
+				if err := s.sleepContext(jobCtx, time.Duration(cfg.bulkIntervalSeconds)*time.Second); err != nil {
+					return err
+				}
+			}
+			waitBeforeNext = false
+			allowed, err := s.bulkMailRecipientAllowed(jobCtx, recipient)
+			if err != nil {
+				log.Printf("bulk mail stopped before user_id=%d: %v", recipient.ID, err)
+				return err
+			}
+			if !allowed {
+				skipped++
+				log.Printf("bulk mail skipped user_id=%d: insider match or recipient changed", recipient.ID)
+				continue
+			}
+			if err := jobCtx.Err(); err != nil {
+				return err
+			}
 			var sendErr error
 			if cfg.host == "" {
 				sendErr = errors.New("邮件服务未配置")
 			} else {
-				renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
-				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, email, subject, renderedBody)
+				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, recipient.Email, subject, renderedBody)
 			}
-			_ = s.insertMailLog(jobCtx, email, subject, sendErr)
+			waitBeforeNext = true
+			_ = s.insertMailLog(jobCtx, recipient.Email, subject, sendErr)
+			if sendErr != nil {
+				failed++
+			} else {
+				sent++
+			}
 			if sendErr != nil && batchErr == nil {
 				batchErr = sendErr
-			}
-			if idx >= len(emailList)-1 || cfg.bulkIntervalSeconds <= 0 {
-				continue
-			}
-			if err := s.sleepContext(jobCtx, time.Duration(cfg.bulkIntervalSeconds)*time.Second); err != nil {
-				if batchErr == nil {
-					batchErr = err
-				}
-				break
 			}
 		}
 		return batchErr
 	}
 
 	if s.jobs != nil {
-		if err := s.jobs.Enqueue("send_email_mass", "batch:"+subject, runBatch); err == nil {
-			return nil
-		}
+		return s.jobs.Enqueue("send_email_mass", "batch:"+subject, runBatch)
 	}
-	_ = runBatch(ctx)
-	return nil
+	return runBatch(ctx)
 }
 
 func (s *DBService) adminMailSender() func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {

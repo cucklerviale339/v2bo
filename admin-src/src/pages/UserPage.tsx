@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import { Alert, Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { AccountBookOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -254,17 +254,41 @@ function UserGenerateModal({ open, plans, onClose, onDone }: { open: boolean; pl
 }
 
 
-function UserMailModal({ open, filtered, onClose, onSubmit }: { open: boolean; filtered: boolean; onClose: () => void; onSubmit: (values: any) => Promise<void> }) {
+type MailPreview = { total: number; excluded: number; unavailable: number; eligible: number };
+
+function UserMailModal({ open, filters, onClose, onSubmit }: { open: boolean; filters: any[]; onClose: () => void; onSubmit: (values: any) => Promise<void> }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [previewState, setPreviewState] = useState<{ key: string; data?: MailPreview; error?: string }>();
+  const filterKey = JSON.stringify(filters);
+  const previewKey = `${filterKey}:${revision}`;
+  const currentPreview = previewState?.key === previewKey ? previewState : undefined;
+  const preview = currentPreview?.data;
+  const previewLoading = !currentPreview;
 
   useEffect(() => {
     if (!open) return;
     form.resetFields();
-    form.setFieldsValue({ receiver: filtered ? '过滤用户' : '全部用户', subject: '', content: '' });
-  }, [open, filtered]);
+    form.setFieldsValue({ subject: '', content: '' });
+  }, [open]);
+
+  useEffect(() => {
+    let active = true;
+    setPreviewState(undefined);
+    if (!open) return;
+    apiPost('/user/mailPreview', { filter: JSON.parse(filterKey) }, { form: true })
+      .then((res) => {
+        if (active) setPreviewState({ key: previewKey, data: res.data });
+      })
+      .catch((error) => {
+        if (active) setPreviewState({ key: previewKey, error: error.message || '收件人预览失败' });
+      });
+    return () => { active = false; };
+  }, [open, filterKey, previewKey]);
 
   const submit = async () => {
+    if (loading || !preview || preview.eligible === 0) return;
     const values = await form.validateFields();
     setLoading(true);
     try {
@@ -278,9 +302,26 @@ function UserMailModal({ open, filtered, onClose, onSubmit }: { open: boolean; f
     }
   };
 
-  return <Modal title="发送邮件" open={open} onCancel={onClose} onOk={submit} confirmLoading={loading} destroyOnHidden>
+  return <Modal title="发送邮件" open={open} onCancel={onClose} onOk={submit} okText="提交群发" cancelText="取消" confirmLoading={loading} okButtonProps={{ disabled: !preview || preview.eligible === 0 }} centered destroyOnHidden>
     <Form form={form} layout="vertical">
-      <Form.Item name="receiver" label="收件人"><Input disabled /></Form.Item>
+      <Form.Item label="收件人">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space wrap>
+            <span>{filters.length ? '当前筛选用户' : '全部用户'}</span>
+            <Button size="small" type="text" icon={<ReloadOutlined />} loading={previewLoading} disabled={loading} onClick={() => setRevision((value) => value + 1)}>刷新人数</Button>
+          </Space>
+          {preview && <Space wrap>
+            <Tag>匹配 {preview.total} 人</Tag>
+            <Tag color="orange">排除内鬼 {preview.excluded} 人</Tag>
+            {preview.unavailable > 0 && <Tag>无收件地址 {preview.unavailable} 人</Tag>}
+            <Tag color={preview.eligible > 0 ? 'blue' : 'default'}>可发送 {preview.eligible} 人</Tag>
+          </Space>}
+          <Alert showIcon type={currentPreview?.error ? 'error' : preview?.eligible === 0 ? 'warning' : 'info'}
+            style={!currentPreview?.error && preview?.eligible !== 0 ? { background: '#fafafa', borderColor: '#e5e5e5' } : undefined}
+            message={currentPreview?.error || (preview?.eligible === 0 ? '没有可发送用户，请调整筛选或检查内鬼名单。' : '自动排除内鬼管理中的用户（含停用规则）。')}
+            description="按指定用户和 ID 范围排除；实际发送前会再次核对名单，人数可能变化。" />
+        </Space>
+      </Form.Item>
       <Form.Item name="subject" label="主题" rules={[{ required: true, message: '请输入邮件主题' }]}><Input placeholder="请输入邮件主题" /></Form.Item>
       <Form.Item name="content" label="发送内容" rules={[{ required: true, message: '请输入邮件内容' }]}><Input.TextArea rows={12} placeholder="请输入邮件内容" /></Form.Item>
     </Form>
@@ -528,6 +569,6 @@ export default function UserPage() {
     <UserTrafficModal user={trafficUser} open={!!trafficUser} onClose={() => setTrafficUser(null)} />
     <UserAssignOrderModal user={assignUser} open={!!assignUser} plans={plans} onClose={() => setAssignUser(null)} onDone={() => load()} />
     <UserGenerateModal open={generateOpen} plans={plans} onClose={() => setGenerateOpen(false)} onDone={() => load()} />
-    <UserMailModal open={mailOpen} filtered={effectiveFilters.length > 0} onClose={() => setMailOpen(false)} onSubmit={sendMail} />
+    <UserMailModal open={mailOpen} filters={effectiveFilters} onClose={() => setMailOpen(false)} onSubmit={sendMail} />
   </div>;
 }

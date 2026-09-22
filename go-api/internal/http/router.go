@@ -596,6 +596,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleStaffUserUpdate(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == "/api/v1/staff/user/mailPreview":
+			if handleUserMailPreview(w, r, state.session, state.admin, true) {
+				return
+			}
 		case r.URL.Path == "/api/v1/staff/user/sendMail":
 			if handleStaffUserSendMail(w, r, state.session, state.admin) {
 				return
@@ -682,6 +686,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/user/dumpCSV":
 			if handleAdminUserDumpCSV(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/user/mailPreview":
+			if handleUserMailPreview(w, r, state.session, state.admin, false) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/user/sendMail":
@@ -3521,7 +3529,7 @@ func handleStaffUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readUserMailInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
@@ -3847,7 +3855,7 @@ func handleAdminUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readUserMailInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
