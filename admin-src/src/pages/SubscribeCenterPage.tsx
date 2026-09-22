@@ -6,25 +6,27 @@ import SubscribeGuardPage from './SubscribeGuardPanel';
 type Tab = 'stats' | 'requests' | 'crawler' | 'settings';
 
 export default function SubscribeCenterPage({ initialTab = 'stats' }: { initialTab?: Tab }) {
-  const [activeKey, setActiveKey] = useState<Tab>(initialTab);
-  const [guardVisited, setGuardVisited] = useState(initialTab !== 'stats');
+  const [activeKey, setActiveKey] = useState<Tab>(initialTab === 'settings' ? 'stats' : initialTab);
+  const guardView = activeKey === 'requests' || activeKey === 'crawler' ? activeKey : 'settings';
 
   return (
     <div className="legacy-page subscribe-center-page">
       <div className="content-heading">订阅中心</div>
-      <Typography.Paragraph type="secondary">统计始终可用。订阅统计展示成功获取订阅及低流量用户；请求记录包含放行、失败和拦截。爬虫 UA 默认只记录，拦截需单独开启。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">订阅统计与防护设置已合并展示。统计始终可用；请求记录包含放行、失败和拦截；爬虫 UA 默认只记录，拦截需单独开启。</Typography.Paragraph>
       <Tabs
         activeKey={activeKey}
-        onChange={value => { setActiveKey(value as Tab); if (value !== 'stats') setGuardVisited(true); }}
+        onChange={value => setActiveKey(value as Tab)}
         items={[
-          { key: 'stats', label: '订阅统计' },
+          { key: 'stats', label: '统计与防护' },
           { key: 'requests', label: '请求与拦截记录' },
           { key: 'crawler', label: '爬虫 UA 用户' },
-          { key: 'settings', label: '防护设置' },
         ]}
       />
-      <div hidden={activeKey !== 'stats'}><SubscribeAccessPage /></div>
-      {guardVisited && <div hidden={activeKey === 'stats'}><SubscribeGuardPage view={activeKey === 'stats' ? 'requests' : activeKey} /></div>}
+      <div hidden={activeKey !== 'stats'}>
+        <SubscribeAccessPage />
+        <div id="subscribe-guard-settings"><SubscribeGuardPage view="settings" /></div>
+      </div>
+      <div hidden={activeKey === 'stats'}><SubscribeGuardPage view={guardView} /></div>
     </div>
   );
 }

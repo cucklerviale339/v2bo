@@ -83,7 +83,7 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
   };
   const quickRule = (kind: string, value: string) => {
     if (!policy || saving) return;
-    if (dirty) { message.warning('请先保存或放弃防护设置中的修改，再使用快捷封禁'); return; }
+    if (dirty) { message.warning('请先保存或放弃当前订阅防护设置中的修改，再使用快捷封禁'); return; }
     const normalizedValue = kind.startsWith('ua_') ? value.trim().toLowerCase() : value.trim();
     Modal.confirm({
       title: `确认添加${kinds[kind]}？`,
@@ -116,7 +116,7 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
         ['token_limit', 'Token 频率限制', '每 Token 每分钟请求数，0 不限制。', <InputNumber min={0} max={100000} precision={0} />],
         ['keep_days', '请求日志保留天数', '仅清理新防护记录，不影响原订阅统计。', <InputNumber min={1} max={365} precision={0} />],
         ['block_empty_ua', '拦截空 UA', '开启后没有 User-Agent 的订阅请求会被拒绝。', <Switch />],
-        ['block_crawler_ua', '拦截常见爬虫 UA', '默认只记录和统计。开启后，且防护模式为“正式拦截”时才会拦截；识别 curl、wget、httpie、aria2、Python、aiohttp、urllib、Go-http-client、Java、OkHttp、Postman、Insomnia、Node fetch、Axios、Undici、Scrapy、Spider、Crawler、Bot、HeadlessChrome、Selenium、Playwright、Puppeteer 等。', <Switch />],
+        ['block_crawler_ua', '拦截常见爬虫 UA', '默认只记录和统计。开启后，且防护模式为“正式拦截”时才会拦截；仅识别常用于拉取订阅或入口信息的 curl、wget、HTTPie、aria2、Python、aiohttp、urllib、requests、Go-http-client、Java、OkHttp、Apache HttpClient、libwww-perl、mechanize、Scrapy、Spider、Crawler、Bot。', <Switch />],
       ].map(([key, label, description, control]) => <div className="config-row" key={String(key)}><div className="config-row-copy"><div className="config-row-title">{label}</div><div className="config-row-desc">{description}</div></div><div className="config-row-control"><Form.Item name={String(key)} valuePropName={String(key).startsWith('block_') ? 'checked' : 'value'} rules={[{ required: true }]} style={{ marginBottom: 0 }}>{control}</Form.Item></div></div>)}
       {['ip_allow', 'ip_block', 'ua_allow', 'ua_block'].map(kind => <div className="config-row" key={kind}><div className="config-row-copy"><div className="config-row-title">{kinds[kind]}</div><div className="config-row-desc">{kind.startsWith('ip_') ? '每行一个 IP 或 CIDR。白名单跳过 IP/UA 检查及 IP 限流，但不绕过 Token 或用户限制。' : kind === 'ua_allow' ? '每行一个关键词，大小写不敏感。命中后跳过 UA 拦截。' : '每行一个关键词，大小写不敏感。命中后禁止拉取订阅。'}</div></div><div className="config-row-control"><Input.TextArea rows={3} value={listTexts[kind] || ''} onChange={event => editList(kind, event.target.value)} /></div></div>)}
       <div className="config-row"><div className="config-row-copy"><div className="config-row-title">Token 黑名单</div><div className="config-row-desc">每行一个订阅 Token。命中后禁止拉取订阅。</div></div><div className="config-row-control"><Form.Item name="token_blacklist" style={{ marginBottom: 0 }}><Input.TextArea rows={4} autoComplete="off" placeholder={'订阅 Token 1\n订阅 Token 2'} /></Form.Item></div></div>

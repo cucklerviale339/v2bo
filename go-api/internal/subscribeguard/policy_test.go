@@ -100,7 +100,7 @@ func TestRequestedUASemanticsAndRawTokenBlacklist(t *testing.T) {
 	if err := policy.Validate("key"); err != nil {
 		t.Fatal(err)
 	}
-	for _, agent := range []string{"curl/8", "WGET", "Python-requests", "aiohttp", "urllib/3", "Go-http-client/1.1", "Java/17", "PostmanRuntime", "Insomnia", "okhttp", "HTTPCLIENT", "node-fetch", "axios", "undici", "Scrapy", "HeadlessChrome", "Selenium", "Playwright", "Puppeteer"} {
+	for _, agent := range []string{"curl/8", "WGET", "Python-requests", "aiohttp", "urllib/3", "Go-http-client/1.1", "Java/17", "okhttp", "HTTPCLIENT", "Scrapy", "Googlebot/2.1"} {
 		if !IsCrawlerUA(agent) || policy.Reason("", "", agent, time.Now()) == "" {
 			t.Fatalf("not detected: %s", agent)
 		}
@@ -127,6 +127,14 @@ func TestCrawlerDetectionDoesNotFlagCommonSubscriptionClients(t *testing.T) {
 	for _, agent := range []string{"", "Clash/1.18", "Mihomo/1.19", "Clash.Meta/1.19", "Shadowrocket/2.2", "sing-box/1.12", "Surge/5", "Stash/3", "Hiddify/2", "v2rayN/7", "Quantumult X/1.5", "Loon/3", "Mozilla/5.0 Chrome/140.0 Safari/537.36"} {
 		if IsCrawlerUA(agent) {
 			t.Fatalf("normal client classified as crawler: %q", agent)
+		}
+	}
+}
+
+func TestCrawlerDetectionIgnoresUnrelatedDeveloperAutomationTools(t *testing.T) {
+	for _, agent := range []string{"PostmanRuntime/7.43", "Insomnia/11.0", "node-fetch", "axios/1.8", "undici", "HeadlessChrome/140", "Selenium/4", "Playwright/1", "Puppeteer/24", "phantomjs/2"} {
+		if IsCrawlerUA(agent) {
+			t.Fatalf("unrelated tool classified as crawler: %q", agent)
 		}
 	}
 }

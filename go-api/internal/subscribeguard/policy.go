@@ -189,10 +189,9 @@ func (policy Policy) Reason(ip, tokenHash, userAgent string, now time.Time) stri
 
 func IsCrawlerUA(userAgent string) bool {
 	for _, marker := range []string{
-		"curl", "wget", "httpie", "aria2", "python", "python-requests", "aiohttp", "urllib", "requests/",
-		"go-http-client", "java/", "okhttp", "apache-httpclient", "httpclient", "postman", "insomnia",
-		"node-fetch", "axios", "undici", "node.js", "got/", "superagent", "libwww-perl", "mechanize",
-		"scrapy", "spider", "crawler", "bot/", "headlesschrome", "selenium", "playwright", "puppeteer", "phantomjs",
+		"curl", "wget", "httpie", "aria2", "python", "aiohttp", "urllib", "requests/",
+		"go-http-client", "java/", "okhttp", "apache-httpclient", "httpclient", "libwww-perl", "mechanize",
+		"scrapy", "spider", "crawler", "bot/",
 	} {
 		if strings.Contains(strings.ToLower(userAgent), marker) {
 			return true

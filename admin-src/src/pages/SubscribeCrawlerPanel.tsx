@@ -40,7 +40,7 @@ export default function SubscribeCrawlerPanel({ refreshKey, onUserSelect }: { re
   useEffect(() => () => { userSequence.current++; recordSequence.current++; }, []);
   return <Card title="常见爬虫 UA 触发用户" size="small">
     <Space direction="vertical" style={{ width: '100%' }}>
-      <Alert showIcon type="info" message="爬虫 UA 默认只记录和统计。" description="如需拦截，请在“防护设置”中开启“拦截常见爬虫 UA”，并将订阅防护模式设为“正式拦截”。UA 可以伪造，命中不等于恶意。" />
+      <Alert showIcon type="info" message="爬虫 UA 默认只记录和统计。" description="如需拦截，请返回“统计与防护”页的订阅防护设置，开启“拦截常见爬虫 UA”，并将订阅防护模式设为“正式拦截”。UA 可以伪造，命中不等于恶意。" />
       <Space wrap><Button loading={loading} onClick={() => loadUsers(users.current)}>刷新</Button><Button onClick={() => loadRecords(0)}>全部触发记录</Button><Typography.Text>触发 {users.matched || 0} 次 · 关联 {users.total || 0} 位用户 · 未识别用户 {users.unresolved || 0} 次</Typography.Text></Space>
       {error && <Alert type="error" message={error} />}
       <Table size="small" rowKey="user_id" loading={loading} dataSource={users.data} scroll={{ x: 1250 }} pagination={{ current: users.current, total: users.total, pageSize: 20, showSizeChanger: false, onChange: loadUsers }} columns={[
