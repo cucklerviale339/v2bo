@@ -213,6 +213,9 @@ func IPMatches(rule, value string) bool {
 }
 
 func ClientIP(request *http.Request, proxies []string) string {
+	if len(proxies) == 0 {
+		proxies = []string{"127.0.0.1/32", "::1/128"}
+	}
 	peer := request.RemoteAddr
 	if host, _, err := net.SplitHostPort(peer); err == nil {
 		peer = host
@@ -233,7 +236,17 @@ func ClientIP(request *http.Request, proxies []string) string {
 	if !trusted(peer) {
 		return peer
 	}
-	forwarded := strings.Split(request.Header.Get("X-Forwarded-For"), ",")
+	values := request.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		values = request.Header.Values("X-Real-IP")
+		if len(values) == 1 {
+			if parsed, err := netip.ParseAddr(strings.TrimSpace(values[0])); err == nil {
+				return parsed.Unmap().String()
+			}
+		}
+		return peer
+	}
+	forwarded := strings.Split(strings.Join(values, ","), ",")
 	if len(forwarded) > 32 {
 		return peer
 	}

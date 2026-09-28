@@ -12,6 +12,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
+	"forest/go-api/internal/subscribeguard"
 	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
 )
@@ -202,12 +203,10 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 }
 
 func subscribeAccessClientIP(r *http.Request) string {
-	for _, header := range []string{"CF-Connecting-IP", "True-Client-IP"} {
-		if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
-			return value
-		}
+	if state, ok := r.Context().Value(subscriptionGuardKey{}).(*subscriptionGuardRequest); ok {
+		return state.event.IP
 	}
-	return requestIP(r)
+	return subscribeguard.ClientIP(r, nil)
 }
 
 func withClientSubscribePathToken(cfg config.Config, r *http.Request) *http.Request {

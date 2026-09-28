@@ -182,8 +182,10 @@ func TestSubscribeAccessClientIP(t *testing.T) {
 		remoteAddr string
 		want       string
 	}{
-		{name: "cloudflare", headerName: "CF-Connecting-IP", header: "203.0.113.7", remoteAddr: "10.0.0.2:3000", want: "203.0.113.7"},
-		{name: "forwarded", headerName: "X-Forwarded-For", header: "198.51.100.4, 10.0.0.2", remoteAddr: "10.0.0.2:3000", want: "198.51.100.4"},
+		{name: "untrusted cloudflare header", headerName: "CF-Connecting-IP", header: "203.0.113.7", remoteAddr: "10.0.0.2:3000", want: "10.0.0.2"},
+		{name: "untrusted forwarded header", headerName: "X-Forwarded-For", header: "198.51.100.4, 10.0.0.2", remoteAddr: "10.0.0.2:3000", want: "10.0.0.2"},
+		{name: "local forwarded", headerName: "X-Forwarded-For", header: "192.0.2.1, 198.51.100.4", remoteAddr: "127.0.0.1:3000", want: "198.51.100.4"},
+		{name: "local real IP", headerName: "X-Real-IP", header: "198.51.100.4", remoteAddr: "127.0.0.1:3000", want: "198.51.100.4"},
 		{name: "remote address", remoteAddr: "192.0.2.8:3000", want: "192.0.2.8"},
 	}
 

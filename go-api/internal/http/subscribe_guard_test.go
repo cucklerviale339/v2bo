@@ -22,6 +22,7 @@ type guardTestStore struct {
 	rateErr   error
 	denyRate  bool
 	saveAdmin int64
+	rateKeys  []string
 }
 
 func (store *guardTestStore) Policy(context.Context) (subscribeguard.Policy, error) {
@@ -32,7 +33,8 @@ func (store *guardTestStore) Save(_ context.Context, policy subscribeguard.Polic
 	store.policy = policy
 	return policy, nil
 }
-func (store *guardTestStore) Rate(context.Context, string, int64) (bool, error) {
+func (store *guardTestStore) Rate(_ context.Context, key string, _ int64) (bool, error) {
+	store.rateKeys = append(store.rateKeys, key)
 	return !store.denyRate, store.rateErr
 }
 func (store *guardTestStore) Record(event subscribeguard.Event) {
@@ -58,6 +60,88 @@ type guardOnceUser struct {
 	peekCalls    int
 	serverCalls  int
 	subscribeErr error
+	accessIP     string
+}
+
+func (service *guardOnceUser) RecordSubscribeAccess(_ context.Context, _ int64, ip, _ string) error {
+	service.accessIP = ip
+	return nil
+}
+
+func TestGuardAndAccessStatsUseSameClientIP(t *testing.T) {
+	for _, mode := range []string{"off", "observe", "enforce"} {
+		for _, test := range []struct {
+			name, peer, forwarded, expected string
+			proxies                         []string
+		}{
+			{"local proxy", "127.0.0.1:8000", "203.0.113.2", "203.0.113.2", []string{}},
+			{"IPv6 proxy", "[::1]:8000", "2001:db8::8", "2001:db8::8", nil},
+			{"custom proxy chain", "127.0.0.1:8000", "192.0.2.1, 10.0.0.8", "192.0.2.1", []string{"127.0.0.1/32", "10.0.0.0/24"}},
+			{"direct spoof", "198.51.100.8:8000", "203.0.113.2", "198.51.100.8", nil},
+		} {
+			t.Run(mode+"/"+test.name, func(t *testing.T) {
+				store := &guardTestStore{policy: subscribeguard.DefaultPolicy()}
+				store.policy.Mode = mode
+				store.policy.TrustedProxies = test.proxies
+				service := &guardOnceUser{}
+				router := NewRouter(config.Config{AppKey: "key"}, WithSubscribeGuard(store), WithUserService(service))
+				request := httptest.NewRequest("GET", "/api/v1/client/subscribe?token=single-use", nil)
+				request.RemoteAddr = test.peer
+				request.Header.Set("X-Forwarded-For", test.forwarded)
+				request.Header.Set("CF-Connecting-IP", "1.1.1.1")
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, request)
+				if recorder.Code != 200 || service.authCalls != 1 {
+					t.Fatalf("subscription changed: status=%d auth=%d", recorder.Code, service.authCalls)
+				}
+				if len(store.events) != 1 || store.events[0].IP != test.expected || service.accessIP != test.expected {
+					t.Fatalf("IP mismatch: events=%+v access=%q want=%q", store.events, service.accessIP, test.expected)
+				}
+			})
+		}
+	}
+}
+
+func TestGuardClientIPRulesAndRateBuckets(t *testing.T) {
+	for _, test := range []struct {
+		name, peer, rule string
+		status           int
+	}{
+		{"forwarded block", "127.0.0.1:8000", "ip_block", 403},
+		{"forwarded allow", "127.0.0.1:8000", "ip_allow", 200},
+		{"spoof cannot allow", "198.51.100.8:8000", "ip_allow", 429},
+		{"forwarded rate", "127.0.0.1:8000", "", 429},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &guardTestStore{policy: subscribeguard.DefaultPolicy(), denyRate: true}
+			store.policy.Mode = "enforce"
+			store.policy.IPLimit = 1
+			if test.rule != "" {
+				store.policy.Rules = []subscribeguard.Rule{{Kind: test.rule, Value: "203.0.113.2"}}
+			}
+			service := &guardOnceUser{}
+			router := NewRouter(config.Config{AppKey: "key"}, WithSubscribeGuard(store), WithUserService(service))
+			request := httptest.NewRequest("GET", "/api/v1/client/subscribe?token=single-use", nil)
+			request.RemoteAddr = test.peer
+			request.Header.Set("X-Forwarded-For", "203.0.113.2")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != test.status || len(store.events) != 1 {
+				t.Fatalf("unexpected result: status=%d events=%+v", recorder.Code, store.events)
+			}
+			if test.status == 429 {
+				expectedIP := "203.0.113.2"
+				if test.rule == "ip_allow" {
+					expectedIP = "198.51.100.8"
+				}
+				if len(store.rateKeys) != 1 || store.rateKeys[0] != subscribeguard.Fingerprint("key", "0:ip:"+expectedIP) {
+					t.Fatalf("wrong rate bucket: %v", store.rateKeys)
+				}
+			} else if len(store.rateKeys) != 0 {
+				t.Fatalf("allow/block rule did not bypass rate counting: %v", store.rateKeys)
+			}
+		})
+	}
 }
 
 func (service *guardOnceUser) PeekClientUserID(_ context.Context, token string) (int64, error) {

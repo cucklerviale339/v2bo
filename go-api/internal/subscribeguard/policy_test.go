@@ -14,6 +14,13 @@ func TestTrustedProxyBoundary(t *testing.T) {
 		proxies                         []string
 	}{
 		{"direct spoof", "198.51.100.8:9000", "203.0.113.2", "198.51.100.8", nil},
+		{"default local proxy", "127.0.0.1:8000", "203.0.113.2", "203.0.113.2", nil},
+		{"saved empty proxy list", "127.0.0.1:8000", "203.0.113.2", "203.0.113.2", []string{}},
+		{"default ipv6 proxy", "[::1]:8000", "2001:db8::8", "2001:db8::8", nil},
+		{"default mapped proxy", "[::ffff:127.0.0.1]:8000", "::ffff:203.0.113.2", "203.0.113.2", nil},
+		{"default untrusted middle", "127.0.0.1:8000", "192.0.2.8, 198.51.100.4", "198.51.100.4", nil},
+		{"private peer is not trusted by default", "10.0.0.8:8000", "192.0.2.8", "10.0.0.8", nil},
+		{"explicit proxy list replaces default", "127.0.0.1:8000", "192.0.2.8", "127.0.0.1", []string{"10.0.0.0/24"}},
 		{"trusted single hop", "127.0.0.1:8000", "203.0.113.2", "203.0.113.2", []string{"127.0.0.1/32"}},
 		{"untrusted middle hop", "127.0.0.1:8000", "192.0.2.8, 198.51.100.4", "198.51.100.4", []string{"127.0.0.1/32"}},
 		{"trusted multiple hops", "127.0.0.1:8000", "192.0.2.8, 10.0.0.8", "192.0.2.8", []string{"127.0.0.1/32", "10.0.0.0/24"}},
@@ -27,6 +34,41 @@ func TestTrustedProxyBoundary(t *testing.T) {
 			request.Header.Set("X-Forwarded-For", test.forwarded)
 			request.Header.Set("CF-Connecting-IP", "1.1.1.1")
 			if got := ClientIP(request, test.proxies); got != test.expected {
+				t.Fatalf("got %q want %q", got, test.expected)
+			}
+		})
+	}
+}
+
+func TestClientIPForwardingHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name, peer, realIP, expected string
+		forwarded                    []string
+	}{
+		{name: "local real IP", peer: "127.0.0.1:8000", realIP: "203.0.113.2", expected: "203.0.113.2"},
+		{name: "IPv6 real IP", peer: "[::1]:8000", realIP: "2001:db8::8", expected: "2001:db8::8"},
+		{name: "direct real IP spoof", peer: "198.51.100.8:8000", realIP: "203.0.113.2", expected: "198.51.100.8"},
+		{name: "forwarded takes precedence", peer: "127.0.0.1:8000", realIP: "192.0.2.1", forwarded: []string{"203.0.113.2"}, expected: "203.0.113.2"},
+		{name: "multiple header lines", peer: "127.0.0.1:8000", forwarded: []string{"192.0.2.1", "203.0.113.2"}, expected: "203.0.113.2"},
+		{name: "invalid forwarded does not use real IP", peer: "127.0.0.1:8000", realIP: "203.0.113.2", forwarded: []string{"invalid"}, expected: "127.0.0.1"},
+		{name: "empty forwarded does not use real IP", peer: "127.0.0.1:8000", realIP: "203.0.113.2", forwarded: []string{""}, expected: "127.0.0.1"},
+		{name: "long chain", peer: "127.0.0.1:8000", forwarded: []string{strings.Repeat("203.0.113.2,", 32) + "203.0.113.2"}, expected: "127.0.0.1"},
+		{name: "invalid real IP", peer: "127.0.0.1:8000", realIP: "invalid", expected: "127.0.0.1"},
+		{name: "no forwarding headers", peer: "127.0.0.1:8000", expected: "127.0.0.1"},
+		{name: "invalid socket peer", peer: "invalid", realIP: "203.0.113.2", expected: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/", nil)
+			request.RemoteAddr = test.peer
+			for _, value := range test.forwarded {
+				request.Header.Add("X-Forwarded-For", value)
+			}
+			if test.realIP != "" {
+				request.Header.Set("X-Real-IP", test.realIP)
+			}
+			request.Header.Set("CF-Connecting-IP", "1.1.1.1")
+			request.Header.Set("True-Client-IP", "1.1.1.1")
+			if got := ClientIP(request, nil); got != test.expected {
 				t.Fatalf("got %q want %q", got, test.expected)
 			}
 		})
