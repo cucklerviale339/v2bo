@@ -18,6 +18,8 @@ func TestSortManagedServersUpdatesMultipleTypes(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Updates for separate server types follow Go map iteration order.
+	mock.MatchExpectationsInOrder(false)
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE v2_server_vmess SET sort = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(3), int64(0), sqlmock.AnyArg()).
