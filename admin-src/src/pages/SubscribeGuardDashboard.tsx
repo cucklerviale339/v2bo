@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Descriptions, Input, Modal, Popconfirm, Row, Segmented, Space, Spin, Statistic, Table, Tag, Typography, message } from 'antd';
 import { apiGet, apiPost, bytes, money } from '../lib/api';
+import SubscribeIPIntelligence from './SubscribeIPIntelligence';
 
 const endpoint = '/subscribe-access/guard/';
 const dateText = (value: any) => Number(value) ? new Date(Number(value) * 1000).toLocaleString() : '-';
 const copyText = (value: any) => <Typography.Text copyable={value ? { text: String(value) } : false} ellipsis={{ tooltip: String(value || '') }}>{value || '-'}</Typography.Text>;
 const accountStatus = (row: any) => Number(row.banned) ? <Tag color="red">封禁</Tag> : <Tag color="green">正常</Tag>;
 const insiderText = (row: any) => row.insider_rule ? `${row.insider_rule.name} · ${row.insider_rule.host || '额外节点'} · ${row.insider_rule.extra_nodes_count} 个额外节点` : '按原节点地址规则下发';
-const countColumns = (label: string) => [{ title: label, dataIndex: 'value', render: copyText }, { title: '次数', dataIndex: 'count', width: 80 }];
+const countColumns = (label: string) => [{ title: label, dataIndex: 'value', render: (value: any, row: any) => row.intelligence ? <SubscribeIPIntelligence value={row.intelligence} ip={value} /> : copyText(value) }, { title: '次数', dataIndex: 'count', width: 80 }];
 
 export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, onRule, refreshKey, children, showOverview = true }: { showOverview?: boolean; selectedUserID: number; onUserSelect: (id: number) => void; onRule: (kind: string, value: string) => void; refreshKey: number; children: React.ReactNode }) {
   const [stats, setStats] = useState<any>({});
@@ -101,14 +102,14 @@ export default function SubscribeGuardDashboard({ selectedUserID, onUserSelect, 
       setList({ title: `${row.email || row.user_id} · UA 匹配记录（最近 50 条）`, rows: response.data.data, columns: eventColumns });
     } catch (error: any) { message.error(error.message); }
   };
-  useEffect(() => { loadStats(); loadRank(); }, [refreshKey]);
+  useEffect(() => { if (showOverview) { loadStats(); loadRank(); } }, [refreshKey, showOverview]);
   useEffect(() => () => { statsSequence.current++; rankSequence.current++; userSequence.current++; uaSequence.current++; detailSequence.current++; }, []);
   useEffect(() => { if (selectedUserID) loadDetail(selectedUserID); else { detailSequence.current++; setDetail(null); } }, [selectedUserID]);
 
   const eventColumns: any[] = [
     { title: '时间', dataIndex: 'time', width: 170, render: dateText },
     { title: '结果', width: 140, render: (_: any, row: any) => <Tag color={row.blocked ? 'red' : 'green'}>{row.blocked ? '拦截' : '放行'} · {row.status}</Tag> },
-    { title: 'IP', dataIndex: 'ip', render: copyText }, { title: 'UA', dataIndex: 'ua', render: copyText },
+    { title: 'IP / 情报', width: 290, render: (_: any, row: any) => <SubscribeIPIntelligence value={row.intelligence} ip={row.ip} /> }, { title: 'UA', dataIndex: 'ua', render: copyText },
     { title: '模式', dataIndex: 'mode', render: (value: string) => ({ off: '关闭', observe: '仅观察', enforce: '正式拦截' }[value]) },
   ];
   const rankColumns: any[] = [

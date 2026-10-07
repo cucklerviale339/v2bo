@@ -48,6 +48,15 @@ COUNT(DISTINCT NULLIF(client_ip,'')) AS ip_count, COUNT(DISTINCT NULLIF(user_age
 		}
 		result[field.key] = items
 	}
+	ips := result["ips"].([]map[string]any)
+	events := make([]Event, len(ips))
+	for index, item := range ips {
+		events[index].IP, _ = item["value"].(string)
+	}
+	store.enrichEvents(ctx, events)
+	for index := range ips {
+		ips[index]["intelligence"] = events[index].Intelligence
+	}
 	result["dropped"] = store.dropped.Load()
 	return result, nil
 }

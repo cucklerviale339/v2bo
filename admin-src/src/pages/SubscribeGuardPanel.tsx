@@ -3,6 +3,8 @@ import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Selec
 import { apiGet, apiPost } from '../lib/api';
 import SubscribeGuardDashboard from './SubscribeGuardDashboard';
 import SubscribeCrawlerPanel from './SubscribeCrawlerPanel';
+import SubscribeRiskPanel from './SubscribeRiskPanel';
+import SubscribeIPIntelligence from './SubscribeIPIntelligence';
 
 type Rule = { kind: string; value: string; token?: string; note: string; expires_at: number };
 type Policy = { revision: number; mode: string; ip_limit: number; token_limit: number; block_empty_ua: boolean; block_crawler_ua: boolean; keep_days: number; trusted_proxies: string[]; token_blacklist: string[]; rules: Rule[] };
@@ -11,7 +13,7 @@ const modes: Record<string, string> = { off: '关闭', observe: '仅观察', enf
 const reasons: Record<string, string> = { ip: 'IP 黑名单', token: 'Token 黑名单', user: '用户订阅限制', empty_ua: '空 UA', crawler_ua: '脚本 UA', ua: 'UA 黑名单', ip_rate: 'IP 超频', token_rate: 'Token 超频', guard_unavailable: '防护异常，已放行' };
 const dateText = (value: number) => value ? new Date(value * 1000).toLocaleString() : '-';
 
-export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requests' | 'crawler' | 'settings' }) {
+export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requests' | 'crawler' | 'risk' | 'settings' }) {
   const [selectedUserID, setSelectedUserID] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const [policy, setPolicy] = useState<Policy | null>(null);
@@ -132,6 +134,7 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
       {failure && <Alert type="error" showIcon message={failure} action={<Button onClick={loadConfig}>重试</Button>} />}
       {view === 'settings' ? settings : <SubscribeGuardDashboard showOverview={view === 'requests'} selectedUserID={selectedUserID} onUserSelect={setSelectedUserID} onRule={quickRule} refreshKey={refreshKey}>
         {view === 'crawler' && <SubscribeCrawlerPanel refreshKey={refreshKey} onUserSelect={setSelectedUserID} />}
+        {view === 'risk' && <SubscribeRiskPanel onUserSelect={setSelectedUserID} onRule={quickRule} />}
         {view === 'requests' && <Card className="subscribe-events-card" title="最近订阅请求与拦截记录">
       <Space className="subscribe-events-toolbar" wrap>
         <Input className="subscribe-events-keyword" value={keyword} maxLength={255} style={{ width: 290 }} onChange={event => setKeyword(event.target.value)} placeholder="用户 ID / 邮箱 / 完整 IP / UA 关键词" onPressEnter={() => loadEvents()} />
@@ -144,7 +147,7 @@ export default function SubscribeGuardPage({ view = 'requests' }: { view?: 'requ
         { title: '时间', dataIndex: 'time', width: 175, render: dateText },
         { title: '用户', width: 200, render: (_: any, row: any) => row.user_id ? <Button type="link" className="subscribe-event-user" title={row.email || `#${row.user_id}`} onClick={() => setSelectedUserID(row.user_id)}>{row.email || `#${row.user_id}`}</Button> : '未识别用户' },
         { title: '结果', width: 180, render: (_: any, row: any) => <Space className="subscribe-event-result" direction="vertical" size={2}><Tag color={row.blocked ? 'red' : row.reason ? 'orange' : 'green'}>{row.blocked ? '拦截' : row.status >= 400 ? '业务失败' : '放行'} · {row.status}</Tag>{reasons[row.reason] && <Typography.Text className="subscribe-event-reason" type="secondary">{reasons[row.reason]}</Typography.Text>}{row.mode === 'observe' && <Typography.Text className="subscribe-event-reason" type="secondary">仅观察</Typography.Text>}</Space> },
-        { title: 'IP', dataIndex: 'ip', width: 160 },
+        { title: 'IP / 情报', width: 290, render: (_: any, row: any) => <SubscribeIPIntelligence value={row.intelligence} ip={row.ip} /> },
         { title: 'Token 指纹', dataIndex: 'token_hash', width: 140, render: (value: string) => value ? <Typography.Text className="subscribe-event-token" copyable={{ text: value }} title={value}>{value.slice(0, 10)}…</Typography.Text> : '-' },
         { title: 'UA', dataIndex: 'ua', ellipsis: true, width: 250, render: (value: string) => <Typography.Text className="subscribe-event-ua" ellipsis={{ tooltip: value }} title={value}>{value || '-'}</Typography.Text> },
         { title: '入口', dataIndex: 'endpoint', width: 130, render: (value: string) => <Typography.Text className="subscribe-event-endpoint" title={value}>{value || '-'}</Typography.Text> },

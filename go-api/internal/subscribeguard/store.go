@@ -14,20 +14,21 @@ import (
 var ErrConflict = errors.New("配置已被其他管理员修改，请刷新后重试")
 
 type Event struct {
-	ID            int64  `json:"id"`
-	UserID        int64  `json:"user_id"`
-	Email         string `json:"email"`
-	IP            string `json:"ip"`
-	UA            string `json:"ua"`
-	TokenHash     string `json:"token_hash"`
-	Endpoint      string `json:"endpoint"`
-	Mode          string `json:"mode"`
-	Reason        string `json:"reason"`
-	Blocked       bool   `json:"blocked"`
-	Status        int    `json:"status"`
-	Time          int64  `json:"time"`
-	CrawlerUA     bool   `json:"crawler_ua"`
-	UAWhitelisted bool   `json:"ua_whitelisted"`
+	ID            int64           `json:"id"`
+	UserID        int64           `json:"user_id"`
+	Email         string          `json:"email"`
+	IP            string          `json:"ip"`
+	UA            string          `json:"ua"`
+	TokenHash     string          `json:"token_hash"`
+	Endpoint      string          `json:"endpoint"`
+	Mode          string          `json:"mode"`
+	Reason        string          `json:"reason"`
+	Blocked       bool            `json:"blocked"`
+	Status        int             `json:"status"`
+	Time          int64           `json:"time"`
+	CrawlerUA     bool            `json:"crawler_ua"`
+	UAWhitelisted bool            `json:"ua_whitelisted"`
+	Intelligence  *IPIntelligence `json:"intelligence,omitempty"`
 }
 
 type Filter struct {
@@ -41,14 +42,15 @@ type Filter struct {
 }
 
 type Store struct {
-	db       *sql.DB
-	key      string
-	mu       sync.Mutex
-	policy   Policy
-	loadedAt time.Time
-	loadErr  error
-	queue    chan Event
-	dropped  atomic.Int64
+	db           *sql.DB
+	key          string
+	mu           sync.Mutex
+	policy       Policy
+	loadedAt     time.Time
+	loadErr      error
+	queue        chan Event
+	dropped      atomic.Int64
+	monitorReady atomic.Bool
 }
 
 func NewStore(db *sql.DB, key string) *Store {
@@ -188,6 +190,10 @@ func (store *Store) Record(event Event) {
 }
 
 func (store *Store) Run(ctx context.Context) {
+	ipDone := make(chan struct{})
+	ipCtx, ipCancel := context.WithCancel(ctx)
+	go func() { defer close(ipDone); store.runMonitoring(ipCtx) }()
+	defer func() { ipCancel(); <-ipDone }()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -250,7 +256,12 @@ AND ($6::bigint = 0 OR event.id < $6) ORDER BY event.id DESC LIMIT $7`, filter.K
 		}
 		events = append(events, event)
 	}
-	return map[string]any{"data": events, "total": total, "blocked": blocked, "matched": matched, "failed": failed, "dropped": store.dropped.Load()}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	store.enrichEvents(ctx, events)
+	return map[string]any{"data": events, "total": total, "blocked": blocked, "matched": matched, "failed": failed, "dropped": store.dropped.Load()}, nil
 }
 
 func (store *Store) Audit(ctx context.Context) ([]map[string]any, error) {

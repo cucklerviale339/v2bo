@@ -3,11 +3,11 @@ import { Tabs, Typography } from 'antd';
 import SubscribeAccessPage from './SubscribeAccessPage';
 import SubscribeGuardPage from './SubscribeGuardPanel';
 
-type Tab = 'stats' | 'requests' | 'crawler' | 'settings';
+type Tab = 'stats' | 'requests' | 'crawler' | 'risk' | 'settings';
 
 export default function SubscribeCenterPage({ initialTab = 'stats' }: { initialTab?: Tab }) {
   const [activeKey, setActiveKey] = useState<Tab>(initialTab === 'settings' ? 'stats' : initialTab);
-  const guardView = activeKey === 'requests' || activeKey === 'crawler' ? activeKey : 'settings';
+  const guardView = activeKey === 'requests' || activeKey === 'crawler' || activeKey === 'risk' ? activeKey : 'settings';
 
   return (
     <div className="legacy-page subscribe-center-page">
@@ -20,6 +20,7 @@ export default function SubscribeCenterPage({ initialTab = 'stats' }: { initialT
           { key: 'stats', label: '统计与防护' },
           { key: 'requests', label: '请求与拦截记录' },
           { key: 'crawler', label: '爬虫 UA 用户' },
+          { key: 'risk', label: '风险监控' },
         ]}
       />
       <div hidden={activeKey !== 'stats'}>

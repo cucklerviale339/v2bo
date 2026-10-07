@@ -18,6 +18,7 @@ import (
 )
 
 func TestPostgresUpgradeAndGuardLifecycle(t *testing.T) {
+	t.Setenv("SUBSCRIBE_IP_INTELLIGENCE_OFF", "1")
 	dsn := os.Getenv("SUBSCRIBE_GUARD_TEST_DSN")
 	if dsn == "" {
 		t.Skip("SUBSCRIBE_GUARD_TEST_DSN not set")
@@ -57,6 +58,9 @@ INSERT INTO v2_subscribe_access_log VALUES (1, 42, '192.0.2.2', 100)`)
 	store := NewStore(db, "test-key")
 	for count := 0; count < 2; count++ {
 		if err := store.Ensure(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnsureMonitoring(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -241,4 +245,9 @@ VALUES (42,'192.0.2.9','curl/8','','subscribe','off','',false,200,$1,true,false)
 	if err != nil || len(result["data"].([]Event)) != 1 {
 		t.Fatalf("crawler pagination: %+v %v", result, err)
 	}
+	testRiskWindows(t, db, store)
+	testIPIntelligenceDatabase(t, db, store)
+	cancel()
+	<-workerDone
+	testMonitoringLifecycle(t, db, store)
 }

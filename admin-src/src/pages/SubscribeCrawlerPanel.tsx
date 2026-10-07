@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import SubscribeIPIntelligence from './SubscribeIPIntelligence';
 import { Alert, Button, Card, Modal, Space, Table, Tag, Typography, message } from 'antd';
 import { apiGet } from '../lib/api';
 
@@ -52,7 +53,7 @@ export default function SubscribeCrawlerPanel({ refreshKey, onUserSelect }: { re
     <Modal open={scope !== null} title={scope ? `用户 #${scope} · 常见爬虫 UA 触发明细` : '常见爬虫 UA · 全部触发记录'} width={1100} onCancel={closeRecords} footer={<Button onClick={closeRecords}>关闭</Button>} destroyOnClose>
       <Table size="small" loading={recordsLoading} rowKey="id" pagination={false} dataSource={records.data} scroll={{ x: 1050 }} columns={[
         { title: '时间', dataIndex: 'time', render: dateText, width: 175 }, { title: '用户 ID', dataIndex: 'user_id', width: 85, render: (value: number) => value || '-' },
-        { title: '邮箱', dataIndex: 'email', render: (value: string) => value || '未识别用户' }, { title: 'IP', dataIndex: 'ip' },
+        { title: '邮箱', dataIndex: 'email', render: (value: string) => value || '未识别用户' }, { title: 'IP / 情报', width: 290, render: (_: any, row: any) => <SubscribeIPIntelligence value={row.intelligence} ip={row.ip} /> },
         { title: 'User-Agent', dataIndex: 'ua', width: 260, render: (value: string) => <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
         { title: '处理结果', width: 180, render: (_: any, row: any) => <Space direction="vertical" size={0}><Tag color={row.blocked ? 'red' : 'green'}>{row.blocked ? '已拦截' : row.status >= 400 ? '业务拒绝' : '已放行'} · {row.status}</Tag>{row.ua_whitelisted && <Tag color="blue">白名单命中</Tag>}<Typography.Text type="secondary">{reasonLabels[row.reason] || (row.mode === 'off' ? '防护关闭' : '仅记录')}</Typography.Text></Space> },
       ]} />

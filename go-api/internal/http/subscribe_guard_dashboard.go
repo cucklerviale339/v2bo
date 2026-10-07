@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,11 @@ type subscriptionGuardAnalytics interface {
 	Analytics(context.Context, int64) (map[string]any, error)
 	Users(context.Context, string, string, int64, int64) (map[string]any, error)
 	CrawlerUsers(context.Context, int64, int64) (map[string]any, error)
+}
+
+type subscriptionGuardRiskAnalytics interface {
+	Risks(context.Context, subscribeguard.RiskFilter) (subscribeguard.RiskResult, error)
+	RiskEvents(context.Context, string, int64) ([]subscribeguard.Event, error)
 }
 
 func guardPublicUser(info map[string]any) map[string]any {
@@ -75,7 +81,7 @@ func handleSubscribeGuardDashboard(w http.ResponseWriter, r *http.Request, state
 	disableResponseCache(w)
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	method := http.MethodGet
-	if action == "set-user-banned" {
+	if action == "set-user-banned" || action == "monitor-config" || action == "monitor-retry" || action == "risk-review" {
 		method = http.MethodPost
 	}
 	if r.Method != method {
@@ -101,6 +107,11 @@ func handleSubscribeGuardDashboard(w http.ResponseWriter, r *http.Request, state
 	keyword := strings.TrimSpace(inputs["keyword"])
 	if len(keyword) > 255 {
 		writeJSON(w, 400, map[string]any{"message": "搜索内容过长"})
+		return
+	}
+	switch action {
+	case "monitor-status", "monitor-config", "monitor-retry", "risk-history", "risk-review":
+		handleSubscriptionMonitor(w, ctx, state, action, inputs, identity.ID)
 		return
 	}
 	userID, _ := strconv.ParseInt(inputs["id"], 10, 64)
@@ -132,6 +143,41 @@ func handleSubscribeGuardDashboard(w http.ResponseWriter, r *http.Request, state
 		} else {
 			result, err = analytics.Users(ctx, keyword, sort, current, size)
 		}
+	case "risk":
+		riskAnalytics, ok := state.subscribeGuard.(subscriptionGuardRiskAnalytics)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "订阅风险监控未就绪"})
+			return
+		}
+		current, size, minScore := 1, 20, 0
+		for name, target := range map[string]*int{"current": &current, "page_size": &size, "min_score": &minScore} {
+			if value := inputs[name]; value != "" {
+				parsed, parseErr := strconv.Atoi(value)
+				if parseErr != nil {
+					writeJSON(w, 400, map[string]any{"message": "风险查询参数无效"})
+					return
+				}
+				*target = parsed
+			}
+		}
+		if current < 1 || current > 100000 || size < 1 || size > 100 || minScore < 0 || minScore > 100 {
+			writeJSON(w, 400, map[string]any{"message": "风险查询参数无效"})
+			return
+		}
+		result, err = riskAnalytics.Risks(ctx, subscribeguard.RiskFilter{Keyword: keyword, MinScore: minScore, Current: current, PageSize: size})
+	case "risk-events":
+		riskAnalytics, ok := state.subscribeGuard.(subscriptionGuardRiskAnalytics)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "订阅风险监控未就绪"})
+			return
+		}
+		tokenHash := inputs["token_hash"]
+		digest, parseErr := hex.DecodeString(tokenHash)
+		if (tokenHash != "" && (parseErr != nil || len(digest) != 32)) || (tokenHash == "" && userID <= 0) {
+			writeJSON(w, 400, map[string]any{"message": "Token 指纹或用户 ID 无效"})
+			return
+		}
+		result, err = riskAnalytics.RiskEvents(ctx, strings.ToLower(tokenHash), userID)
 	case "user-search":
 		rows := []map[string]any{}
 		if keyword == "" {
