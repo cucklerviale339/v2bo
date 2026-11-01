@@ -176,4 +176,70 @@ INSERT INTO v2_runtime_kv(k,v,expire_at,created_at,updated_at) VALUES('legacy-co
 			t.Fatalf("subscription %d changed after monitoring configuration: %v", id, err)
 		}
 	}
+	// Compare inventory with real subscription selection while toggling both
+	// address switches. Disabled groups/rules fall back to the managed host.
+	if err := upgraded.SaveDispatchMonitor(ctx, DispatchMonitorSaveRequest{Host: "range.example", CheckPort: 24443, Enabled: true, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeIDs: []int64{probe.Probe.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	checkHosts := func(want []string, userID int64, wantHost string) {
+		t.Helper()
+		entries, err := upgraded.ListDispatchMonitors(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts := make([]string, 0, len(entries))
+		for _, e := range entries {
+			hosts = append(hosts, e.Host)
+		}
+		if !reflect.DeepEqual(hosts, want) {
+			t.Fatalf("inventory=%v want=%v", hosts, want)
+		}
+		nodes, err := usersvc.NewDBService(config.Config{}, db).Servers(ctx, userID, "legacy-client")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantHost == "" {
+			if len(nodes) != 0 {
+				t.Fatalf("disabled node still dispatched: %v", nodes)
+			}
+		} else if len(nodes) != 1 || fmt.Sprint(nodes[0]["host"]) != wantHost {
+			t.Fatalf("dispatched=%v want=%s", nodes, wantHost)
+		}
+		// Production polling refreshes the catalog cache within five seconds.
+		upgraded.dispatchCacheMu.Lock()
+		upgraded.dispatchCachedHosts = nil
+		upgraded.dispatchCacheMu.Unlock()
+		tasks, err := upgraded.ListDispatchProbeTasks(ctx, probe.Probe.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range tasks {
+			found := false
+			for _, host := range want {
+				found = found || task.CheckHost == host
+			}
+			if !found {
+				t.Fatalf("non-dispatched address still scheduled: %#v", task)
+			}
+		}
+	}
+	for _, table := range []string{"v2_node_address_group", "v2_node_address_rule"} {
+		exec("UPDATE " + table + " SET enabled=0")
+		checkHosts([]string{"base.example", "inside.example"}, 15, "base.example")
+		exec("UPDATE " + table + " SET enabled=1")
+		checkHosts([]string{"base.example", "inside.example", "range.example"}, 15, "range.example")
+	}
+	// Unbound groups do not contribute addresses, even when enabled.
+	exec(`INSERT INTO v2_node_address_group(id,name,created_at,updated_at) VALUES(2,'unbound',1,1);
+INSERT INTO v2_node_address_rule(group_id,host,match_user_id_ranges,created_at,updated_at) VALUES(2,'unbound.example','["1-100"]',1,1)`)
+	checkHosts([]string{"base.example", "inside.example", "range.example"}, 15, "range.example")
+	// An enabled managed host fully overridden by higher priority rules is not
+	// part of the dispatch chain and must disappear from inventory and tasks.
+	if err := upgraded.SaveDispatchMonitor(ctx, DispatchMonitorSaveRequest{Host: "base.example", CheckPort: 34443, Enabled: true, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeIDs: []int64{probe.Probe.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE v2_node_address_rule SET match_user_id_ranges='["1-9223372036854775807"]' WHERE group_id=1`)
+	checkHosts([]string{"inside.example", "range.example"}, 5, "range.example")
+	exec(`UPDATE v2_server_vmess SET "show"=0 WHERE id=7`)
+	checkHosts([]string{}, 15, "")
 }
