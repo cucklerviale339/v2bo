@@ -218,6 +218,9 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 	needsReset := !dnsProbeHeartbeatFresh(lastHeartbeat, now, offlineSec)
 	reconnected := lastHeartbeat.Valid && lastHeartbeat.Int64 >= 0 && lastHeartbeat.Int64 <= now && needsReset
 	if needsReset {
+		if err := s.resetDispatchProbeSafely(ctx, tx, probeID); err != nil {
+			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset entry monitor state: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET version = $2, arch = $3, public_ip = $4, last_heartbeat_at = $5, prewarm_count = 0, updated_at = $5 WHERE id = $1`, probeID, request.Version, request.Arch, request.PublicIP, now); err != nil {
 			return DNSProbeHeartbeatResult{}, fmt.Errorf("update reset DNS probe heartbeat: %w", err)
 		}

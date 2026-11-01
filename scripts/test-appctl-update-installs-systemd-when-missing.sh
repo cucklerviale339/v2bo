@@ -5,6 +5,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+# Never reach the host's real service or systemctl when tests run as root.
+# Systemd-specific cases override these defaults with their own fake command.
+export FOREST_SERVICE_FILE_PATH="${TMP_DIR}/forest.service"
+export LEGACY_FOREST_SERVICE_FILE_PATH="${TMP_DIR}/forest-legacy.service"
+export SYSTEMCTL_BIN="${TMP_DIR}/systemctl-unavailable"
+
 mkdir -p "${TMP_DIR}/scripts" "${TMP_DIR}/go-api"
 cp "${REPO_ROOT}/scripts/appctl" "${TMP_DIR}/scripts/appctl"
 chmod +x "${TMP_DIR}/scripts/appctl"

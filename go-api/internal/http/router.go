@@ -239,6 +239,12 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		case r.URL.Path == "/api/v1/probe/tasks":
 			handleDNSProbeTasks(w, r, state.dnsProbe)
 			return
+		case r.URL.Path == "/api/v1/probe/monitor-tasks":
+			handleDispatchProbeTasks(w, r, state.dnsProbe)
+			return
+		case r.URL.Path == "/api/v1/probe/monitor-results":
+			handleDNSProbeResults(w, r, state.dnsProbe)
+			return
 		case r.URL.Path == "/api/v1/probe/results":
 			handleDNSProbeResults(w, r, state.dnsProbe)
 			return
@@ -817,6 +823,23 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
+			checkPath := strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")
+			if checkPath == "dispatch-pool" || strings.HasPrefix(checkPath, "dispatch-pool/") || checkPath == "dispatch-runs" || strings.HasPrefix(checkPath, "dispatch-runs/") {
+				w.Header().Set("Cache-Control", "no-store")
+				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+					return
+				}
+				handleDispatchChecks(w, r, state.admin, checkPath)
+				return
+			}
+			if r.URL.Path == adminPrefix+"/dns-failover/dispatch-entries" {
+				w.Header().Set("Cache-Control", "no-store")
+				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+					return
+				}
+				handleDNSDispatchEntries(w, r, state.admin)
+				return
+			}
 			if handleAdminDNSFailover(w, r, state.session, state.dnsAdmin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")) {
 				return
 			}

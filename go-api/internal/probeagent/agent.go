@@ -15,10 +15,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const maxResultBatch = 500
+const maxAuxiliaryTasks = 1000
+const maxAuxiliaryPending = 2000
 
 type Config struct {
 	APIURL   string
@@ -61,13 +64,16 @@ type Checker interface {
 }
 type Option func(*Agent)
 type Agent struct {
-	cfg             Config
-	client          *http.Client
-	checker         Checker
-	allowLocalHTTP  bool
-	results         chan Result
-	operationMu     sync.Mutex
-	operationFailed map[string]bool
+	cfg              Config
+	client           *http.Client
+	checker          Checker
+	allowLocalHTTP   bool
+	results          chan Result
+	operationMu      sync.Mutex
+	operationFailed  map[string]bool
+	auxiliary        bool
+	monitorTransport atomic.Bool
+	auxiliaryParent  *Agent
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -131,7 +137,17 @@ func isLocalHost(host string) bool {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
+	if !a.auxiliary {
+		auxiliary := &Agent{cfg: a.cfg, client: a.client, checker: a.checker, allowLocalHTTP: a.allowLocalHTTP,
+			results: make(chan Result, maxResultBatch), operationFailed: map[string]bool{}, auxiliary: true, auxiliaryParent: a}
+		childCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); _ = auxiliary.Run(childCtx) }()
+		defer func() { cancel(); <-done }()
+	}
+
 	workers := map[int64]taskWorker{}
+	var pending []Result
 	var workerWG sync.WaitGroup
 	defer func() {
 		for _, worker := range workers {
@@ -140,8 +156,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		workerWG.Wait()
 	}()
 	refresh := func() {
-		if err := a.heartbeat(ctx); err != nil {
-			return
+		if !a.auxiliary {
+			if err := a.heartbeat(ctx); err != nil {
+				return
+			}
 		}
 		tasks, err := a.tasks(ctx)
 		if err != nil {
@@ -149,9 +167,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		next := make(map[int64]Task, len(tasks))
 		for _, task := range tasks {
-			if task.TargetID > 0 {
+			if (!a.auxiliary && task.TargetID > 0) || (a.auxiliary && task.TargetID < 0) {
 				next[task.TargetID] = task
 			}
+		}
+		if a.auxiliary {
+			retained := pending[:0]
+			for _, r := range pending {
+				if task, ok := next[r.TargetID]; ok && r.RunID == task.RunID && r.TargetVersion == task.TargetVersion {
+					retained = append(retained, r)
+				}
+			}
+			pending = retained
 		}
 		for id, worker := range workers {
 			task, exists := next[id]
@@ -175,12 +202,17 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer heartbeatTicker.Stop()
 	flushTicker := time.NewTicker(minDuration(a.cfg.Interval, 100*time.Millisecond))
 	defer flushTicker.Stop()
-	var pending []Result
 	for {
+		source := (<-chan Result)(a.results)
+		// Backpressure bounds memory without dropping failures or inventing a
+		// consecutive-success streak after an outage.
+		if a.auxiliary && len(pending) >= maxAuxiliaryPending {
+			source = nil
+		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case result := <-a.results:
+		case result := <-source:
 			pending = append(pending, result)
 		case <-heartbeatTicker.C:
 			refresh()
@@ -231,8 +263,25 @@ func (a *Agent) flush(ctx context.Context, pending []Result) []Result {
 		if size > maxResultBatch {
 			size = maxResultBatch
 		}
-		if err := a.report(ctx, pending[:size]); err != nil {
-			return pending
+		// Split by namespace even if an older caller supplied a mixed queue.
+		batch := pending[:size]
+		if !a.auxiliary {
+			legacy := make([]Result, 0, len(batch))
+			for _, r := range batch {
+				if r.TargetID > 0 {
+					legacy = append(legacy, r)
+				}
+			}
+			batch = legacy
+		}
+		if len(batch) > 0 {
+			if err := a.report(ctx, batch); err != nil {
+				var status *apiStatusError
+				if a.auxiliary && errors.As(err, &status) && (status.code == 404 || status.code == 405) {
+					return nil
+				}
+				return pending
+			}
 		}
 		pending = pending[size:]
 	}
@@ -244,15 +293,48 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	return err
 }
 func (a *Agent) tasks(ctx context.Context) ([]Task, error) {
-	var payload struct {
-		Data []Task `json:"data"`
+	if a.auxiliary && a.auxiliaryParent != nil && !a.auxiliaryParent.monitorTransport.Load() {
+		return []Task{}, nil
 	}
-	err := a.request(ctx, http.MethodGet, "/api/v1/probe/tasks", nil, &payload)
+	var payload struct {
+		Data             []Task `json:"data"`
+		MonitorTransport bool   `json:"monitor_transport"`
+	}
+	path := "/api/v1/probe/tasks"
+	if a.auxiliary {
+		path = "/api/v1/probe/monitor-tasks"
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+	}
+	err := a.request(ctx, http.MethodGet, path, nil, &payload)
+	if !a.auxiliary && err == nil {
+		a.monitorTransport.Store(payload.MonitorTransport)
+	}
+	if a.auxiliary {
+		var status *apiStatusError
+		if errors.As(err, &status) && (status.code == 404 || status.code == 405 || status.code == 409) {
+			if status.code == 409 {
+				a.logOperationResult(ctx, "tasks", err)
+			}
+			return []Task{}, nil
+		}
+		if err == nil && len(payload.Data) > maxAuxiliaryTasks {
+			return nil, errors.New("auxiliary task limit exceeded")
+		}
+	}
 	a.logOperationResult(ctx, "tasks", err)
 	return payload.Data, err
 }
 func (a *Agent) report(ctx context.Context, results []Result) error {
-	err := a.request(ctx, http.MethodPost, "/api/v1/probe/results", map[string][]Result{"results": results}, nil)
+	path := "/api/v1/probe/results"
+	if a.auxiliary {
+		path = "/api/v1/probe/monitor-results"
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+	}
+	err := a.request(ctx, http.MethodPost, path, map[string][]Result{"results": results}, nil)
 	a.logOperationResult(ctx, "report", err)
 	return err
 }
@@ -302,13 +384,20 @@ func (a *Agent) request(ctx context.Context, method, path string, body any, targ
 		detail, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 		if readErr == nil {
 			if message := strings.TrimSpace(string(detail)); message != "" {
-				return fmt.Errorf("probe api %s: %s: response=%q", path, response.Status, message)
+				return &apiStatusError{code: response.StatusCode, message: fmt.Sprintf("probe api %s: %s: response=%q", path, response.Status, message)}
 			}
 		}
-		return fmt.Errorf("probe api %s: %s", path, response.Status)
+		return &apiStatusError{code: response.StatusCode, message: fmt.Sprintf("probe api %s: %s", path, response.Status)}
 	}
 	if target == nil {
 		return nil
 	}
 	return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(target)
 }
+
+type apiStatusError struct {
+	code    int
+	message string
+}
+
+func (e *apiStatusError) Error() string { return e.message }

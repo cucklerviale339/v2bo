@@ -125,7 +125,7 @@ func TestDNSProbeHeartbeatFirstResetsSafelyAndContinuousPreservesPrewarm(t *test
 				t.Fatalf("sqlmock: %v", err)
 			}
 			defer db.Close()
-			service := &DBService{db: db, dnsFailoverSchemaOK: true}
+			service := &DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -135,6 +135,12 @@ func TestDNSProbeHeartbeatFirstResetsSafelyAndContinuousPreservesPrewarm(t *test
 				WithArgs(int64(7)).
 				WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
 			if test.wantReset {
+				mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+				mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(`UPDATE v2_dns_probe SET version = \$2, arch = \$3, public_ip = \$4, last_heartbeat_at = \$5, prewarm_count = 0, updated_at = \$5 WHERE id = \$1`).
 					WithArgs(int64(7), "v1.2.3", "amd64", "203.0.113.7", sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
@@ -172,7 +178,7 @@ func TestDNSProbeHeartbeatOfflineReconnectResetsProbeAndState(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -181,6 +187,12 @@ func TestDNSProbeHeartbeatOfflineReconnectResetsProbeAndState(t *testing.T) {
 	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+	mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+	mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET version = \$2, arch = \$3, public_ip = \$4, last_heartbeat_at = \$5, prewarm_count = 0, updated_at = \$5 WHERE id = \$1`).
 		WithArgs(int64(7), "v1.2.4", "arm64", "2001:db8::7", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -219,7 +231,7 @@ func TestDNSProbeHeartbeatResetsCorruptTimestampWithoutCallingItReconnect(t *tes
 				t.Fatalf("sqlmock: %v", err)
 			}
 			defer db.Close()
-			service := &DBService{db: db, dnsFailoverSchemaOK: true}
+			service := &DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -228,6 +240,12 @@ func TestDNSProbeHeartbeatResetsCorruptTimestampWithoutCallingItReconnect(t *tes
 			mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
 				WithArgs(int64(7)).
 				WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+			mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+			mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).
@@ -257,7 +275,7 @@ func TestDNSProbeHeartbeatRejectsDisabledProbeAndInvalidMetadata(t *testing.T) {
 		{Version: "v1", Arch: strings.Repeat("a", 33), PublicIP: "203.0.113.7"},
 		{Version: "v1", Arch: "amd64", PublicIP: "not-an-ip"},
 	} {
-		service := &DBService{dnsFailoverSchemaOK: true}
+		service := &DBService{dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 		if _, err := service.HeartbeatDNSProbe(context.Background(), 7, request); !errors.Is(err, ErrDNSProbeInvalidRequest) {
 			t.Fatalf("request %#v error = %v, want ErrDNSProbeInvalidRequest", request, err)
 		}
@@ -268,7 +286,7 @@ func TestDNSProbeHeartbeatRejectsDisabledProbeAndInvalidMetadata(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
 		WithArgs(int64(7)).
@@ -334,7 +352,7 @@ func TestDNSProbeHeartbeatOfflineThresholdNullDefaultAndMinimumBinding(t *testin
 				t.Fatalf("sqlmock: %v", err)
 			}
 			defer db.Close()
-			service := &DBService{db: db, dnsFailoverSchemaOK: true}
+			service := &DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -344,6 +362,12 @@ func TestDNSProbeHeartbeatOfflineThresholdNullDefaultAndMinimumBinding(t *testin
 				WithArgs(int64(7)).
 				WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(test.minimum))
 			if test.wantReconnect {
+				mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+				mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
 			} else {
@@ -1461,7 +1485,7 @@ func TestDNSProbeResultsRequireFreshHeartbeatBeforeAnyWrites(t *testing.T) {
 			}
 			defer db.Close()
 			evaluator := &recordingDNSFailoverEvaluationRequester{}
-			service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+			service := (&DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -1496,7 +1520,7 @@ func TestDNSProbeStaleResultsThenHeartbeatResetStartsFirstPrewarmRound(t *testin
 	}
 	defer db.Close()
 	evaluator := &recordingDNSFailoverEvaluationRequester{}
-	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
 	staleAt := time.Now().Add(-2 * time.Minute).Unix()
 
 	// A stale report is rejected before target lookup or inbox writes.
@@ -1517,6 +1541,12 @@ func TestDNSProbeStaleResultsThenHeartbeatResetStartsFirstPrewarmRound(t *testin
 	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+	mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+	mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
@@ -1562,7 +1592,7 @@ func TestDNSProbeNullHeartbeatLegacyStateResetsBeforeFirstPrewarmRound(t *testin
 	}
 	defer db.Close()
 	evaluator := &recordingDNSFailoverEvaluationRequester{}
-	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true, dispatchSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -1571,6 +1601,12 @@ func TestDNSProbeNullHeartbeatLegacyStateResetsBeforeFirstPrewarmRound(t *testin
 	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+	mock.ExpectExec(`SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT current_setting`).WillReturnRows(sqlmock.NewRows([]string{"lock", "statement"}).AddRow("0", "0"))
+	mock.ExpectExec(`SET LOCAL lock_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`WITH bumped AS.*UPDATE v2_dispatch_monitor_probe SET run_id=run_id\+1 WHERE probe_id=\$1.*DELETE FROM v2_dispatch_monitor_state`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`SELECT set_config`).WithArgs("0", "0").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT dispatch_reset`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).

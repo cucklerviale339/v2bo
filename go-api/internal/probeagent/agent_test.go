@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,12 @@ func TestAgentUsesHTTPSProtocolAndBearer(t *testing.T) {
 }
 
 func TestAgentSchedulesReportsAndStopsRemovedTask(t *testing.T) {
+	for _, id := range []int64{7, -7, -(1 << 60) - 7} {
+		t.Run(fmt.Sprint(id), func(t *testing.T) { testAgentSchedulesReportsAndStopsRemovedTask(t, id) })
+	}
+}
+
+func testAgentSchedulesReportsAndStopsRemovedTask(t *testing.T, targetID int64) {
 	checker := &immediateChecker{started: make(chan struct{}), stopped: make(chan struct{})}
 	var mu sync.Mutex
 	var heartbeats, taskCalls, reports int
@@ -97,19 +104,19 @@ func TestAgentSchedulesReportsAndStopsRemovedTask(t *testing.T) {
 		case "/api/v1/probe/heartbeat":
 			heartbeats++
 			_, _ = w.Write([]byte(`{"data":{}}`))
-		case "/api/v1/probe/tasks":
+		case "/api/v1/probe/tasks", "/api/v1/probe/monitor-tasks":
 			taskCalls++
-			if taskCalls == 1 {
-				_, _ = w.Write([]byte(`{"data":[{"target_id":7,"check_host":"127.0.0.1","check_port":443,"tcp_timeout_ms":1000,"check_interval_sec":1}]}`))
+			if taskCalls <= 3 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []Task{{TargetID: targetID, TargetVersion: 3, CheckHost: "127.0.0.1", CheckPort: 1443, TCPTimeoutMS: 1000, CheckIntervalSec: 1}}})
 			} else {
 				_, _ = w.Write([]byte(`{"data":[]}`))
 			}
-		case "/api/v1/probe/results":
+		case "/api/v1/probe/results", "/api/v1/probe/monitor-results":
 			var body struct {
 				Results []Result `json:"results"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if len(body.Results) != 1 || body.Results[0].TargetID != 7 {
+			if len(body.Results) != 1 || body.Results[0].TargetID != targetID || body.Results[0].TargetVersion != 3 {
 				t.Fatalf("reported = %#v", body)
 			}
 			reports++
@@ -123,6 +130,9 @@ func TestAgentSchedulesReportsAndStopsRemovedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if targetID < 0 {
+		agent.auxiliary = true
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -135,7 +145,7 @@ func TestAgentSchedulesReportsAndStopsRemovedTask(t *testing.T) {
 	deadline := time.After(time.Second)
 	for {
 		mu.Lock()
-		complete := heartbeats >= 2 && reports >= 1
+		complete := reports >= 1 && (targetID < 0 || heartbeats >= 2)
 		mu.Unlock()
 		if complete {
 			break

@@ -20,6 +20,7 @@ import (
 	platformpostgres "forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
+	usersvc "forest/go-api/internal/user"
 )
 
 var (
@@ -483,14 +484,24 @@ type Service interface {
 }
 
 type DBService struct {
-	cfg        config.Config
-	runtime    *config.RuntimeState
-	db         *sql.DB
-	orders     orderRuntime
-	jobs       queue.Enqueuer
-	authCache  *session.AuthCache
-	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
-	sleep      func(context.Context, time.Duration) error
+	dispatchCatalog interface {
+		DispatchEntries(context.Context) ([]usersvc.DispatchEntry, error)
+	}
+	dispatchHealthMu     sync.Mutex
+	dispatchResetBlocked map[int64]bool
+	dispatchCacheMu      sync.Mutex
+	dispatchCacheAt      time.Time
+	dispatchCachedHosts  map[string]bool
+	dispatchEnsureMu     sync.Mutex
+	dispatchSchemaOK     bool
+	cfg                  config.Config
+	runtime              *config.RuntimeState
+	db                   *sql.DB
+	orders               orderRuntime
+	jobs                 queue.Enqueuer
+	authCache            *session.AuthCache
+	mailSender           func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
+	sleep                func(context.Context, time.Duration) error
 
 	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
 	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
@@ -541,7 +552,7 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 	if len(orders) > 0 {
 		runtime = orders[0]
 	}
-	service := &DBService{cfg: cfg, db: db, orders: runtime}
+	service := &DBService{cfg: cfg, db: db, orders: runtime, dispatchCatalog: usersvc.NewDBService(cfg, db)}
 	if db != nil {
 		service.dnsFailoverLogWriter = func(ctx context.Context, entries []dnsFailoverLogEntry) error {
 			return insertDNSFailoverLogs(ctx, db, entries)

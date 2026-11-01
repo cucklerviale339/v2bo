@@ -84,6 +84,11 @@ func main() {
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Printf("DNS failover initialization deferred; subscriptions remain available: %v", err)
 		}
+		monitorInitCtx, monitorInitCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := adminDBService.InitializeDispatchMonitorSchema(monitorInitCtx); err != nil {
+			log.Printf("auxiliary monitor initialization deferred; legacy DNS remains available: %v", err)
+		}
+		monitorInitCancel()
 		adminDBService.WithDNSFailoverEvaluationRequester(adminDBService).WithDNSFailoverNotifier(telegramService.DirectNotifier())
 		startDNSFailoverAutomationAfterSchema(ctx, adminDBService)
 		defer func() {

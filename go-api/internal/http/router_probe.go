@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,10 +10,21 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 
 	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
 )
+
+type dispatchProbeService interface {
+	ListDispatchProbeTasks(context.Context, int64) ([]admin.DNSProbeTask, error)
+	ReportDispatchProbeResults(context.Context, int64, admin.DNSProbeResultsRequest) (admin.DNSProbeReportResult, error)
+}
+
+type dispatchCheckProbeService interface {
+	ListDispatchCheckTasks(context.Context, int64) ([]admin.DNSProbeTask, error)
+	ReportDispatchCheckResults(context.Context, int64, admin.DNSProbeResultsRequest) (admin.DNSProbeReportResult, error)
+}
 
 const (
 	maxDNSProbeBearerSecretBytes = 512
@@ -76,7 +88,50 @@ func handleDNSProbeTasks(w http.ResponseWriter, r *http.Request, service admin.D
 	if tasks == nil {
 		tasks = make([]admin.DNSProbeTask, 0)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": tasks})
+	writeJSON(w, http.StatusOK, map[string]any{"data": tasks, "monitor_transport": true})
+}
+
+// Auxiliary failures never prevent legacy DNS task delivery.
+func handleDispatchProbeTasks(w http.ResponseWriter, r *http.Request, service admin.DNSProbeService) {
+	if !requireDNSProbeMethod(w, r, http.MethodGet) {
+		return
+	}
+	identity, ok := authenticateDNSProbeRequest(w, r, service)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	tasks := []admin.DNSProbeTask{}
+	if monitor, ok := service.(dispatchProbeService); ok {
+		entries, err := monitor.ListDispatchProbeTasks(ctx, identity.ID)
+		if err != nil {
+			writeDNSProbeServiceError(w, err)
+			return
+		}
+		tasks = append(tasks, entries...)
+	}
+	if checks, ok := service.(dispatchCheckProbeService); ok {
+		extra, err := checks.ListDispatchCheckTasks(ctx, identity.ID)
+		if err != nil {
+			writeDNSProbeServiceError(w, err)
+			return
+		}
+		tasks = append(tasks, extra...)
+	}
+
+	if len(tasks) > 1000 {
+		writeJSON(w, 409, map[string]any{"message": "每枚探针最多支持 1000 个新增监控目标，请减少目标或停用部分监控"})
+		return
+	}
+	payload, err := json.Marshal(map[string]any{"data": tasks})
+	if err != nil || len(payload) > 768<<10 {
+		writeJSON(w, 409, map[string]any{"message": "新增监控任务超过响应容量"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
 }
 
 func handleDNSProbeResults(w http.ResponseWriter, r *http.Request, service admin.DNSProbeService) {
@@ -99,7 +154,73 @@ func handleDNSProbeResults(w http.ResponseWriter, r *http.Request, service admin
 		writeDNSProbeBadRequest(w)
 		return
 	}
-	result, err := service.ReportDNSProbeResults(r.Context(), identity.ID, request)
+	if r.URL.Path == "/api/v1/probe/monitor-results" && len(request.Results) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"data": admin.DNSProbeReportResult{GroupIDs: []int64{}}})
+		return
+	}
+	legacy, dispatch := admin.DNSProbeResultsRequest{Results: []admin.DNSProbeResult{}}, admin.DNSProbeResultsRequest{Results: []admin.DNSProbeResult{}}
+	checks := admin.DNSProbeResultsRequest{Results: []admin.DNSProbeResult{}}
+	for _, result := range request.Results {
+		if result.TargetID <= -(1 << 60) {
+			checks.Results = append(checks.Results, result)
+		} else if result.TargetID < 0 {
+			dispatch.Results = append(dispatch.Results, result)
+		} else {
+			legacy.Results = append(legacy.Results, result)
+		}
+	}
+	result := admin.DNSProbeReportResult{GroupIDs: []int64{}}
+	var err error
+	if r.URL.Path == "/api/v1/probe/monitor-results" && len(legacy.Results) > 0 {
+		writeDNSProbeBadRequest(w)
+		return
+	}
+	if len(legacy.Results) > 0 || (len(dispatch.Results) == 0 && len(checks.Results) == 0) {
+		result, err = service.ReportDNSProbeResults(r.Context(), identity.ID, legacy)
+		if err != nil {
+			writeDNSProbeServiceError(w, err)
+			return
+		}
+	}
+	// A legacy endpoint never depends on auxiliary writes. Previous mixed batches
+	// are acknowledged as skipped for negatives; new agents use monitor-results.
+	if r.URL.Path != "/api/v1/probe/monitor-results" {
+		result.Skipped += len(dispatch.Results) + len(checks.Results)
+		writeJSON(w, http.StatusOK, map[string]any{"data": result})
+		return
+	}
+	if len(legacy.Results) > 0 {
+		writeDNSProbeBadRequest(w)
+		return
+	}
+	if len(checks.Results) > 0 {
+		provider, ok := service.(dispatchCheckProbeService)
+		if !ok {
+			writeDNSProbeBadRequest(w)
+			return
+		}
+		result, err = provider.ReportDispatchCheckResults(r.Context(), identity.ID, checks)
+		if err != nil {
+			writeDNSProbeServiceError(w, err)
+			return
+		}
+	}
+	if len(dispatch.Results) > 0 {
+		monitor, ok := service.(dispatchProbeService)
+		if !ok {
+			writeDNSProbeBadRequest(w)
+			return
+		}
+		var extra admin.DNSProbeReportResult
+		extra, err = monitor.ReportDispatchProbeResults(r.Context(), identity.ID, dispatch)
+		result.Accepted += extra.Accepted
+		result.Duplicates += extra.Duplicates
+		result.Skipped += extra.Skipped
+		if err != nil {
+			writeDNSProbeServiceError(w, err)
+			return
+		}
+	}
 	if err != nil {
 		writeDNSProbeServiceError(w, err)
 		return

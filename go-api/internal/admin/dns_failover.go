@@ -352,6 +352,9 @@ func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bo
 		return false, errors.New("探针不存在")
 	}
 	if currentEnabled != boolToInt64(enabled) {
+		if err := s.resetDispatchProbeSafely(ctx, tx, id); err != nil {
+			return false, fmt.Errorf("重置入口监控状态失败: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET prewarm_count = 0, last_heartbeat_at = NULL WHERE id = $1`, id); err != nil {
 			return false, fmt.Errorf("重置探针预热状态失败: %w", err)
 		}
