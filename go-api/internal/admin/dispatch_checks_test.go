@@ -90,13 +90,13 @@ func TestPostgresDispatchPoolAndRunLifecycle(t *testing.T) {
 		}
 	}
 	for _, kind := range []string{"shadowsocks", "vmess", "trojan", "tuic", "hysteria", "vless", "anytls", "v2node"} {
-		exec("CREATE TABLE v2_server_" + kind + "(id BIGINT PRIMARY KEY,host TEXT)")
+		exec("CREATE TABLE v2_server_" + kind + `(id BIGINT PRIMARY KEY,host TEXT,"show" SMALLINT NOT NULL DEFAULT 1)`)
 	}
 	if err = postgres.EnsureNodeAddressSchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}
 	// Disabled and conditional references count as config reservations; no users table.
-	exec(`INSERT INTO v2_server_vmess VALUES(7,'192.0.2.7(plan=x),192.0.2.8');
+	exec(`INSERT INTO v2_server_vmess(id,host) VALUES(7,'192.0.2.7(plan=x),192.0.2.8');
  INSERT INTO v2_insider_rule(host,match_user_ids,enabled,created_at,updated_at) VALUES('192.0.2.9','["42"]',0,1,1)`)
 	s := NewDBService(config.Config{}, db)
 	catalog := &testDispatchCatalog{entries: []usersvc.DispatchEntry{{Host: "192.0.2.7", UserIDs: []string{"42"}, UserIDRanges: []string{"100-200"}, Sources: []string{"节点管理 vmess #7"}}}}
@@ -376,7 +376,7 @@ func TestPostgresDispatchPoolAndRunLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer writer.Rollback()
-	if _, err = writer.ExecContext(ctx, `INSERT INTO v2_server_vmess VALUES(99,'192.0.2.24')`); err != nil {
+	if _, err = writer.ExecContext(ctx, `INSERT INTO v2_server_vmess(id,host) VALUES(99,'192.0.2.24')`); err != nil {
 		t.Fatal(err)
 	}
 	type outcome struct {

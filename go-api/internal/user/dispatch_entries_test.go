@@ -126,7 +126,7 @@ func TestDispatchCatalogDoesNotReadAccountsOrNodePermissions(t *testing.T) {
 	mock.ExpectQuery(`SELECT b.server_type`).WillReturnRows(sqlmock.NewRows([]string{"type", "id", "group_id"}))
 	mock.ExpectQuery(`SELECT id, match_user_ids`).WillReturnRows(sqlmock.NewRows([]string{"id", "ids", "ranges", "host", "extra", "position"}))
 	for _, table := range serverFetchTables {
-		mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf("SELECT id, host FROM %s ORDER BY id ASC", table.table))).WillReturnRows(sqlmock.NewRows([]string{"id", "host"}).AddRow(int64(1), "shared.example"))
+		mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(`SELECT id, host FROM %s WHERE "show" = 1 ORDER BY id ASC`, table.table))).WillReturnRows(sqlmock.NewRows([]string{"id", "host"}).AddRow(int64(1), "shared.example"))
 	}
 	entries, err := s.DispatchEntries(context.Background())
 	if err != nil {

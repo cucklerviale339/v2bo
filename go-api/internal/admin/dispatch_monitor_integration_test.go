@@ -50,10 +50,10 @@ func TestPostgresDispatchMonitorLifecycle(t *testing.T) {
 		}
 	}
 	for _, kind := range []string{"shadowsocks", "vmess", "trojan", "tuic", "hysteria", "vless", "anytls", "v2node"} {
-		exec("CREATE TABLE v2_server_" + kind + " (id BIGINT PRIMARY KEY,host TEXT)")
+		exec("CREATE TABLE v2_server_" + kind + ` (id BIGINT PRIMARY KEY,host TEXT,"show" SMALLINT NOT NULL DEFAULT 1)`)
 	}
 	// Deliberately no v2_user or node permission columns: ownership is configuration only.
-	exec(`INSERT INTO v2_server_vmess VALUES(7,'base.example')`)
+	exec(`INSERT INTO v2_server_vmess(id,host,"show") VALUES(7,'base.example',1),(8,'disabled-bound.example',0),(9,'disabled-base.example',0)`)
 	if err := postgres.EnsureNodeAddressSchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +61,9 @@ func TestPostgresDispatchMonitorLifecycle(t *testing.T) {
 INSERT INTO v2_node_address_binding(address_group_id,server_type,server_id,created_at,updated_at) VALUES(1,'vmess',7,1,1);
 INSERT INTO v2_node_address_rule(group_id,host,match_user_id_ranges,created_at,updated_at) VALUES(1,'range.example','["10-100"]',1,1);
 INSERT INTO v2_insider_rule(host,match_user_ids,created_at,updated_at) VALUES('inside.example','["42"]',1,1)`)
+	exec(`INSERT INTO v2_node_address_group(id,name,created_at,updated_at) VALUES(2,'disabled node group',1,1);
+INSERT INTO v2_node_address_binding(address_group_id,server_type,server_id,created_at,updated_at) VALUES(2,'vmess',8,1,1);
+INSERT INTO v2_node_address_rule(group_id,host,match_user_id_ranges,created_at,updated_at) VALUES(2,'disabled-rule.example','["1-100"]',1,1)`)
 	s := NewDBService(config.Config{}, db)
 	entries, err := s.ListDispatchMonitors(ctx)
 	if err != nil || len(entries) != 3 {
@@ -159,6 +162,25 @@ INSERT INTO v2_insider_rule(host,match_user_ids,created_at,updated_at) VALUES('i
 	current := makeResult(task, 101)
 	if r := report(current); r.Accepted != 1 {
 		t.Fatal(r)
+	}
+	// A disabled node must not contribute base addresses or rule-derived hosts.
+	// Keeping its monitor configuration must not keep it visible or scheduled.
+	exec(`UPDATE v2_server_vmess SET "show"=0 WHERE id=7`)
+	if entries, err := s.ListDispatchMonitors(ctx); err != nil || len(entries) != 0 {
+		t.Fatalf("disabled nodes still contribute entries: %#v %v", entries, err)
+	}
+	s.dispatchCacheMu.Lock()
+	s.dispatchCachedHosts = nil
+	s.dispatchCacheMu.Unlock()
+	if tasks, err := s.ListDispatchProbeTasks(ctx, pid); err != nil || len(tasks) != 0 {
+		t.Fatalf("disabled node still scheduled: %#v %v", tasks, err)
+	}
+	exec(`UPDATE v2_server_vmess SET "show"=1 WHERE id=7`)
+	s.dispatchCacheMu.Lock()
+	s.dispatchCachedHosts = nil
+	s.dispatchCacheMu.Unlock()
+	if restored := getTask(); restored.CheckPort != 24443 || restored.TargetVersion != task.TargetVersion {
+		t.Fatalf("re-enabled node lost monitor configuration: %#v", restored)
 	}
 	exec(`UPDATE v2_dns_probe SET last_heartbeat_at=$2 WHERE id=$1`, pid, time.Now().Unix()-100)
 	heartbeat()

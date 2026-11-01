@@ -33,7 +33,7 @@ type dispatchRuleScope struct {
 	spans []dispatchSpan
 }
 
-// DispatchEntries projects enabled address rules over the positive ID space.
+// DispatchEntries projects enabled nodes and address rules over the positive ID space.
 // It does not read v2_user, permissions, account status, UA, plan or age.
 func (s *DBService) DispatchEntries(ctx context.Context) ([]DispatchEntry, error) {
 	if s.db == nil {
@@ -49,7 +49,7 @@ func (s *DBService) DispatchEntries(ctx context.Context) ([]DispatchEntry, error
 	}
 	servers := make([]map[string]any, 0)
 	for _, table := range serverFetchTables {
-		rows, err := s.queryRowsAsMaps(ctx, `SELECT id, host FROM `+table.table+` ORDER BY id ASC`)
+		rows, err := s.queryRowsAsMaps(ctx, `SELECT id, host FROM `+table.table+` WHERE "show" = 1 ORDER BY id ASC`)
 		if err != nil {
 			return nil, fmt.Errorf("query dispatch node addresses: %w", err)
 		}
