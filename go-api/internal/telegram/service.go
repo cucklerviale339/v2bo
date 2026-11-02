@@ -23,6 +23,8 @@ type ticketReplyService interface {
 }
 
 type Service struct {
+	aiOps             AIOpsController
+	answerCallback    func(context.Context, string, string, bool) error
 	cfg               config.Config
 	runtime           *config.RuntimeState
 	db                *sql.DB

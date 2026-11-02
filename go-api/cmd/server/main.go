@@ -6,11 +6,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/background"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/guest"
@@ -18,6 +21,7 @@ import (
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/passport"
 	"forest/go-api/internal/payment"
+	"forest/go-api/internal/platform/ipgeo"
 	"forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -47,10 +51,28 @@ func main() {
 		}()
 	}
 
+	if db != nil {
+		geoSchemaCtx, geoSchemaCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := postgres.EnsureOnlineLocationSchema(geoSchemaCtx, db); err != nil {
+			log.Printf("online location schema initialization deferred; node reporting remains available: %v", err)
+		}
+		geoSchemaCancel()
+	}
+	geoDir := os.Getenv("FOREST_IPGEO_DIR")
+	if geoDir == "" {
+		geoDir = filepath.Join(cfg.PublicDir, "..", "storage", "ipgeo")
+	}
+	onlineGeo := ipgeo.New(geoDir)
+	defer onlineGeo.Close()
+	if status := onlineGeo.Status(); status.Status != "ready" {
+		log.Printf("online geography database: %s; run scripts/prepare-ipgeo.sh to prepare IPv4/IPv6 data", status.Status)
+	}
 	var passportService passport.Service
 	var sessionService session.Service
 	var userService usersvc.Service
 	var paymentService payment.Service
+	var aiTelegram *aiops.TelegramBridge
+	var aiOpsService *aiops.Service
 	var adminService admin.Service
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
@@ -80,7 +102,7 @@ func main() {
 		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
-		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache).WithOnlineGeoResolver(onlineGeo)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Printf("DNS failover initialization deferred; subscriptions remain available: %v", err)
 		}
@@ -99,8 +121,14 @@ func main() {
 			}
 		}()
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
+		aiOpsService = aiops.NewService(cfg, db, adminDBService)
+		defer aiOpsService.Close()
+		aiTelegram = aiops.NewTelegramBridge(aiOpsService)
+		telegramService.WithAIOps(aiTelegram)
 		adminService = adminDBService
-		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
+		nodeDBService := nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
+		nodeService = nodeDBService
+		adminDBService.WithOnlineLocationRefresh(nodeDBService.ReconcileOnlineLocations)
 		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService)
 	}
 
@@ -115,6 +143,8 @@ func main() {
 			httpapi.WithUserService(userService),
 			httpapi.WithPaymentService(paymentService),
 			httpapi.WithAdminService(adminService),
+			httpapi.WithAIOps(aiOpsService),
+			httpapi.WithAIOpsTelegram(aiTelegram),
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
 			httpapi.WithTelegramService(telegramService),
@@ -123,6 +153,12 @@ func main() {
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
+	if aiTelegram != nil {
+		if err := aiTelegram.Start(ctx, telegramService.AITransport()); err != nil {
+			log.Printf("AI Telegram start: %v", err)
+		}
+		defer aiTelegram.Close()
+	}
 	go func() {
 		<-ctx.Done()
 

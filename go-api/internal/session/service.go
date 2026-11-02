@@ -91,6 +91,33 @@ func (s *DBService) Authenticate(ctx context.Context, authToken string, requireA
 	return identity, nil
 }
 
+// AuthenticateFresh rechecks the signed token, live session and current role.
+// Sensitive endpoints must not reuse either the identity cache or an in-flight
+// cached lookup when an administrator has been demoted or a session revoked.
+func (s *DBService) AuthenticateFresh(ctx context.Context, authToken string, requireAdmin bool) (*Identity, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrUnavailable
+	}
+	authToken = cleanAuthToken(authToken)
+	if authToken == "" || strings.TrimSpace(s.cfg.AppKey) == "" {
+		return nil, ErrUnauthorized
+	}
+	timeout := s.cfg.ReadTimeout
+	if timeout <= 0 {
+		timeout = defaultAuthLookupTimeout
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	identity, _, err := s.findIdentityForAuthToken(lookupCtx, authToken)
+	if err != nil {
+		return nil, err
+	}
+	if requireAdmin && identity.IsAdmin == 0 {
+		return nil, ErrUnauthorized
+	}
+	return identity, nil
+}
+
 func (s *DBService) authenticateSlowPath(ctx context.Context, authToken string) (*Identity, error) {
 	resultCh := s.authGroup.DoChan(authToken, func() (any, error) {
 		if s.authCache != nil {

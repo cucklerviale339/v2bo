@@ -1,0 +1,588 @@
+package aiops
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+const actionLifetime = 15 * time.Minute
+const executionLifetime = 120 * time.Second
+
+var nodeTables = map[string]string{"shadowsocks": "v2_server_shadowsocks", "vmess": "v2_server_vmess", "vless": "v2_server_vless", "trojan": "v2_server_trojan", "tuic": "v2_server_tuic", "hysteria": "v2_server_hysteria", "anytls": "v2_server_anytls", "v2node": "v2_server_v2node"}
+
+type actionSpec struct {
+	Kind       string
+	TargetID   int64
+	TargetType string
+	Payload    json.RawMessage
+	Reason     string
+	ActorID    int64 `json:"-"`
+	SessionID  int64 `json:"-"`
+}
+
+func hashOperation(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+func scanAction(row interface{ Scan(...any) error }) (Action, error) {
+	var a Action
+	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID, &a.ExitCode)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return a, err
+}
+func (s *Service) ListActions(ctx context.Context, actorID, sessionID int64) ([]Action, error) {
+	if err := s.ensureSchema(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.requireOperator(ctx, actorID); err != nil {
+		return nil, err
+	}
+	if sessionID <= 0 {
+		return nil, ErrValidation
+	}
+	if err := s.requireSessionAccess(ctx, actorID, sessionID); err != nil {
+		return nil, err
+	}
+	if err := s.reconcileExpiredActions(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+actionColumns+` FROM v2_ai_action WHERE session_id=$1 ORDER BY id DESC LIMIT 100`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Action{}
+	for rows.Next() {
+		a, err := scanAction(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// Called by both list and management paths: a restart must not leave an old
+// running record permanently blocking reset or server maintenance.
+func (s *Service) reconcileExpiredActions(ctx context.Context) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `UPDATE v2_ai_action SET status=CASE WHEN status='pending' THEN 'expired' ELSE 'unknown' END,error=CASE WHEN status='running' THEN '执行连接已中断或进程已重启，结果未知，可能已部分执行；禁止自动重试' ELSE error END,completed_at=$1,updated_at=$1 WHERE (status='pending' AND expires_at<=$1) OR(status='running' AND claimed_at<$1-`+actionStaleSecondsSQL+`)`, now)
+	return err
+}
+func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, callID string, spec actionSpec) (Action, error) {
+	var empty Action
+	if !actionCapabilityAllowed(spec.Kind) {
+		return empty, ErrForbidden
+	}
+	if actorID <= 0 || sessionID <= 0 || len(callID) < 1 || len(callID) > 255 || len(spec.Payload) > 32768 || strings.TrimSpace(spec.Reason) == "" || len([]rune(spec.Reason)) > 500 {
+		return empty, ErrValidation
+	}
+	if err := s.ensureSchema(ctx); err != nil {
+		return empty, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer tx.Rollback()
+	if err = lockAIState(ctx, tx); err != nil {
+		return empty, err
+	}
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+		return empty, err
+	}
+	if err = s.requireSessionAccessTx(ctx, tx, actorID, sessionID); err != nil {
+		return empty, err
+	}
+	if err = s.requireSessionTx(ctx, tx, sessionID); err != nil {
+		return empty, err
+	}
+	spec.ActorID, spec.SessionID = actorID, sessionID
+	reqBytes, _ := json.Marshal(spec)
+	requestHash := hashOperation(string(reqBytes))
+	var existingHash string
+	err = tx.QueryRowContext(ctx, `SELECT request_hash FROM v2_ai_action WHERE session_id=$1 AND tool_call_id=$2`, sessionID, callID).Scan(&existingHash)
+	if err == nil {
+		if existingHash != requestHash {
+			return empty, ErrConflict
+		}
+		a, err := scanAction(tx.QueryRowContext(ctx, `SELECT `+actionColumns+` FROM v2_ai_action WHERE session_id=$1 AND tool_call_id=$2`, sessionID, callID))
+		if err != nil {
+			return empty, err
+		}
+		return a, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return empty, err
+	}
+	if spec.Kind == "server_register" {
+		if existing, e := pendingServerRegistration(ctx, tx, sessionID, actorID, spec.TargetID); e == nil {
+			return existing, tx.Commit()
+		} else if !errors.Is(e, ErrNotFound) {
+			return empty, e
+		}
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_action WHERE session_id=$1 AND status='pending' AND expires_at>$2`, sessionID, time.Now().Unix()).Scan(&pending); err != nil {
+		return empty, err
+	}
+	if pending >= 20 {
+		return empty, ErrBusy
+	}
+	payload, snapshot, label, err := s.captureActionTarget(ctx, tx, spec)
+	if err != nil {
+		return empty, err
+	}
+	now := time.Now().Unix()
+	a, err := scanAction(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_action(session_id,actor_id,tool_call_id,kind,target_id,target_type,server_label,payload,snapshot_hash,request_hash,reason,status,expires_at,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8::JSONB,$9,$10,$11,'pending',$12,$13,$13) RETURNING `+actionColumns, sessionID, actorID, callID, spec.Kind, spec.TargetID, spec.TargetType, label, string(payload), snapshot, requestHash, spec.Reason, now+int64(actionLifetime/time.Second), now))
+	if err != nil {
+		return empty, err
+	}
+	return a, tx.Commit()
+}
+
+type sshPayload struct {
+	ServerID       int64  `json:"server_id"`
+	Command        string `json:"command"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Username       string `json:"username"`
+	HostKeySHA256  string `json:"host_key_sha256"`
+}
+type nodePatch struct {
+	Host *string `json:"host,omitempty"`
+	Port *int    `json:"port,omitempty"`
+	Show *int    `json:"show,omitempty"`
+}
+type nodePayload struct {
+	NodeType string         `json:"node_type"`
+	NodeID   int64          `json:"node_id"`
+	Before   map[string]any `json:"before"`
+	Changes  nodePatch      `json:"changes"`
+}
+
+func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec actionSpec) (json.RawMessage, string, string, error) {
+	if !actionCapabilityAllowed(spec.Kind) {
+		return nil, "", "", ErrForbidden
+	}
+	switch spec.Kind {
+	case "panel_operation":
+		return s.capturePanelOperation(ctx, tx, spec)
+	case "server_register":
+		return s.captureServerRegisterAction(ctx, tx, spec)
+	case "user_update":
+		return s.captureUserAction(ctx, tx, spec)
+	case "ticket_update", "ticket_settings":
+		return s.captureTicketAction(ctx, tx, spec)
+	case "node_update":
+		return s.captureNodeUpdateAction(ctx, tx, spec)
+	case "ssh_command":
+		var p sshPayload
+		if json.Unmarshal(spec.Payload, &p) != nil || p.ServerID <= 0 || len(p.Command) == 0 || len(p.Command) > 16000 || strings.ContainsRune(p.Command, 0) {
+			return nil, "", "", ErrValidation
+		}
+		timeoutSeconds, err := normalizeSSHTimeout(p.TimeoutSeconds)
+		if err != nil {
+			return nil, "", "", err
+		}
+		p.TimeoutSeconds = timeoutSeconds
+		v, err := s.loadSSHServer(ctx, tx, p.ServerID, true)
+		if err != nil {
+			return nil, "", "", err
+		}
+		p.Host = v.Host
+		p.Port = v.Port
+		p.Username = v.Username
+		p.HostKeySHA256 = v.HostKeySHA256
+		raw, _ := json.Marshal(p)
+		snapshot, _ := json.Marshal(v)
+		return raw, hashOperation(string(snapshot)), v.Name, nil
+	case "node_change":
+		var p nodePayload
+		if json.Unmarshal(spec.Payload, &p) != nil || p.NodeID <= 0 || nodeTables[p.NodeType] == "" {
+			return nil, "", "", ErrValidation
+		}
+		if p.Changes.Host == nil && p.Changes.Port == nil && p.Changes.Show == nil {
+			return nil, "", "", ErrValidation
+		}
+		if p.Changes.Host != nil {
+			host, err := NormalizeHost(*p.Changes.Host)
+			if err != nil {
+				return nil, "", "", ErrValidation
+			}
+			p.Changes.Host = &host
+		}
+		if p.Changes.Port != nil && (*p.Changes.Port < 1 || *p.Changes.Port > 65535) {
+			return nil, "", "", ErrValidation
+		}
+		if p.Changes.Show != nil && *p.Changes.Show != 0 && *p.Changes.Show != 1 {
+			return nil, "", "", ErrValidation
+		}
+		before, hash, err := loadNodeSnapshot(ctx, tx, p.NodeType, p.NodeID)
+		if err != nil {
+			return nil, "", "", err
+		}
+		p.Before = before
+		raw, _ := json.Marshal(p)
+		return raw, hash, "", nil
+	default:
+		return nil, "", "", ErrValidation
+	}
+}
+
+// Snapshot configuration, not noisy probe observations. An operator changing a
+// host, port, automatic-split setting, policy, or probe enablement invalidates
+// the card; the model cannot silently reuse a confirmation for new targets.
+func loadNodeSnapshot(ctx context.Context, tx *sql.Tx, kind string, id int64) (map[string]any, string, error) {
+	table := nodeTables[kind]
+	if table == "" {
+		return nil, "", ErrValidation
+	}
+	var raw, host, port string
+	var show int
+	if err := tx.QueryRowContext(ctx, `SELECT to_jsonb(n)::TEXT,host,port::TEXT,"show" FROM `+table+` n WHERE id=$1 FOR UPDATE`, id).Scan(&raw, &host, &port, &show); errors.Is(err, sql.ErrNoRows) {
+		return nil, "", ErrNotFound
+	} else if err != nil {
+		return nil, "", err
+	}
+	return map[string]any{"host": host, "port": port, "show": show}, hashOperation(raw), nil
+}
+func (s *Service) RejectAction(ctx context.Context, actorID, sessionID, id int64) (Action, error) {
+	return s.changeAction(ctx, actorID, sessionID, id, false)
+}
+func (s *Service) ApproveAction(ctx context.Context, actorID, sessionID, id int64) (Action, error) {
+	return s.changeAction(ctx, actorID, sessionID, id, true)
+}
+
+func requireActionSessionTx(ctx context.Context, tx *sql.Tx, sessionID int64) error {
+	var id int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM v2_ai_session WHERE id=$1 FOR UPDATE NOWAIT`, sessionID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) && pgerr.Code == "55P03" {
+		return ErrBusy
+	}
+	return err
+}
+func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64, approve bool) (Action, error) {
+	return s.changeActionAuthorized(ctx, actorID, sessionID, id, approve, 0)
+}
+func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID, id int64, approve bool, autoTurnID int64) (Action, error) {
+	var empty Action
+	if id <= 0 || sessionID <= 0 {
+		return empty, ErrValidation
+	}
+	if err := s.ensureSchema(ctx); err != nil {
+		return empty, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer tx.Rollback()
+	if err = lockAIState(ctx, tx); err != nil {
+		return empty, err
+	}
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+		return empty, err
+	}
+	if err = s.requireSessionAccessTx(ctx, tx, actorID, sessionID); err != nil {
+		return empty, err
+	}
+	if err = requireActionSessionTx(ctx, tx, sessionID); err != nil {
+		return empty, err
+	}
+	a, err := scanAction(tx.QueryRowContext(ctx, `SELECT `+actionColumns+` FROM v2_ai_action WHERE id=$1 AND session_id=$2 FOR UPDATE`, id, sessionID))
+	if err != nil {
+		return empty, err
+	}
+	if approve && !actionCapabilityAllowed(a.Kind) {
+		return empty, ErrForbidden
+	}
+	if a.Status != "pending" {
+		return a, ErrConflict
+	}
+	approvalMode := "manual"
+	if autoTurnID > 0 {
+		if !approve || a.ActorID != actorID || !strings.HasPrefix(a.ToolCallID, fmt.Sprintf("turn:%d:", autoTurnID)) {
+			return empty, ErrForbidden
+		}
+		if err = s.requireFullAccessTx(ctx, tx, actorID, sessionID, autoTurnID); err != nil {
+			return empty, err
+		}
+		approvalMode = "full_access"
+	}
+	a.ApprovalMode, a.AuthorizationTurnID = approvalMode, autoTurnID
+
+	now := time.Now().Unix()
+	if a.ExpiresAt <= now {
+		return a, ErrConflict
+	}
+	if !approve {
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='rejected',completed_at=$2,updated_at=$2,rejected_by=$3 WHERE id=$1`, id, now, actorID); err != nil {
+			return empty, err
+		}
+		a.Status = "rejected"
+		a.CompletedAt = now
+		a.UpdatedAt = now
+		a.RejectedBy = actorID
+		return a, tx.Commit()
+	}
+	// Long SSH commands no longer hold the session row lock while executing.
+	// Keep approvals serialized explicitly while allowing the model to save
+	// its final reply and the browser to receive ongoing output.
+	var actionRunning bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action WHERE session_id=$1 AND status='running')`, sessionID).Scan(&actionRunning); err != nil {
+		return empty, err
+	}
+	if actionRunning {
+		return empty, ErrBusy
+	}
+	// Disabling AI prevents new approvals, not only new model requests. Lock the
+	// config row until the action is claimed so a concurrent disable is ordered.
+	var enabled bool
+	if err = tx.QueryRowContext(ctx, `SELECT enabled FROM v2_ai_config WHERE id=1 FOR SHARE`).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
+		return empty, ErrUnavailable
+	} else if err != nil {
+		return empty, err
+	}
+	if !enabled {
+		return empty, ErrUnavailable
+	}
+	var snapshot string
+	if err = tx.QueryRowContext(ctx, `SELECT snapshot_hash FROM v2_ai_action WHERE id=$1`, id).Scan(&snapshot); err != nil {
+		return empty, err
+	}
+	spec := actionSpec{Kind: a.Kind, TargetID: a.TargetID, TargetType: a.TargetType, Payload: a.Payload, Reason: a.Reason, ActorID: a.ActorID, SessionID: a.SessionID}
+	_, current, _, err := s.captureActionTarget(ctx, tx, spec)
+	if err != nil {
+		return empty, err
+	}
+	if snapshot != current {
+		return a, ErrConflict
+	}
+	if a.Kind == "panel_operation" {
+		if err = s.validatePanelOperationApprover(ctx, tx, actorID, a); err != nil {
+			return empty, err
+		}
+	}
+	if a.Kind == "server_register" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "user_update" || a.Kind == "ticket_update" {
+		a.ApprovedBy = actorID
+		output := panelActionOutput(approvalMode)
+		if a.Kind == "server_register" {
+			output, err = s.applyServerRegisterAction(ctx, tx, a)
+		} else {
+			err = applyPanelAction(ctx, tx, a)
+		}
+		if err != nil {
+			return empty, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='succeeded',claimed_at=$2,completed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5,output=$6 WHERE id=$1`, id, now, actorID, approvalMode, autoTurnID, output); err != nil {
+			return empty, err
+		}
+		if err = tx.Commit(); err != nil {
+			return empty, err
+		}
+		a.Status = "succeeded"
+		a.ClaimedAt = now
+		a.CompletedAt = now
+		a.UpdatedAt = now
+		a.ApprovedBy = actorID
+		a.Output = output
+		if a.Kind == "user_update" {
+			if invalidator, ok := s.panel.(interface{ InvalidateAIUserSessions(int64) }); ok {
+				invalidator.InvalidateAIUserSessions(a.TargetID)
+			}
+		}
+		if a.Kind == "ticket_update" {
+			s.afterTicketAction(ctx, a)
+		}
+		return a, nil
+	}
+	// Register under the service lifecycle lock before committing the claim. The
+	// Close method cancels and waits, and identical actions cannot be run twice.
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return empty, ErrUnavailable
+	}
+	workerBase := context.Background()
+	if autoTurnID > 0 {
+		workerBase = ctx
+	}
+	workerCtx, cancel := context.WithTimeout(workerBase, actionExecutionLifetime(a))
+	workerKey := -a.ID
+	if _, exists := s.workers[workerKey]; exists {
+		s.mu.Unlock()
+		cancel()
+		return empty, ErrConflict
+	}
+	s.workers[workerKey] = cancel
+	s.wg.Add(1)
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='running',claimed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5 WHERE id=$1 AND status='pending'`, id, now, actorID, approvalMode, autoTurnID); err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		delete(s.workers, workerKey)
+		s.wg.Done()
+		s.mu.Unlock()
+		cancel()
+		return empty, err
+	}
+	s.mu.Unlock()
+	a.Status = "running"
+	a.ClaimedAt = now
+	a.UpdatedAt = now
+	a.ApprovedBy = actorID
+	go s.executeAction(workerCtx, cancel, a, snapshot)
+	return a, nil
+}
+func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
+	if !actionCapabilityAllowed(a.Kind) {
+		return ErrForbidden
+	}
+	if a.Kind == "node_update" {
+		return applyNodeUpdateAction(ctx, tx, a)
+	}
+	if a.Kind == "user_update" {
+		return applyUserAction(ctx, tx, a)
+	}
+	if a.Kind == "ticket_update" {
+		return applyTicketAction(ctx, tx, a)
+	}
+	var p nodePayload
+	if json.Unmarshal(a.Payload, &p) != nil {
+		return ErrValidation
+	}
+	table := nodeTables[p.NodeType]
+	if table == "" {
+		return ErrValidation
+	}
+	sets := []string{}
+	args := []any{p.NodeID}
+	if p.Changes.Host != nil {
+		args = append(args, *p.Changes.Host)
+		sets = append(sets, fmt.Sprintf("host=$%d", len(args)))
+	}
+	if p.Changes.Port != nil {
+		if p.NodeType == "vless" {
+			args = append(args, *p.Changes.Port)
+		} else {
+			args = append(args, strconv.Itoa(*p.Changes.Port))
+		}
+		sets = append(sets, fmt.Sprintf("port=$%d", len(args)))
+	}
+	if p.Changes.Show != nil {
+		args = append(args, *p.Changes.Show)
+		sets = append(sets, fmt.Sprintf(`"show"=$%d`, len(args)))
+	}
+	if len(sets) == 0 {
+		return ErrValidation
+	}
+	args = append(args, time.Now().Unix())
+	sets = append(sets, fmt.Sprintf("updated_at=$%d", len(args)))
+	_, err := tx.ExecContext(ctx, `UPDATE `+table+` SET `+strings.Join(sets, ",")+` WHERE id=$1`, args...)
+	return err
+}
+func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, a Action, snapshot string) {
+	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
+	if !actionCapabilityAllowed(a.Kind) {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='AI 无此业务操作权限，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
+	go s.watchAction(ctx, cancel, a.ID)
+	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
+	var exitCode *int
+	if s.requireOperator(ctx, a.ApprovedBy) != nil || s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID) != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='运维权限已变化，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
+	if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, a.ApprovedBy, a.SessionID, a.AuthorizationTurnID) != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='完全访问授权已撤回，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
+
+	if a.Kind == "ticket_settings" {
+		status, output, problem = s.executeTicketSettings(ctx, a, snapshot)
+	}
+	if a.Kind == "panel_operation" {
+		status, output, problem = s.executePanelOperation(ctx, a, snapshot)
+	}
+	if a.Kind == "ssh_command" {
+		var p sshPayload
+		if json.Unmarshal(a.Payload, &p) == nil {
+			// Hold a SHARE lock across connection/execution. Credential edits/deletion
+			// wait, so a deleted or replaced server is never used by a late worker.
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err == nil {
+				defer tx.Rollback()
+				if err = lockAIState(ctx, tx); err == nil {
+					// Cleanup requires the exclusive AI state lock, so this shared
+					// lock already preserves the session. Do not hold its row lock
+					// for a long installation: the model must still finish its reply.
+					var sessionID int64
+					err = tx.QueryRowContext(ctx, `SELECT id FROM v2_ai_session WHERE id=$1`, a.SessionID).Scan(&sessionID)
+				}
+				if err == nil {
+					// Do not hold a role row lock through an SSH installation:
+					// administrators must be able to revoke the employee at once.
+					err = s.requireOperator(ctx, a.ApprovedBy)
+				}
+				if err == nil {
+					err = s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID)
+				}
+				var v sshSecretServer
+				if err == nil {
+					v, err = s.loadSSHServer(ctx, tx, p.ServerID, true)
+				}
+				if err == nil {
+					raw, _ := json.Marshal(v)
+					if hashOperation(string(raw)) != snapshot {
+						err = ErrConflict
+					}
+				}
+				if err == nil {
+					result := s.runSSHWithProgress(ctx, v, p.Command, func(output string) { s.persistSSHProgress(ctx, a.ID, output) })
+					output = result.Output
+					exitCode = result.ExitCode
+					if result.Err == nil {
+						status = "succeeded"
+						problem = ""
+					} else {
+						problem = result.Err.Error()
+						if result.Uncertain {
+							status = "unknown"
+						}
+					}
+				} else {
+					problem = "服务器或会话配置已变化，未发送命令"
+				}
+			}
+		}
+	}
+	// UPDATE only: session reset/deletion cannot be undone by a late completion.
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finishCancel()
+	_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5,exit_code=$6 WHERE id=$1 AND status='running'`, a.ID, status, output, problem, time.Now().Unix(), exitCode)
+}

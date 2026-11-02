@@ -29,3 +29,4 @@ go-api/internal/storage/logs/
 .local/
 .legacy-config-backup.*
 analysis/admin-bundle/
+storage/ipgeo/

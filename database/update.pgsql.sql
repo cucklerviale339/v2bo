@@ -325,3 +325,17 @@ SET "traffic_reset_anchor_at" = COALESCE((
 WHERE u."plan_id" IS NOT NULL
   AND u."expired_at" > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT
   AND (u."traffic_reset_anchor_at" = 0 OR u."traffic_reset_anchor_plan_id" <> u."plan_id");
+
+-- One latest coarse location per user; no raw IP or connection history.
+CREATE TABLE IF NOT EXISTS v2_user_online_location (
+user_id INTEGER PRIMARY KEY REFERENCES v2_user(id) ON DELETE CASCADE,
+country_code VARCHAR(2) NOT NULL DEFAULT '',
+country_name VARCHAR(128) NOT NULL DEFAULT '',
+province_code VARCHAR(6) NOT NULL DEFAULT '',
+province_name VARCHAR(128) NOT NULL DEFAULT '',
+city_name VARCHAR(128) NOT NULL DEFAULT '',
+unknown_reason VARCHAR(32) NOT NULL DEFAULT '',
+last_seen_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_v2_user_online_location_last_seen ON v2_user_online_location(last_seen_at);
+ALTER TABLE v2_user_online_location ADD COLUMN IF NOT EXISTS city_name VARCHAR(128) NOT NULL DEFAULT '';

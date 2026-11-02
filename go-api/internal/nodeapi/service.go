@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/platform/ipgeo"
 	"forest/go-api/internal/user"
 )
 
@@ -88,12 +90,17 @@ type runtimeConfigProvider interface {
 }
 
 type DBService struct {
-	cfg                 config.Config
-	db                  *sql.DB
-	reporter            trafficReporter
-	runtime             runtimeConfigProvider
-	sensitiveSchemaOnce sync.Once
-	sensitiveSchemaErr  error
+	onlineGeo              ipgeo.Resolver
+	onlineGeoLastError     atomic.Int64
+	onlineGeoRefreshMu     sync.Mutex
+	onlineGeoRefreshAt     int64
+	onlineGeoRefreshCursor int64
+	cfg                    config.Config
+	db                     *sql.DB
+	reporter               trafficReporter
+	runtime                runtimeConfigProvider
+	sensitiveSchemaOnce    sync.Once
+	sensitiveSchemaErr     error
 }
 
 var nodeServerTables = map[string]string{

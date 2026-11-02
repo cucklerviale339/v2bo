@@ -17,6 +17,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/payment"
+	"forest/go-api/internal/platform/ipgeo"
 	platformpostgres "forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -484,7 +485,9 @@ type Service interface {
 }
 
 type DBService struct {
-	dispatchCatalog interface {
+	onlineGeo             ipgeo.Resolver
+	onlineLocationRefresh func(context.Context) error
+	dispatchCatalog       interface {
 		DispatchEntries(context.Context) ([]usersvc.DispatchEntry, error)
 	}
 	dispatchHealthMu     sync.Mutex

@@ -976,6 +976,11 @@ run_ops_migrate_config() {
 }
 
 build() {
+  if [[ -f "${ROOT_DIR}/scripts/prepare-ipgeo.sh" ]]; then
+    if ! bash "${ROOT_DIR}/scripts/prepare-ipgeo.sh"; then
+      echo "地区库暂未完整准备，网站仍可正常运行；在线分析页会标注未识别地区。" >&2
+    fi
+  fi
   ensure_go
   cd "${GO_DIR}"
   GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" "${GO_BIN}" mod tidy

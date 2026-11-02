@@ -577,7 +577,7 @@ func (s *DBService) setTelegramWebhook(cfg *phpConfigFile, token string) (bool, 
 	if err := telegramAPICall(client, token, "getMe", nil); err != nil {
 		return false, err
 	}
-	if err := telegramAPICall(client, token, "setWebhook", map[string]string{"url": hookURL}); err != nil {
+	if err := telegramAPICall(client, token, "setWebhook", map[string]string{"url": hookURL, "secret_token": cfgpkg.TelegramAIWebhookSecret(s.currentConfig().AppKey, token)}); err != nil {
 		return false, err
 	}
 	info, err := telegramAPIResultMap(client, token, "getWebhookInfo", nil)

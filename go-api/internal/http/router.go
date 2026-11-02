@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/guest"
 	"forest/go-api/internal/nodeapi"
@@ -39,6 +41,8 @@ type telegramWebhookService interface {
 }
 
 type routerState struct {
+	aiOps             aiOpsService
+	aiTelegram        aiTelegramService
 	subscribeGuard    subscriptionGuardStore
 	readyCheck        func(context.Context) error
 	runtime           *config.RuntimeState
@@ -210,6 +214,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 	})
 	fileServer := http.FileServer(http.Dir(cfg.PublicDir))
 
+	if target, ok := state.aiOps.(interface{ SetPanelOperations(aiops.PanelOperations) }); ok {
+		target.SetPanelOperations(newPanelOperations(cfg, state))
+	}
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := cfg
 		if state.runtime != nil {
@@ -224,6 +232,15 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		w, r = guardWriter, guardRequest
 
 		switch {
+		case r.URL.Path == "/ai-ops-mini":
+			renderTelegramMiniShell(w, r, cfg)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/ai-ops-mini/"):
+			handleAITelegramMini(w, r, state.aiTelegram, state.aiOps, strings.TrimPrefix(r.URL.Path, "/api/v1/ai-ops-mini/"))
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"):
+			handleAITelegram(w, r, state.session, state.aiTelegram, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"))
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/"):
+			handleAIOps(w, r, state.session, state.aiOps, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/"))
+
 		case r.URL.Path == "/probe/install.sh" || strings.HasPrefix(r.URL.Path, "/probe/download/"):
 			http.NotFound(w, r)
 			return
@@ -616,6 +633,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/system/getSystemStatus":
 			if handleAdminSystemStatus(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/stat/online":
+			if handleAdminStatOnline(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/stat/online/users":
+			if handleAdminStatOnlineUsers(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/stat/getOverride":
@@ -1263,7 +1288,21 @@ func handleGuestTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg conf
 		payload = map[string]any{}
 	}
 
-	if err := service.HandleWebhook(r.Context(), payload); err != nil {
+	ctx := r.Context()
+	current := config.Load()
+	token := strings.TrimSpace(current.TelegramBotToken)
+	if token == "" {
+		token = cfg.TelegramBotToken
+	}
+	appKey := current.AppKey
+	if appKey == "" {
+		appKey = cfg.AppKey
+	}
+	secret := config.TelegramAIWebhookSecret(appKey, token)
+	if secret != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), []byte(secret)) == 1 {
+		ctx = telegram.WithVerifiedAIWebhook(ctx)
+	}
+	if err := service.HandleWebhook(ctx, payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 		return true
 	}

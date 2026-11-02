@@ -9,6 +9,8 @@ import {
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import OnlineAnalyticsPage from './pages/OnlineAnalyticsPage';
+import AIOpsPage from './pages/AIOpsPage';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
 import ServerManage from './pages/ServerManage';
@@ -44,6 +46,7 @@ function getIsMobileViewport() {
 
 const menu = [
   { type: 'item', key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
+  { type: 'item', key: '/config/ai-ops', icon: <MessageOutlined />, label: 'AI 运维' },
   { type: 'heading', key: 'setting-heading', label: '设置' },
   { type: 'item', key: '/config/system', icon: <SettingOutlined />, label: '系统配置' },
   { type: 'item', key: '/config/payment', icon: <CreditCardOutlined />, label: '支付配置' },
@@ -86,6 +89,8 @@ function normalizePath() {
 
 function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
+  if (route === '/config/ai-ops') return <AIOpsPage />;
+  if (route === '/dashboard/online') return <OnlineAnalyticsPage />;
   if (route === '/dashboard') return <Dashboard />;
   if (route === '/user') return <UserPage />;
   if (route === '/plan') return <PlanPage />;

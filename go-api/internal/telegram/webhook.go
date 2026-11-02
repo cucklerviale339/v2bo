@@ -29,6 +29,10 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 		return nil
 	}
 
+	if handled, err := s.handleAIWebhook(ctx, payload); err != nil || handled {
+		return err
+	}
+
 	if joinPayload, ok := payload["chat_join_request"].(map[string]any); ok {
 		return s.handleChatJoinRequest(ctx, joinPayload)
 	}
