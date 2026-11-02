@@ -26,6 +26,7 @@ import (
 	"time"
 
 	cfgpkg "forest/go-api/internal/config"
+	"forest/go-api/internal/platform/mailwire"
 	"forest/go-api/internal/platform/smtpcompat"
 )
 
@@ -1361,17 +1362,7 @@ func sendMail(host string, port int, encryption, username, password, from, fromN
 }
 
 func buildSMTPMessage(from, fromName, to, subject, body string) []byte {
-	return []byte(strings.Join([]string{
-		"To: " + to,
-		"From: " + buildSMTPHeaderFrom(from, fromName),
-		"Subject: " + subject,
-		"Date: " + time.Now().Format(time.RFC1123Z),
-		"Message-ID: <" + newAdminSMTPMessageID(from) + ">",
-		"MIME-Version: 1.0",
-		"Content-Type: " + adminSMTPContentType(body),
-		"",
-		body,
-	}, "\r\n"))
+	return mailwire.Build(from, fromName, to, subject, newAdminSMTPMessageID(from), time.Now(), body)
 }
 
 func newAdminSMTPMessageID(from string) string {

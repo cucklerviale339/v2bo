@@ -26,6 +26,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/platform/mailtmpl"
+	"forest/go-api/internal/platform/mailwire"
 	"forest/go-api/internal/platform/smtpcompat"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -1239,22 +1240,7 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", host, port)
-	headerFrom := from
-	if settings.FromName != "" {
-		headerFrom = fmt.Sprintf("%s <%s>", settings.FromName, from)
-	}
-
-	msg := strings.Builder{}
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", headerFrom))
-	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
-	msg.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
-	msg.WriteString(fmt.Sprintf("Message-ID: <%s>\r\n", newSMTPMessageID(from)))
-	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString("Content-Type: " + smtpContentType(body) + "\r\n")
-	msg.WriteString("\r\n")
-	msg.WriteString(body)
-	msg.WriteString("\r\n")
+	message := mailwire.Build(from, settings.FromName, to, subject, newSMTPMessageID(from), time.Now(), body)
 
 	if strings.EqualFold(settings.Encryption, "ssl") {
 		conn, err := tls.Dial("tcp", addr, &tls.Config{
@@ -1287,7 +1273,7 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := writer.Write([]byte(msg.String())); err != nil {
+		if _, err := writer.Write(message); err != nil {
 			return err
 		}
 		return writer.Close()
@@ -1297,7 +1283,7 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	if settings.Username != "" {
 		auth = smtpcompat.PlainAuth("", settings.Username, settings.Password, host, smtpcompat.AllowInsecureAuth(settings.Encryption))
 	}
-	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg.String()))
+	return smtp.SendMail(addr, auth, from, []string{to}, message)
 }
 
 func newSMTPMessageID(from string) string {

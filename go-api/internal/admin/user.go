@@ -973,6 +973,7 @@ func (s *DBService) SendUserMail(ctx context.Context, req UserMailRequest) (bool
 	if err != nil {
 		return false, err
 	}
+	req.Subject = normalizeBulkMailSubject(req.Subject, mailConfig.appName)
 
 	if err := s.dispatchUserMailJobs(ctx, recipients, req.Subject, req.Content, mailConfig); err != nil {
 		return false, err
@@ -1151,7 +1152,7 @@ func (s *DBService) dispatchUserMailJobs(ctx context.Context, recipients []bulkM
 			log.Printf("bulk mail batch: selected=%d sent=%d failed=%d skipped=%d remaining=%d", len(recipientList), sent, failed, skipped, len(recipientList)-sent-failed-skipped)
 		}()
 		waitBeforeNext := false
-		renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
+		renderedBody := renderAdminBulkMailBody(cfg, content)
 		for _, recipient := range recipientList {
 			if err := jobCtx.Err(); err != nil {
 				return err
