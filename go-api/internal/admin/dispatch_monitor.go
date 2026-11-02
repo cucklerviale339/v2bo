@@ -630,6 +630,9 @@ func (s *DBService) dispatchProbeResetBlocked(id int64) bool {
 }
 
 func (s *DBService) InitializeDispatchMonitorSchema(ctx context.Context) error {
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return err
+	}
 	return s.ensureDispatchMonitorSchema(ctx)
 }
 

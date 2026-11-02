@@ -116,6 +116,8 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 	}
 	defer db.Close()
 
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_xact_lock(7642309023)`)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_group`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_address_rule`).
@@ -167,6 +169,7 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_insider_rule_sort ON v2_insider_rule\(sort, id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
+	mock.ExpectCommit()
 	if err := EnsureNodeAddressSchema(context.Background(), db); err != nil {
 		t.Fatalf("EnsureNodeAddressSchema: %v", err)
 	}

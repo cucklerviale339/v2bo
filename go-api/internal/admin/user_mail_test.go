@@ -27,7 +27,7 @@ func newBulkMailTestService(t *testing.T) (*DBService, sqlmock.Sqlmock) {
 		db.Close()
 	})
 	service := &DBService{db: db}
-	service.nodeAddressEnsureOnce.Do(func() {})
+	service.nodeAddressSchemaOK = true
 	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
 		t.Fatalf("unexpected SMTP attempt to %s", to)
 		return nil
@@ -97,7 +97,8 @@ func TestBulkMailRejectsUnreadableExclusions(t *testing.T) {
 	if _, err := service.PreviewUserMail(context.Background(), UserMailRequest{}); err == nil {
 		t.Fatal("database failure must prevent recipient query")
 	}
-	service.nodeAddressEnsureErr = errors.New("schema unavailable")
+	service.nodeAddressSchemaOK = false
+	mock.ExpectBegin().WillReturnError(errors.New("schema unavailable"))
 	if _, err := service.PreviewUserMail(context.Background(), UserMailRequest{}); err == nil {
 		t.Fatal("schema failure must prevent recipient query")
 	}

@@ -11,10 +11,14 @@ func (s *DBService) ensureNodeAddressSchema(ctx context.Context) error {
 	if s.db == nil {
 		return ErrUnavailable
 	}
-	s.nodeAddressEnsureOnce.Do(func() {
-		if err := platformpostgres.EnsureNodeAddressSchema(ctx, s.db); err != nil {
-			s.nodeAddressEnsureErr = fmt.Errorf("ensure node address schema: %w", err)
-		}
-	})
-	return s.nodeAddressEnsureErr
+	s.nodeAddressEnsureMu.Lock()
+	defer s.nodeAddressEnsureMu.Unlock()
+	if s.nodeAddressSchemaOK {
+		return nil
+	}
+	if err := platformpostgres.EnsureNodeAddressSchema(ctx, s.db); err != nil {
+		return fmt.Errorf("ensure node address schema: %w", err)
+	}
+	s.nodeAddressSchemaOK = true
+	return nil
 }

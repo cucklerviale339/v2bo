@@ -17,7 +17,7 @@ func TestLoadInsiderSelectorIgnoresObsoleteMembersColumn(t *testing.T) {
 	defer db.Close()
 
 	service := NewDBService(config.Config{}, db)
-	service.nodeAddressEnsureOnce.Do(func() {})
+	service.nodeAddressSchemaOK = true
 	mock.ExpectQuery(`SELECT id, match_user_ids, match_user_id_ranges, host, extra_nodes, extra_nodes_position FROM v2_insider_rule WHERE enabled=1 ORDER BY id ASC`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "match_user_ids", "match_user_id_ranges", "host", "extra_nodes", "extra_nodes_position"}).
 			AddRow(int64(7), `["10"]`, `[]`, "inside.example.com", `[]`, "replace"))

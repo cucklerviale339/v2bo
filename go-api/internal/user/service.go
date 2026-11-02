@@ -248,8 +248,8 @@ type DBService struct {
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
-	nodeAddressEnsureOnce sync.Once
-	nodeAddressEnsureErr  error
+	nodeAddressEnsureMu   sync.Mutex
+	nodeAddressSchemaOK   bool
 	subscribeAccessOnce   sync.Once
 	subscribeAccessErr    error
 	subscribeCleanupMu    sync.Mutex

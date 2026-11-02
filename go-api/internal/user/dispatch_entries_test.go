@@ -121,7 +121,7 @@ func TestDispatchCatalogDoesNotReadAccountsOrNodePermissions(t *testing.T) {
 	}
 	defer db.Close()
 	s := &DBService{db: db}
-	s.nodeAddressEnsureOnce.Do(func() {})
+	s.nodeAddressSchemaOK = true
 	mock.ExpectQuery(`SELECT r.id, r.group_id`).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "host", "ids", "ranges", "extra", "position"}))
 	mock.ExpectQuery(`SELECT b.server_type`).WillReturnRows(sqlmock.NewRows([]string{"type", "id", "group_id"}))
 	mock.ExpectQuery(`SELECT id, match_user_ids`).WillReturnRows(sqlmock.NewRows([]string{"id", "ids", "ranges", "host", "extra", "position"}))
