@@ -11,7 +11,12 @@ type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
 const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑' };
-const groupTitle = (g: Group) => g.parent_id === 0 && g.kind === 'candidate' && g.name === '卧底' ? '入口组' : g.name;
+function memberRanges(ids: string[]) {
+ const sorted = [...new Set(ids.filter(id => /^[1-9]\d*$/.test(id)))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+ const ranges: string[] = [];
+ for (let i = 0; i < sorted.length; i++) { const first = sorted[i]; let last = first; while (i + 1 < sorted.length && sorted[i + 1] === last + 1n) last = sorted[++i]; ranges.push(first === last ? String(first) : `${first}-${last}`); }
+ return ranges.join(', ');
+}
 const processStates: Record<string, [string, string]> = {
  '正常观察中': ['观察中', 'active'],
  '等待入口正常后开始观察': ['待入口恢复', 'waiting'],
@@ -81,9 +86,11 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    <Form.Item name="global_max" label="窗口内最多次数" rules={[{ required: true }]}><InputNumber min={1} max={100} precision={0} /></Form.Item>
    <Space className="investigation-settings-actions"><Button type="primary" disabled={!settings} loading={saving} onClick={save}>保存</Button><Button onClick={() => { initialized.current = false; void load(); }}>刷新</Button></Space>
   </Form>
-  <Table<Group> className="investigation-groups" rowKey="id" size="middle" dataSource={groups} pagination={{ pageSize: 15, showSizeChanger: false }} scroll={{ x: 1120 }} columns={[
-   { title: '分组', width: 230, render: (_, g) => <div className="investigation-group-name"><span className={`investigation-kind-dot kind-${g.kind}`} /><strong>{groupTitle(g)}</strong><span className="investigation-group-number">#{g.id}</span></div> },
-   { title: '人数', width: 85, align: 'right', render: (_, g) => <span className="investigation-number">{g.user_ids.length.toLocaleString()}</span> }, { title: '下发入口', width: 210, render: (_, g) => <Typography.Text className="investigation-host" copyable>{g.host}</Typography.Text> },
+  <Table<Group> className="investigation-groups" rowKey="id" size="middle" dataSource={groups} pagination={{ pageSize: 15, showSizeChanger: false }} scroll={{ x: 1320 }} columns={[
+   { title: '分组', width: 200, render: (_, g) => <div className="investigation-group-name"><span className={`investigation-kind-dot kind-${g.kind}`} /><strong>{g.name}</strong><span className="investigation-group-number">#{g.id}</span></div> },
+   { title: '人数', width: 75, align: 'right', render: (_, g) => <span className="investigation-number">{g.user_ids.length.toLocaleString()}</span> },
+   { title: 'ID 范围', width: 250, render: (_, g) => { const ranges = memberRanges(g.user_ids); return ranges ? <Typography.Paragraph className="investigation-id-ranges" copyable={{ text: ranges }} ellipsis={{ rows: 2, tooltip: <div className="investigation-ranges-tooltip">{ranges}</div> }}>{ranges}</Typography.Paragraph> : '—'; } },
+   { title: '下发入口', width: 200, render: (_, g) => <Typography.Text className="investigation-host" copyable>{g.host}</Typography.Text> },
    { title: '监控状态', width: 190, render: (_, g) => { if (error) return <Tag>状态读取失败</Tag>; const m = monitors.find(m => m.id === g.monitor_id && m.host === g.host); return m ? <DispatchMonitorStatus entry={m} /> : <Tag>未参与当前下发</Tag>; } },
    { title: '自动处理', render: (_, g) => { const state = processState(g, settings?.enabled); return <div className="investigation-process"><Tooltip title={state.detail}><span tabIndex={0} className={`investigation-process-state tone-${state.tone}`}>{state.label}</span></Tooltip>{g.no_pull_count > 0 && <span className="investigation-caption">未拉取 ×{g.no_pull_count}</span>}</div>; } },
    { title: '操作', width: 70, render: (_, g) => <Button type="link" onClick={() => { setEditing(g); editForm.setFieldsValue({ ...g, manual_only: g.manual_only || g.user_ids.length <= 1 }); }}>编辑</Button> },
@@ -96,7 +103,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    { title: '处理后入口', render: (_, e) => e.payload.partitions?.map((p, i) => <div key={i}>#{p.group_id} · {kindName[p.kind]} · {p.user_ids.length} 人 → {p.host}{p.merged_into ? '（归并）' : ''}</div>) || e.payload.host || '—' },
   ]} expandable={{ expandedRowRender: e => <div>{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
   <Modal open={!!editing} title="编辑分组" onCancel={() => setEditing(undefined)} onOk={saveEdit} confirmLoading={saving} okText="保存" destroyOnClose>
-   <Form form={editForm} layout="vertical"><Form.Item name="name" label="组名" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item><Form.Item name="host" label="下发地址" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={!!editing && editing.user_ids.length <= 1} /></Form.Item></Form>
+   <Form form={editForm} layout="vertical"><Form.Item name="name" label="组名" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item><Form.Item label="ID 范围"><Input.TextArea aria-label="ID 范围" readOnly value={editing ? memberRanges(editing.user_ids) || '—' : ''} autoSize={{ minRows: 2, maxRows: 5 }} /></Form.Item><Form.Item name="host" label="下发地址" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={!!editing && editing.user_ids.length <= 1} /></Form.Item></Form>
   </Modal>
  </div>;
 }

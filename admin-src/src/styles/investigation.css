@@ -20,6 +20,8 @@
 .investigation-kind-dot{width:7px;height:7px;border-radius:50%;background:#6a88af;flex-shrink:0}
 .investigation-kind-dot.kind-recent{background:#c4933f}.investigation-kind-dot.kind-observation{background:#9ca3af}.investigation-kind-dot.kind-confirmed{background:#d86363}
 .investigation-number{font-weight:600;font-variant-numeric:tabular-nums;color:#343c49}
+.investigation-panel .investigation-id-ranges{margin:0;font-size:12px;line-height:1.8;color:#5e6b7c;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.investigation-ranges-tooltip{max-height:200px;overflow:auto;overflow-wrap:anywhere;line-height:1.8}
 .investigation-panel .investigation-host{font-size:13px;overflow-wrap:anywhere}
 .investigation-process{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
 .investigation-process-state{display:inline-flex;align-items:center;gap:7px;font-size:12px;line-height:22px;color:#78808c;cursor:help}
