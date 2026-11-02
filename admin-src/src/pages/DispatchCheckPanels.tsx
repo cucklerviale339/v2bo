@@ -1,3 +1,4 @@
+import { MonitoringHistoryModal } from './MonitoringHistoryPanel';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { CopyOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -19,6 +20,7 @@ const errorText = (e: any) => e?.message || '操作失败，请重试';
 const successTag = (value: boolean | null) => value == null ? <Tag>等待结果</Tag> : <Tag color={value ? 'success' : 'error'}>{value ? '成功' : '失败'}</Tag>;
 
 export function DispatchPoolPanel({ active }: { active: boolean }) {
+ const [historyHost, setHistoryHost] = useState<string>();
  const [items, setItems] = useState<Pool[]>([]);
  const [selected, setSelected] = useState<React.Key[]>([]);
  const [loading, setLoading] = useState(false);
@@ -103,6 +105,7 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
  ]} locale={{ emptyText: '暂无启用探针，请先部署探针' }} />;
  const visible = items.filter(p => `${p.ip} ${p.name} ${p.port} ${dispatchScopeText(p.ownership)} ${p.references.join(' ')}`.toLowerCase().includes(search.trim().toLowerCase()));
  return <div style={{ padding: 16 }}>
+  {historyHost && <MonitoringHistoryModal host={historyHost} source="pool" onClose={() => setHistoryHost(undefined)} />}
   <Alert showIcon type="info" message="备用 IP 持续测活" description="按 IP＋port 管理；所有在线启用探针均有新鲜结果并连续成功 2 次，且没有地址配置引用时，才标记可用。离线探针不参与通过条件。每枚探针最多启用 1000 个入口及备用池目标，备用池使用全部启用探针。" />
   <Space wrap style={{ margin: '14px 0' }}>
    <Tag>共 {items.length}</Tag><Tag color="success">可用 {items.filter(p => p.available).length}</Tag><Tag color="blue">有引用 {items.filter(p => p.used).length}</Tag>
@@ -126,7 +129,7 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
    { title: '下发 ID / ID 范围', render: (_, p) => <Typography.Paragraph ellipsis={{ rows: 2, expandable: true }} style={{ maxWidth: 400, margin: 0 }}>{dispatchScopeText(p.ownership)}</Typography.Paragraph> },
    { title: '检测策略', width: 165, render: (_, p) => `${p.check_interval_sec}s / ${p.tcp_timeout_ms}ms` },
    { title: '排序', dataIndex: 'sort', width: 65 },
-   { title: '操作', fixed: 'right', width: 170, render: (_, p) => <Space><Button type="link" disabled={busy} onClick={() => { form.setFieldsValue(p); setEditing(p); }}>编辑</Button><Button type="link" disabled={busy || !p.enabled} onClick={() => action(() => apiJsonPost(`${POOL}/refresh`, { ids: [p.id] }), '已提交重新测活')}>重新测活</Button></Space> },
+   { title: '操作', fixed: 'right', width: 230, render: (_, p) => <Space><Button type="link" onClick={() => setHistoryHost(p.ip)}>历史</Button><Button type="link" disabled={busy} onClick={() => { form.setFieldsValue(p); setEditing(p); }}>编辑</Button><Button type="link" disabled={busy || !p.enabled} onClick={() => action(() => apiJsonPost(`${POOL}/refresh`, { ids: [p.id] }), '已提交重新测活')}>重新测活</Button></Space> },
   ]} locale={{ emptyText: '暂无备用资源，点击批量添加' }} />
   <Modal open={batch} title="批量添加备用 IP" confirmLoading={busy} closable={!busy} maskClosable={!busy} onCancel={() => setBatch(false)} onOk={saveBatch} okText="添加">
    <Form form={batchForm} layout="vertical"><Form.Item name="lines" label="每行：IP [端口] [名称]" rules={[{ required: true, message: '请输入备用 IP' }]} extra="支持 IPv4、IPv6、IPv4:port 和 [IPv6]:port；省略端口时使用下方默认值。重复 IP＋port 会使整批添加取消。"><Input.TextArea rows={7} placeholder={'192.0.2.10 443 备用一\n[2001:db8::10]:8443 备用二'} /></Form.Item><Form.Item name="port" label="默认 port" rules={[{ required: true }]}><InputNumber min={1} max={65535} precision={0} /></Form.Item><Form.Item name="check_interval_sec" label="检测间隔（秒）" rules={[{ required: true }]}><InputNumber min={5} max={3600} precision={0} /></Form.Item><Form.Item name="tcp_timeout_ms" label="TCP 超时（毫秒）" rules={[{ required: true }]}><InputNumber min={100} max={60000} precision={0} /></Form.Item></Form>

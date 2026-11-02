@@ -1,3 +1,4 @@
+import { MonitoringHistoryModal } from './MonitoringHistoryPanel';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Descriptions, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
@@ -39,6 +40,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
   const [selected, setSelected] = useState<React.Key[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [historyHost, setHistoryHost] = useState<string>();
   const [editing, setEditing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
@@ -125,6 +127,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
   const changeView = (deleted: boolean) => { setShowDeleted(deleted); setSelected([]); };
 
   return <>
+    {historyHost && <MonitoringHistoryModal host={historyHost} source="entry" onClose={() => setHistoryHost(undefined)} />}
     <div style={{ padding: 16 }}>
       <Alert type="info" showIcon message="按地址分配规则汇总入口：内鬼管理 → 节点地址 → 节点管理。"
         description="ID 归属按配置区间显示，不检查账号状态、节点权限或 UA、套餐、注册天数条件；不包含额外节点。选择入口、探针和 port 后启用监控。" />
@@ -164,7 +167,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
         { title: '监控状态', width: 180, render: (_, entry) => entry.deleted ? <Tag>已删除</Tag> : entryStatus(entry) },
         { title: '下发 ID / ID 范围', render: (_, entry) => <Typography.Paragraph ellipsis={{ rows: 2, expandable: true, symbol: '展开' }} style={{ margin: 0, minWidth: 200, maxWidth: 450 }}>{scopeLabel(entry)}</Typography.Paragraph> },
         { title: '探针', width: 90, render: (_, entry) => `${entry.states.filter(state => state.online).length} / ${entry.probe_ids.length}` },
-        { title: '操作', width: 190, fixed: 'right', render: (_, entry) => <Space size={0}>
+        { title: '操作', width: 250, fixed: 'right', render: (_, entry) => <Space size={0}><Button type="link" onClick={() => setHistoryHost(entry.host)}>历史</Button>
           <Button type="link" icon={<SettingOutlined />} disabled={deleting} onClick={() => configure([entry.host])}>{entry.deleted ? '恢复配置' : '配置'}</Button>
           {!entry.deleted && <Popconfirm title={`删除 ${entry.host} 的入口监控？`} description="停止检测并移到已删除入口，可恢复；节点下发地址不变。" onConfirm={() => remove([entry.host])} disabled={deleting}>
             <Button danger type="link" icon={<DeleteOutlined />} disabled={deleting || saving}>删除</Button>

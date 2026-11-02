@@ -13,6 +13,7 @@ var aiPanelRoutes = map[string]bool{
 	"/dns-failover/rules/{id}/manual-switch": true,
 	"/dns-failover/events":                   true,
 	"/dns-failover/logs":                     true,
+	"/dns-failover/dispatch-history":         true,
 
 	"/ai-ops/":                                  true,
 	"/ai-ops/telegram/":                         true,

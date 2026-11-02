@@ -849,6 +849,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
 			checkPath := strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")
+			if checkPath == "dispatch-history" {
+				w.Header().Set("Cache-Control", "no-store")
+				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+					return
+				}
+				handleDispatchHistory(w, r, state.admin)
+				return
+			}
 			if checkPath == "dispatch-pool" || strings.HasPrefix(checkPath, "dispatch-pool/") || checkPath == "dispatch-runs" || strings.HasPrefix(checkPath, "dispatch-runs/") {
 				w.Header().Set("Cache-Control", "no-store")
 				if _, ok := authenticateRequest(w, r, state.session, true); !ok {

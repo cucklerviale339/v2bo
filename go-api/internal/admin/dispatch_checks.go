@@ -801,6 +801,7 @@ func (s *DBService) ReportDispatchCheckResults(ctx context.Context, pid int64, r
 	if err := s.checkDispatchProbeReset(ctx, pid); err != nil {
 		return summary, err
 	}
+	history := s.prepareDispatchHistory(ctx)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return summary, err
@@ -894,6 +895,10 @@ func (s *DBService) ReportDispatchCheckResults(ctx context.Context, pid int64, r
 			}
 		}
 		summary.Accepted++
+		if kind == "pool" {
+			history.add("pool", pid, r, now, streak)
+		}
 	}
+	s.persistDispatchHistory(ctx, tx, history)
 	return summary, tx.Commit()
 }

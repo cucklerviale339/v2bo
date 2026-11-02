@@ -31,6 +31,7 @@ func panelDispatchOperations() []aiops.PanelOperation {
 	add("ip_pool.delete", "删除指定备用IP，后台校验引用和占用", "POST", base+"dispatch-pool/delete", true, ids)
 	add("ip_pool.delete_faulty", "删除确认故障且未引用的备用IP；后台原子复查健康及探针状态", "POST", base+"dispatch-pool/delete-faulty", true, ids)
 	add("entry_checks.history", "读取已有近期检测记录，不发起新检测", "GET", base+"dispatch-runs", false, poObj(poFields("page:i")))
+	add("entry_checks.continuous_history", "读取入口监控和备用IP池的持续检测历史及故障恢复事件，不发起检测", "GET", base+"dispatch-history", false, poObj(poFields("page:i kind:s source:s host:s port:i probe_id:i success:b event_type:s from:i to:i")))
 	add("entry_checks.results", "读取指定历史检测结果和用户ID范围", "GET", base+"dispatch-runs/{id}", false, poObj(poFields("id:i page:i"), "id"))
 	return out
 }

@@ -446,6 +446,7 @@ func (s *DBService) ReportDispatchProbeResults(ctx context.Context, probeID int6
 	if err := s.checkDispatchProbeReset(ctx, probeID); err != nil {
 		return summary, err
 	}
+	history := s.prepareDispatchHistory(ctx)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return summary, err
@@ -493,10 +494,12 @@ WHERE v2_dispatch_monitor_state.version<>EXCLUDED.version OR v2_dispatch_monitor
 		}
 		if n > 0 {
 			summary.Accepted++
+			history.add("entry", probeID, r, now, 0)
 		} else {
 			summary.Duplicates++
 		}
 	}
+	s.persistDispatchHistory(ctx, tx, history)
 	if err := tx.Commit(); err != nil {
 		return summary, err
 	}
@@ -641,10 +644,13 @@ func (s *DBService) dispatchTaskHosts(ctx context.Context) (map[string]bool, err
 		return nil, err
 	}
 	hosts := map[string]bool{}
+	scopes := map[string]usersvc.DispatchEntry{}
 	for _, entry := range entries {
 		hosts[entry.Host] = true
+		scopes[entry.Host] = entry
 	}
 	s.dispatchCachedHosts = hosts
+	s.dispatchCachedScopes = scopes
 	s.dispatchCacheAt = time.Now()
 	return hosts, nil
 }

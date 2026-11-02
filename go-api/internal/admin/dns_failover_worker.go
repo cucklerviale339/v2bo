@@ -167,6 +167,7 @@ func (s *DBService) StartDNSFailoverAutomation(ctx context.Context) {
 		startWorker("DNS failover automation", interval, s.runDNSFailoverCycle)
 		if s.db != nil {
 			startWorker("DNS monitoring retention", time.Hour, s.cleanupDNSFailoverRetention)
+			startWorker("Entry monitoring history retention", time.Hour, s.cleanupDispatchHistory)
 		}
 	})
 }

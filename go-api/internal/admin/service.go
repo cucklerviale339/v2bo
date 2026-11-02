@@ -490,21 +490,26 @@ type DBService struct {
 	dispatchCatalog       interface {
 		DispatchEntries(context.Context) ([]usersvc.DispatchEntry, error)
 	}
-	dispatchHealthMu     sync.Mutex
-	dispatchResetBlocked map[int64]bool
-	dispatchCacheMu      sync.Mutex
-	dispatchCacheAt      time.Time
-	dispatchCachedHosts  map[string]bool
-	dispatchEnsureMu     sync.Mutex
-	dispatchSchemaOK     bool
-	cfg                  config.Config
-	runtime              *config.RuntimeState
-	db                   *sql.DB
-	orders               orderRuntime
-	jobs                 queue.Enqueuer
-	authCache            *session.AuthCache
-	mailSender           func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
-	sleep                func(context.Context, time.Duration) error
+	dispatchHealthMu         sync.Mutex
+	dispatchResetBlocked     map[int64]bool
+	dispatchCacheMu          sync.Mutex
+	dispatchCacheAt          time.Time
+	dispatchCachedHosts      map[string]bool
+	dispatchCachedScopes     map[string]usersvc.DispatchEntry
+	dispatchHistoryEnabled   bool
+	dispatchHistoryMu        sync.Mutex
+	dispatchHistorySchemaOK  bool
+	dispatchHistoryLastError string
+	dispatchEnsureMu         sync.Mutex
+	dispatchSchemaOK         bool
+	cfg                      config.Config
+	runtime                  *config.RuntimeState
+	db                       *sql.DB
+	orders                   orderRuntime
+	jobs                     queue.Enqueuer
+	authCache                *session.AuthCache
+	mailSender               func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
+	sleep                    func(context.Context, time.Duration) error
 
 	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
 	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
@@ -556,6 +561,7 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 		runtime = orders[0]
 	}
 	service := &DBService{cfg: cfg, db: db, orders: runtime, dispatchCatalog: usersvc.NewDBService(cfg, db)}
+	service.dispatchHistoryEnabled = db != nil
 	if db != nil {
 		service.dnsFailoverLogWriter = func(ctx context.Context, entries []dnsFailoverLogEntry) error {
 			return insertDNSFailoverLogs(ctx, db, entries)
