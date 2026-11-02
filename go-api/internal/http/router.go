@@ -857,12 +857,16 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				handleDispatchChecks(w, r, state.admin, checkPath)
 				return
 			}
-			if r.URL.Path == adminPrefix+"/dns-failover/dispatch-entries" {
+			if checkPath == "dispatch-entries" || checkPath == "dispatch-entries/delete" {
 				w.Header().Set("Cache-Control", "no-store")
-				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+				if _, ok := authenticateSupportSession(w, r, state.session, true); !ok {
 					return
 				}
-				handleDNSDispatchEntries(w, r, state.admin)
+				if checkPath == "dispatch-entries/delete" {
+					handleDNSDispatchEntriesDelete(w, r, state.admin)
+				} else {
+					handleDNSDispatchEntries(w, r, state.admin)
+				}
 				return
 			}
 			if handleAdminDNSFailover(w, r, state.session, state.dnsAdmin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")) {

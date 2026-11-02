@@ -32,6 +32,7 @@ var aiPanelRoutes = map[string]bool{
 	"/coupon/show":                              true,
 	"/dns-failover/":                            true,
 	"/dns-failover/dispatch-entries":            true,
+	"/dns-failover/dispatch-entries/delete":     true,
 	"/dns-failover/dispatch-pool":               true,
 	"/dns-failover/dispatch-pool/delete":        true,
 	"/dns-failover/dispatch-pool/delete-faulty": true,

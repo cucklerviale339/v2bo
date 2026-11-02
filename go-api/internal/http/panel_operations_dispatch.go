@@ -22,8 +22,9 @@ func panelDispatchOperations() []aiops.PanelOperation {
 	add("insider_rules.save", "保存内鬼规则；先读取原配置，确认用户ID范围及目标节点", "POST", "/server/insider/save", true, poObj(poMerge(poFields("id:i name host match_user_ids:a match_user_id_ranges:a enabled:i sort:i"), panelSchema{"members": poArray(poObj(poFields("server_type server_id:i"), "server_type", "server_id"))}), "host"))
 	add("insider_rules.delete", "删除指定内鬼规则，可能使入口回退到节点地址组或节点host", "POST", "/server/insider/drop", true, id)
 	base := "/dns-failover/"
-	add("entry_monitors.list", "读取启用且实际链路会下发的入口，含去重后的ID/范围、来源和探针状态", "GET", base+"dispatch-entries", false, empty)
-	add("entry_monitors.save", "保存一个实际入口的监控配置；check_port仅检测使用，不改订阅端口", "PUT", base+"dispatch-entries", true, poReflect(admin.DispatchMonitorSaveRequest{}))
+	add("entry_monitors.list", "读取启用且实际链路会下发的入口，含去重后的ID/范围、来源和探针状态；include_deleted=true时包含已删除入口", "GET", base+"dispatch-entries", false, poObj(panelSchema{"include_deleted": poBool("是否包含已删除入口，默认false")}))
+	add("entry_monitors.save", "保存一个实际入口的监控配置，也可恢复已删除入口；check_port仅检测使用，不改订阅端口", "PUT", base+"dispatch-entries", true, poReflect(admin.DispatchMonitorSaveRequest{}))
+	add("entry_monitors.delete", "批量删除入口监控，停止探针检测并隐藏；不修改节点下发，include_deleted=true可查看并重新配置恢复", "POST", base+"dispatch-entries/delete", true, poObj(panelSchema{"hosts": poArray(poText("实际入口地址"))}, "hosts"))
 	add("ip_pool.list", "读取备用IP池、健康状态、占用及引用", "GET", base+"dispatch-pool", false, empty)
 	add("ip_pool.save", "批量新增或更新备用IP，port只用于检测，不修改下发端口", "POST", base+"dispatch-pool", true, poObj(panelSchema{"items": poArray(poReflect(admin.DispatchPoolSave{}))}, "items"))
 	add("ip_pool.refresh", "重置指定备用IP的检测状态，等待现有探针重新测活", "POST", base+"dispatch-pool/refresh", true, ids)

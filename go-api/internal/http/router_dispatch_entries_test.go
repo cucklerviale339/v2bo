@@ -16,7 +16,8 @@ import (
 
 type fakeDispatchAdmin struct {
 	*fakeDNSAdminService
-	saves []admin.DispatchMonitorSaveRequest
+	saves   []admin.DispatchMonitorSaveRequest
+	deleted [][]string
 }
 
 func (f *fakeDispatchAdmin) ListDispatchMonitors(context.Context) ([]admin.DispatchMonitor, error) {
@@ -25,6 +26,64 @@ func (f *fakeDispatchAdmin) ListDispatchMonitors(context.Context) ([]admin.Dispa
 func (f *fakeDispatchAdmin) SaveDispatchMonitor(_ context.Context, r admin.DispatchMonitorSaveRequest) error {
 	f.saves = append(f.saves, r)
 	return nil
+}
+
+func (f *fakeDispatchAdmin) ListDispatchMonitorsIncludingDeleted(ctx context.Context) ([]admin.DispatchMonitor, error) {
+	rows, err := f.ListDispatchMonitors(ctx)
+	return append(rows, admin.DispatchMonitor{DispatchEntry: usersvc.DispatchEntry{Host: "deleted.example"}, Deleted: true}), err
+}
+
+func (f *fakeDispatchAdmin) DeleteDispatchMonitors(_ context.Context, hosts []string) error {
+	if len(hosts) == 0 {
+		return admin.ErrDNSProbeInvalidRequest
+	}
+	f.deleted = append(f.deleted, hosts)
+	return nil
+}
+
+func TestDispatchDeleteAndDeletedViewRoutes(t *testing.T) {
+	f := &fakeDispatchAdmin{fakeDNSAdminService: &fakeDNSAdminService{}}
+	path := "/api/v1/control/dns-failover/dispatch-entries"
+	for _, identity := range []*session.Identity{nil, {ID: 1}, {ID: 2, IsStaff: 1}, {ID: 3, IsAdmin: 1}} {
+		auth := &fakeSessionService{user: identity}
+		if identity == nil || identity.IsAdmin == 0 {
+			auth.authErr = session.ErrUnauthorized
+		}
+		router := NewRouter(config.Config{AdminPath: "control"}, WithSessionService(auth), WithAdminService(f))
+		if identity == nil || identity.IsAdmin == 0 {
+			for _, method := range []string{http.MethodPost, http.MethodGet} {
+				target := path + "/delete"
+				if method == http.MethodGet {
+					target = path + "?include_deleted=true"
+				}
+				if rec := dnsFailoverRequest(router, method, target, `{"hosts":["entry.example"]}`); rec.Code != http.StatusForbidden {
+					t.Fatalf("unauthorized: %d %s", rec.Code, rec.Body.String())
+				}
+			}
+			continue
+		}
+		for _, query := range []string{"", "?include_deleted=false", "?include_deleted=true"} {
+			rec := dnsFailoverRequest(router, http.MethodGet, path+query, "")
+			if rec.Code != 200 || strings.Contains(rec.Body.String(), "deleted.example") != (query == "?include_deleted=true") {
+				t.Fatalf("view: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+		if rec := dnsFailoverRequest(router, http.MethodGet, path+"?include_deleted=bad", ""); rec.Code != 400 {
+			t.Fatal(rec.Code)
+		}
+		for _, body := range []string{`{}`, `{"hosts":[]}`, `{"hosts":["entry.example"],"unexpected":true}`, `{"hosts":["entry.example"]}{}`, `{"hosts":"entry.example"}`} {
+			if rec := dnsFailoverRequest(router, http.MethodPost, path+"/delete", body); rec.Code != 400 {
+				t.Fatalf("bad payload: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+		rec := dnsFailoverRequest(router, http.MethodPost, path+"/delete", `{"hosts":["entry.example"]}`)
+		if rec.Code != 200 || len(f.deleted) != 1 || f.deleted[0][0] != "entry.example" || !strings.Contains(rec.Header().Get("Cache-Control"), "no-store") {
+			t.Fatalf("delete: %d %#v", rec.Code, f.deleted)
+		}
+		if rec := dnsFailoverRequest(router, http.MethodDelete, path+"/delete", ""); rec.Code != 405 {
+			t.Fatal(rec.Code)
+		}
+	}
 }
 
 func TestDispatchAdminRoutesRequireAdminAndStrictJSON(t *testing.T) {

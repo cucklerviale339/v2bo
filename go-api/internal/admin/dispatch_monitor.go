@@ -31,6 +31,7 @@ type DispatchMonitor struct {
 	ID               int64                  `json:"id"`
 	CheckPort        int64                  `json:"check_port"`
 	Enabled          bool                   `json:"enabled"`
+	Deleted          bool                   `json:"deleted"`
 	CheckIntervalSec int64                  `json:"check_interval_sec"`
 	TCPTimeoutMS     int64                  `json:"tcp_timeout_ms"`
 	ProbeIDs         []int64                `json:"probe_ids"`
@@ -64,6 +65,7 @@ id BIGSERIAL PRIMARY KEY, host VARCHAR(253) NOT NULL UNIQUE,
 check_port INTEGER NOT NULL CHECK (check_port BETWEEN 1 AND 65535), enabled BOOLEAN NOT NULL DEFAULT FALSE,
 check_interval_sec INTEGER NOT NULL CHECK(check_interval_sec BETWEEN 1 AND 86400),
 tcp_timeout_ms INTEGER NOT NULL CHECK(tcp_timeout_ms BETWEEN 1 AND 60000), version BIGINT NOT NULL DEFAULT 1)`,
+		`ALTER TABLE v2_dispatch_monitor ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE TABLE IF NOT EXISTS v2_dispatch_monitor_probe (
 monitor_id BIGINT NOT NULL REFERENCES v2_dispatch_monitor(id) ON DELETE CASCADE,
 probe_id BIGINT NOT NULL REFERENCES v2_dns_probe(id) ON DELETE CASCADE,
@@ -111,6 +113,14 @@ func (s *DBService) dispatchEntries(ctx context.Context) ([]usersvc.DispatchEntr
 }
 
 func (s *DBService) ListDispatchMonitors(ctx context.Context) ([]DispatchMonitor, error) {
+	return s.listDispatchMonitors(ctx, false)
+}
+
+func (s *DBService) ListDispatchMonitorsIncludingDeleted(ctx context.Context) ([]DispatchMonitor, error) {
+	return s.listDispatchMonitors(ctx, true)
+}
+
+func (s *DBService) listDispatchMonitors(ctx context.Context, includeDeleted bool) ([]DispatchMonitor, error) {
 	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -125,14 +135,14 @@ func (s *DBService) ListDispatchMonitors(ctx context.Context) ([]DispatchMonitor
 		byHost[entry.Host] = len(result)
 		result = append(result, DispatchMonitor{DispatchEntry: entry, CheckPort: 443, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeIDs: []int64{}, States: []DispatchMonitorState{}})
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,host,check_port,enabled,check_interval_sec,tcp_timeout_ms FROM v2_dispatch_monitor ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,host,check_port,enabled,check_interval_sec,tcp_timeout_ms,deleted FROM v2_dispatch_monitor ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var m DispatchMonitor
 		var host string
-		if err := rows.Scan(&m.ID, &host, &m.CheckPort, &m.Enabled, &m.CheckIntervalSec, &m.TCPTimeoutMS); err != nil {
+		if err := rows.Scan(&m.ID, &host, &m.CheckPort, &m.Enabled, &m.CheckIntervalSec, &m.TCPTimeoutMS, &m.Deleted); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -190,7 +200,19 @@ ORDER BY b.monitor_id,p.id`)
 		}
 		m.States = append(m.States, state)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !includeDeleted {
+		visible := make([]DispatchMonitor, 0, len(result))
+		for _, monitor := range result {
+			if !monitor.Deleted {
+				visible = append(visible, monitor)
+			}
+		}
+		return visible, nil
+	}
+	return result, nil
 }
 
 func (s *DBService) SaveDispatchMonitor(ctx context.Context, req DispatchMonitorSaveRequest) error {
@@ -235,7 +257,7 @@ func (s *DBService) SaveDispatchMonitor(ctx context.Context, req DispatchMonitor
 	var id int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_monitor(host,check_port,enabled,check_interval_sec,tcp_timeout_ms)
 VALUES($1,$2,$3,$4,$5) ON CONFLICT(host) DO UPDATE SET check_port=EXCLUDED.check_port,enabled=EXCLUDED.enabled,
-check_interval_sec=EXCLUDED.check_interval_sec,tcp_timeout_ms=EXCLUDED.tcp_timeout_ms,version=v2_dispatch_monitor.version+1 RETURNING id`, req.Host, req.CheckPort, req.Enabled, req.CheckIntervalSec, req.TCPTimeoutMS).Scan(&id)
+check_interval_sec=EXCLUDED.check_interval_sec,tcp_timeout_ms=EXCLUDED.tcp_timeout_ms,deleted=FALSE,version=v2_dispatch_monitor.version+1 RETURNING id`, req.Host, req.CheckPort, req.Enabled, req.CheckIntervalSec, req.TCPTimeoutMS).Scan(&id)
 	if err != nil {
 		return err
 	}
@@ -256,12 +278,7 @@ check_interval_sec=EXCLUDED.check_interval_sec,tcp_timeout_ms=EXCLUDED.tcp_timeo
 }
 
 func normalizeDispatchMonitorSave(req *DispatchMonitorSaveRequest) error {
-	req.Host = strings.TrimSpace(req.Host)
-	if address, err := netip.ParseAddr(strings.Trim(req.Host, "[]")); err == nil && address.Zone() == "" {
-		req.Host = address.String()
-	} else {
-		req.Host = strings.ToLower(strings.TrimSuffix(req.Host, "."))
-	}
+	req.Host = normalizeDispatchMonitorHost(req.Host)
 	if !addrutil.IsIPOrHostname(req.Host) || req.CheckPort < 1 || req.CheckPort > 65535 || req.CheckIntervalSec < 1 || req.CheckIntervalSec > 86400 || req.TCPTimeoutMS < 1 || req.TCPTimeoutMS > 60000 || len(req.ProbeIDs) > 500 {
 		return fmt.Errorf("%w: 请检查入口、端口和探测策略", ErrDNSProbeInvalidRequest)
 	}
@@ -284,6 +301,86 @@ func normalizeDispatchMonitorSave(req *DispatchMonitorSaveRequest) error {
 	return nil
 }
 
+func normalizeDispatchMonitorHost(host string) string {
+	host = strings.TrimSpace(host)
+	if address, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil && address.Zone() == "" {
+		return address.String()
+	}
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// Keep a tombstone because the address inventory is derived from subscriptions.
+// Removing only the row would immediately recreate an unconfigured candidate.
+func (s *DBService) DeleteDispatchMonitors(ctx context.Context, hosts []string) error {
+	if len(hosts) == 0 || len(hosts) > 500 {
+		return fmt.Errorf("%w: 请选择 1 至 500 个入口", ErrDNSProbeInvalidRequest)
+	}
+	normalized := make(map[string]bool, len(hosts))
+	for _, host := range hosts {
+		host = normalizeDispatchMonitorHost(host)
+		if !addrutil.IsIPOrHostname(host) {
+			return fmt.Errorf("%w: 入口地址无效", ErrDNSProbeInvalidRequest)
+		}
+		normalized[host] = true
+	}
+	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
+		return err
+	}
+	entries, err := s.dispatchEntries(ctx)
+	if err != nil {
+		return err
+	}
+	current := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		current[entry.Host] = true
+	}
+	ordered := make([]string, 0, len(normalized))
+	for host := range normalized {
+		if !current[host] {
+			return fmt.Errorf("%w: 该入口已不在当前节点地址配置中，请刷新", ErrDNSProbeInvalidRequest)
+		}
+		ordered = append(ordered, host)
+	}
+	sort.Strings(ordered)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7642309023)`); err != nil {
+		return err
+	}
+	// Result batches lock monitors by ID. Acquire existing rows in that same
+	// order before changing any of them, regardless of the host display order.
+	locked, err := tx.QueryContext(ctx, `SELECT id FROM v2_dispatch_monitor WHERE host=ANY($1) ORDER BY id FOR UPDATE`, ordered)
+	if err != nil {
+		return err
+	}
+	for locked.Next() {
+		var id int64
+		if err = locked.Scan(&id); err != nil {
+			locked.Close()
+			return err
+		}
+	}
+	if err = locked.Err(); err != nil {
+		locked.Close()
+		return err
+	}
+	locked.Close()
+	for _, host := range ordered {
+		var id int64
+		if err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_monitor(host,check_port,enabled,check_interval_sec,tcp_timeout_ms,deleted)
+VALUES($1,443,FALSE,30,3000,TRUE) ON CONFLICT(host) DO UPDATE SET enabled=FALSE,deleted=TRUE,version=v2_dispatch_monitor.version+1 RETURNING id`, host).Scan(&id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM v2_dispatch_monitor_probe WHERE monitor_id=$1`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Negative target IDs keep monitoring separate from DNS failover target IDs.
 // Existing probe auth, TCP checks and result transport are shared.
 func (s *DBService) ListDispatchProbeTasks(ctx context.Context, probeID int64) ([]DNSProbeTask, error) {
@@ -299,7 +396,7 @@ func (s *DBService) ListDispatchProbeTasks(ctx context.Context, probeID int64) (
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT m.id,m.host,m.check_port,m.check_interval_sec,m.tcp_timeout_ms,m.version,b.run_id
 FROM v2_dispatch_monitor m JOIN v2_dispatch_monitor_probe b ON b.monitor_id=m.id
-JOIN v2_dns_probe p ON p.id=b.probe_id WHERE b.probe_id=$1 AND p.enabled=1 AND m.enabled=TRUE ORDER BY m.id`, probeID)
+JOIN v2_dns_probe p ON p.id=b.probe_id WHERE b.probe_id=$1 AND p.enabled=1 AND m.enabled=TRUE AND m.deleted=FALSE ORDER BY m.id`, probeID)
 	if err != nil {
 		return nil, err
 	}
@@ -338,6 +435,11 @@ func (s *DBService) ReportDispatchProbeResults(ctx context.Context, probeID int6
 	if err := normalizeDNSProbeResultsRequest(&validated); err != nil {
 		return summary, err
 	}
+	// A batch may arrive in arbitrary network order. A stable ID order avoids
+	// cycles with bulk deletion while preserving sequence order for one target.
+	sort.SliceStable(validated.Results, func(i, j int) bool {
+		return validated.Results[i].TargetID < validated.Results[j].TargetID
+	})
 	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
 		return summary, err
 	}
@@ -369,7 +471,7 @@ func (s *DBService) ReportDispatchProbeResults(ctx context.Context, probeID int6
 			return summary, err
 		}
 		var version, runID int64
-		err = tx.QueryRowContext(ctx, `SELECT m.version,b.run_id FROM v2_dispatch_monitor m JOIN v2_dispatch_monitor_probe b ON b.monitor_id=m.id WHERE m.id=$1 AND b.probe_id=$2 AND m.enabled=TRUE FOR SHARE OF m,b`, r.TargetID, probeID).Scan(&version, &runID)
+		err = tx.QueryRowContext(ctx, `SELECT m.version,b.run_id FROM v2_dispatch_monitor m JOIN v2_dispatch_monitor_probe b ON b.monitor_id=m.id WHERE m.id=$1 AND b.probe_id=$2 AND m.enabled=TRUE AND m.deleted=FALSE FOR SHARE OF m,b`, r.TargetID, probeID).Scan(&version, &runID)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && (version != r.TargetVersion || runID != r.RunID)) {
 			summary.Skipped++
 			continue

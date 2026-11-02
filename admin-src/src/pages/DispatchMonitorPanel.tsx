@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
-import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
-import { apiGet, apiPut, unwrapList } from '../lib/api';
+import { Alert, Button, Descriptions, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { apiGet, apiJsonPost, apiPut, unwrapList } from '../lib/api';
 
 type Probe = { id: number; name: string; enabled: boolean; version?: string };
 type ProbeState = {
@@ -11,7 +11,7 @@ type ProbeState = {
 };
 type Entry = {
   host: string; user_ids: string[]; user_id_ranges: string[]; sources: string[];
-  id: number; check_port: number; enabled: boolean; check_interval_sec: number;
+  id: number; check_port: number; enabled: boolean; deleted: boolean; check_interval_sec: number;
   tcp_timeout_ms: number; probe_ids: number[]; states: ProbeState[];
 };
 
@@ -37,6 +37,8 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
   const [calculatedAt, setCalculatedAt] = useState<number>();
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<React.Key[]>([]);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [editing, setEditing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
@@ -47,7 +49,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
     const sequence = ++request.current;
     if (!quiet) setLoading(true);
     try {
-      const response = await apiGet(ENDPOINT);
+      const response = await apiGet(ENDPOINT, { include_deleted: true });
       if (!alive.current || sequence !== request.current) return;
       const rows: Entry[] = unwrapList(response);
       setEntries(rows);
@@ -101,7 +103,26 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
     load();
   };
 
-  const visible = entries.filter(entry => `${entry.host} ${scopeLabel(entry)} ${entry.sources.join(' ')}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const remove = async (hosts: string[]) => {
+    setDeleting(true);
+    try {
+      await apiJsonPost(`${ENDPOINT}/delete`, { hosts });
+      if (!alive.current) return;
+      // Invalidate any refresh started before the mutation completed.
+      request.current++;
+      setEntries(previous => previous.map(entry => hosts.includes(entry.host) ? { ...entry, deleted: true, enabled: false, probe_ids: [], states: [] } : entry));
+      setSelected(previous => previous.filter(host => !hosts.includes(String(host))));
+      message.success(`已删除 ${hosts.length} 个入口监控`);
+      await load();
+    } catch (cause: any) {
+      if (alive.current) message.error(cause.message || '删除失败，请刷新后确认');
+    } finally {
+      if (alive.current) setDeleting(false);
+    }
+  };
+
+  const visible = entries.filter(entry => !!entry.deleted === showDeleted && `${entry.host} ${scopeLabel(entry)} ${entry.sources.join(' ')}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const changeView = (deleted: boolean) => { setShowDeleted(deleted); setSelected([]); };
 
   return <>
     <div style={{ padding: 16 }}>
@@ -111,6 +132,10 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
         <Input.Search allowClear value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索入口、ID 范围或来源" style={{ width: 280 }} />
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()}>刷新入口与状态</Button>
         <Button type="primary" icon={<SettingOutlined />} disabled={!selected.length} onClick={() => configure(selected.map(String))}>批量配置{selected.length ? `（${selected.length}）` : ''}</Button>
+        {!showDeleted && <Popconfirm title={`删除选中的 ${selected.length} 个入口监控？`} description="停止检测并移到已删除入口，可重新配置恢复；节点下发地址不变。" onConfirm={() => remove(selected.map(String))} disabled={!selected.length || selected.length > 500 || deleting}>
+          <Button danger icon={<DeleteOutlined />} loading={deleting} disabled={!selected.length || selected.length > 500 || saving}>批量删除{selected.length ? `（${selected.length}）` : ''}</Button>
+        </Popconfirm>}
+        <Select aria-label="入口监控视图" value={showDeleted ? 'deleted' : 'active'} onChange={value => changeView(value === 'deleted')} options={[{ value: 'active', label: '入口监控' }, { value: 'deleted', label: `已删除入口（${entries.filter(entry => entry.deleted).length}）` }]} style={{ minWidth: 160 }} />
         <Typography.Text type="secondary">更新于 {time(calculatedAt)} · 每 15 秒刷新</Typography.Text>
       </Space>
       {error && <Alert type="error" showIcon message={error} description="当前显示可能是旧数据，请刷新后确认。" style={{ marginTop: 12 }} />}
@@ -118,7 +143,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
     <Table<Entry> rowKey="host" dataSource={visible} loading={loading} scroll={{ x: 1000 }}
       rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
       pagination={{ defaultPageSize: 20, showSizeChanger: true }}
-      locale={{ emptyText: '暂无可监控的节点入口，请先配置节点下发地址' }}
+      locale={{ emptyText: showDeleted ? '暂无已删除入口' : '暂无可监控的节点入口，可检查节点下发地址或已删除入口' }}
       expandable={{ expandedRowRender: entry => <div style={{ padding: '0 8px 8px' }}>
         <Descriptions size="small" column={1} items={[
           { key: 'users', label: '下发 ID / ID 范围', children: <span style={{ overflowWrap: 'anywhere' }}>{scopeLabel(entry)}</span> },
@@ -136,10 +161,15 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
       columns={[
         { title: '节点入口', dataIndex: 'host', width: 240, render: host => <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{host}</Typography.Text> },
         { title: 'port', dataIndex: 'check_port', width: 80 },
-        { title: '监控状态', width: 180, render: (_, entry) => entryStatus(entry) },
+        { title: '监控状态', width: 180, render: (_, entry) => entry.deleted ? <Tag>已删除</Tag> : entryStatus(entry) },
         { title: '下发 ID / ID 范围', render: (_, entry) => <Typography.Paragraph ellipsis={{ rows: 2, expandable: true, symbol: '展开' }} style={{ margin: 0, minWidth: 200, maxWidth: 450 }}>{scopeLabel(entry)}</Typography.Paragraph> },
         { title: '探针', width: 90, render: (_, entry) => `${entry.states.filter(state => state.online).length} / ${entry.probe_ids.length}` },
-        { title: '操作', width: 100, fixed: 'right', render: (_, entry) => <Button type="link" icon={<SettingOutlined />} onClick={() => configure([entry.host])}>配置</Button> },
+        { title: '操作', width: 190, fixed: 'right', render: (_, entry) => <Space size={0}>
+          <Button type="link" icon={<SettingOutlined />} disabled={deleting} onClick={() => configure([entry.host])}>{entry.deleted ? '恢复配置' : '配置'}</Button>
+          {!entry.deleted && <Popconfirm title={`删除 ${entry.host} 的入口监控？`} description="停止检测并移到已删除入口，可恢复；节点下发地址不变。" onConfirm={() => remove([entry.host])} disabled={deleting}>
+            <Button danger type="link" icon={<DeleteOutlined />} disabled={deleting || saving}>删除</Button>
+          </Popconfirm>}
+        </Space> },
       ]} />
     <Modal open={!!editing.length} title={editing.length === 1 ? `入口监控 · ${editing[0]}` : `批量配置 ${editing.length} 个入口`} onCancel={() => !saving && setEditing([])}
       onOk={save} confirmLoading={saving} okText="保存" cancelText="取消" maskClosable={!saving} closable={!saving} forceRender>

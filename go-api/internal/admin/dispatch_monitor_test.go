@@ -118,7 +118,7 @@ func TestDispatchReportsRequireFreshHeartbeatAndNegativeVersionedTargets(t *test
 
 func TestDispatchMonitorListShowsOwnershipAndMasksExpiredResults(t *testing.T) {
 	s, mock := newDispatchTestService(t)
-	mock.ExpectQuery(`SELECT id,host,check_port`).WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "enabled", "interval", "timeout"}).AddRow(3, "entry.example", 18443, true, 10, 500).AddRow(4, "removed.example", 443, true, 10, 500))
+	mock.ExpectQuery(`SELECT id,host,check_port`).WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "enabled", "interval", "timeout", "deleted"}).AddRow(3, "entry.example", 18443, true, 10, 500, false).AddRow(4, "removed.example", 443, true, 10, 500, false))
 	now := time.Now().Unix()
 	mock.ExpectQuery(`SELECT b.monitor_id,p.id,p.name`).WillReturnRows(sqlmock.NewRows([]string{"monitor", "probe", "name", "enabled", "heartbeat", "success", "latency", "error", "ip", "reported"}).AddRow(3, 7, "fresh", 1, now, true, 12, "", "192.0.2.1", now).AddRow(3, 8, "stale", 1, now, true, 12, "", "192.0.2.2", now-100))
 	entries, err := s.ListDispatchMonitors(context.Background())
