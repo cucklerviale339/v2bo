@@ -52,6 +52,8 @@ func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg 
 	payload := map[string]any{
 		"entry_groups": buildForestRuntimeEntryGroups(r.Context(), r, cfg, subscribe.Token, servers, groups, resolver),
 	}
+	w, finishDelivery := trackDispatchDelivery(w, r, userService, identity.ID, servers)
+	defer finishDelivery()
 	if capability := strings.TrimSpace(r.URL.Query().Get("cap")); capability != "" {
 		payload["capability"] = capability
 	}
@@ -108,6 +110,8 @@ func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg
 		return true
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w, finishDelivery := trackDispatchDelivery(w, r, userService, userID, memberServers)
+	defer finishDelivery()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
 	return true
@@ -847,7 +851,9 @@ func buildForestEntryProviderProxies(ctx context.Context, userUUID string, serve
 	effectiveIPs := effectiveClientEntryGroupIPs(ctx, group, resolver)
 	proxies := make([]any, 0, len(servers)*len(effectiveIPs))
 	for _, server := range servers {
-		if _, matched := server["host"].(usersvc.AddressGroupHost); matched {
+		_, matched := server["host"].(usersvc.AddressGroupHost)
+		_, investigated := server["host"].(usersvc.InvestigationHost)
+		if matched || investigated {
 			if proxy, ok := buildClashStandardProxy(userUUID, server); ok {
 				proxies = append(proxies, proxy)
 			}

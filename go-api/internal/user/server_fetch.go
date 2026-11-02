@@ -84,6 +84,10 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if err != nil {
 		return nil, err
 	}
+	assignments, err := LoadInvestigationAssignments(ctx, s.db, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	servers := make([]map[string]any, 0)
 	for _, table := range serverFetchTables {
@@ -139,6 +143,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		if !keepManagedNode {
 			continue
 		}
+		applyInvestigationAssignment(item, assignments)
 
 		if rawPort, isRange := serverPortRange(item["port"]); isRange {
 			item["mport"] = rawPort

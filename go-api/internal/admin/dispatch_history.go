@@ -118,6 +118,7 @@ func (s *DBService) setDispatchHistoryError(err error) {
 		s.dispatchHistoryLastError = ""
 	} else {
 		s.dispatchHistoryLastError = "检测历史记录失败，请检查服务日志；此期间历史可能不完整"
+		s.dispatchHistoryLastFailureAt = time.Now().Unix()
 	}
 	s.dispatchHistoryMu.Unlock()
 	if err != nil {

@@ -191,6 +191,11 @@ PRIMARY KEY (id)
 		}
 	}
 
+	for _, stmt := range DispatchInvestigationSchema {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("ensure entry investigation schema: %w", err)
+		}
+	}
 	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
 		if err := ensureNodeAddressEnabledColumn(ctx, db, tableName); err != nil {
 			return err

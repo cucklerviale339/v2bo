@@ -1,8 +1,10 @@
 import { MonitoringHistoryModal } from './MonitoringHistoryPanel';
+import DispatchMonitorStatus from './DispatchMonitorStatus';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Descriptions, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, apiPut, unwrapList } from '../lib/api';
+import { getMonitorPort, rememberMonitorPort } from '../lib/monitorPortPreference';
 
 type Probe = { id: number; name: string; enabled: boolean; version?: string };
 type ProbeState = {
@@ -21,15 +23,6 @@ const time = (value?: number | null) => value ? new Date(value * 1000).toLocaleS
 const rangeLabel = (value: string) => value === '1-9223372036854775807'
   ? '全部 ID' : value.replace(/-9223372036854775807$/, ' 及以上');
 const scopeLabel = (entry: Entry) => [...entry.user_id_ranges.map(rangeLabel), ...entry.user_ids].join('、');
-
-function entryStatus(entry: Entry) {
-  if (!entry.enabled) return <Tag>未启用</Tag>;
-  const fresh = entry.states.filter(state => !state.stale && state.success !== null);
-  if (fresh.some(state => state.success === false)) return <Tag color="error">异常</Tag>;
-  if (fresh.length === entry.probe_ids.length && fresh.length) return <Tag color="success">正常</Tag>;
-  if (fresh.length) return <Tag color="warning">部分探针无新鲜数据</Tag>;
-  return <Tag color="default">等待测活 / 数据过期</Tag>;
-}
 
 export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -76,7 +69,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
     const entry = hosts.length === 1 ? entries.find(item => item.host === hosts[0]) : undefined;
     form.resetFields();
     form.setFieldsValue({
-      check_port: entry?.check_port ?? 443, enabled: entry?.enabled ?? true,
+      check_port: entry?.id ? entry.check_port : getMonitorPort('entry'), enabled: entry?.enabled ?? true,
       check_interval_sec: entry?.check_interval_sec ?? 30, tcp_timeout_ms: entry?.tcp_timeout_ms ?? 3000,
       probe_ids: entry?.probe_ids ?? [],
     });
@@ -129,9 +122,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
   return <>
     {historyHost && <MonitoringHistoryModal host={historyHost} source="entry" onClose={() => setHistoryHost(undefined)} />}
     <div style={{ padding: 16 }}>
-      <Alert type="info" showIcon message="按地址分配规则汇总入口：内鬼管理 → 节点地址 → 节点管理。"
-        description="ID 归属按配置区间显示，不检查账号状态、节点权限或 UA、套餐、注册天数条件；不包含额外节点。选择入口、探针和 port 后启用监控。" />
-      <Space wrap style={{ marginTop: 14 }}>
+      <Space wrap>
         <Input.Search allowClear value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索入口、ID 范围或来源" style={{ width: 280 }} />
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()}>刷新入口与状态</Button>
         <Button type="primary" icon={<SettingOutlined />} disabled={!selected.length} onClick={() => configure(selected.map(String))}>批量配置{selected.length ? `（${selected.length}）` : ''}</Button>
@@ -164,7 +155,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
       columns={[
         { title: '节点入口', dataIndex: 'host', width: 240, render: host => <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{host}</Typography.Text> },
         { title: 'port', dataIndex: 'check_port', width: 80 },
-        { title: '监控状态', width: 180, render: (_, entry) => entry.deleted ? <Tag>已删除</Tag> : entryStatus(entry) },
+        { title: '监控状态', width: 180, render: (_, entry) => <DispatchMonitorStatus entry={entry} /> },
         { title: '下发 ID / ID 范围', render: (_, entry) => <Typography.Paragraph ellipsis={{ rows: 2, expandable: true, symbol: '展开' }} style={{ margin: 0, minWidth: 200, maxWidth: 450 }}>{scopeLabel(entry)}</Typography.Paragraph> },
         { title: '探针', width: 90, render: (_, entry) => `${entry.states.filter(state => state.online).length} / ${entry.probe_ids.length}` },
         { title: '操作', width: 250, fixed: 'right', render: (_, entry) => <Space size={0}><Button type="link" onClick={() => setHistoryHost(entry.host)}>历史</Button>
@@ -177,7 +168,7 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
     <Modal open={!!editing.length} title={editing.length === 1 ? `入口监控 · ${editing[0]}` : `批量配置 ${editing.length} 个入口`} onCancel={() => !saving && setEditing([])}
       onOk={save} confirmLoading={saving} okText="保存" cancelText="取消" maskClosable={!saving} closable={!saving} forceRender>
       <Form form={form} layout="vertical" preserve={false}>
-        <Form.Item name="check_port" label="探测 port" rules={[{ required: true, message: '请输入端口' }]}><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="check_port" label="探测 port" rules={[{ required: true, message: '请输入端口' }]}><InputNumber min={1} max={65535} precision={0} onChange={value => rememberMonitorPort('entry', value)} style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="probe_ids" label="绑定探针" dependencies={['enabled']} rules={[({ getFieldValue }) => ({ validator: (_, ids) => getFieldValue('enabled') && !ids?.length ? Promise.reject(new Error('启用监控前请选择探针')) : Promise.resolve() })]}>
           <Select mode="multiple" placeholder="选择已部署的探针" options={probes.filter(probe => probe.enabled).map(probe => ({ value: probe.id, label: `${probe.name} (#${probe.id})` }))} />
         </Form.Item>
@@ -185,7 +176,6 @@ export default function DispatchMonitorPanel({ probes }: { probes: Probe[] }) {
         <Form.Item name="tcp_timeout_ms" label="TCP 超时（毫秒）" rules={[{ required: true }]}><InputNumber min={1} max={60000} /></Form.Item>
         <Form.Item name="enabled" label="启用监控" valuePropName="checked"><Switch /></Form.Item>
       </Form>
-      <Typography.Text type="secondary">探针需升级为包含入口监控的新版本。保存配置后重新测活，旧端口的结果不会继续显示为正常。</Typography.Text>
     </Modal>
   </>;
 }

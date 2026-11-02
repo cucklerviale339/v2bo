@@ -849,6 +849,26 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
 			checkPath := strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")
+			if checkPath == "dispatch-investigation" || checkPath == "dispatch-investigation/groups" {
+				w.Header().Set("Cache-Control", "no-store")
+				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+					return
+				}
+				handleInvestigation(w, r, state.admin, checkPath)
+				return
+			}
+			if checkPath == "dispatch-auto-split" || checkPath == "dispatch-auto-split/groups" {
+				w.Header().Set("Cache-Control", "no-store")
+				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
+					return
+				}
+				if checkPath == "dispatch-auto-split/groups" {
+					handleDispatchSplitGroupEdit(w, r, state.admin)
+				} else {
+					handleDispatchAutoSplit(w, r, state.admin)
+				}
+				return
+			}
 			if checkPath == "dispatch-history" {
 				w.Header().Set("Cache-Control", "no-store")
 				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
@@ -2192,6 +2212,8 @@ func handleUserServerFetch(w http.ResponseWriter, r *http.Request, sessionServic
 		return true
 	}
 	w.Header().Set("ETag", `"`+etag+`"`)
+	w, finishDelivery := trackDispatchDelivery(w, r, userService, identity.ID, data)
+	defer finishDelivery()
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	return true
 }

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -123,6 +124,9 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_insider_rule`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, stmt := range DispatchInvestigationSchema {
+		mock.ExpectExec(regexp.QuoteMeta(stmt)).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 
 	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).

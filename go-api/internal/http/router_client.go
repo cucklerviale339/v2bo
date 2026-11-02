@@ -70,6 +70,8 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 	}
 
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w, finishDelivery := trackDispatchDelivery(w, r, service, userID, servers)
+	defer finishDelivery()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(body))
 	return true
@@ -101,6 +103,8 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 	}
 
 	flag := clientSubscribeFlag(r)
+	w, finishDelivery := trackDispatchDelivery(w, r, service, userID, servers)
+	defer finishDelivery()
 	servers = prependLegacySubscribeInfoServers(cfg, flag, subscribe, servers)
 
 	writeSubscribeMetadataHeaders(w, cfg, subscribe)

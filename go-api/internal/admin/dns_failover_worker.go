@@ -168,6 +168,9 @@ func (s *DBService) StartDNSFailoverAutomation(ctx context.Context) {
 		if s.db != nil {
 			startWorker("DNS monitoring retention", time.Hour, s.cleanupDNSFailoverRetention)
 			startWorker("Entry monitoring history retention", time.Hour, s.cleanupDispatchHistory)
+			startWorker("Entry monitoring automatic split", 30*time.Second, s.runDispatchAutoSplitCycle)
+			startWorker("Entry delivery investigation", 30*time.Second, s.runInvestigationCycle)
+			startWorker("Entry delivery evidence retention", time.Hour, s.cleanupInvestigationDeliveries)
 		}
 	})
 }

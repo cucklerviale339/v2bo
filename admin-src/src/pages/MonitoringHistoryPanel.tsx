@@ -55,7 +55,6 @@ export default function MonitoringHistoryPanel({ active, mode = 'history', host:
    </>}
   </Space>
   {source === 'dns' ? dnsContent : <>
-   <Alert showIcon type="info" style={{ marginBottom: 12 }} message={kind === 'event' ? '故障与恢复事件保留 3 天' : '持续检测明细保留最近 24 小时'} description={kind === 'event' ? '按每个目标和探针记录状态变化；重复故障不重复生成事件。备用池连续成功 2 次后确认恢复。这些事件不代表已执行 DNS 切换。探针离线或结果过期请在实时状态中查看。' : '显示已接受的持续检测结果，无需主动检测。重新测活、服务重启或删除配置不清除已有历史。ID 归属使用记录时的目录快照（缓存最多 5 秒）；修复前未记录的数据无法补回。'} />
    {warning && <Alert showIcon type="warning" message={warning} style={{ marginBottom: 12 }} />}
    {error && <Alert showIcon type="error" message={error} description="以下可能是上次加载的数据，请刷新后确认。" style={{ marginBottom: 12 }} />}
    <Table<Record> size="small" loading={loading} rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 1450 }} columns={[
@@ -67,7 +66,7 @@ export default function MonitoringHistoryPanel({ active, mode = 'history', host:
     { title: '延迟', width: 90, render: (_, row) => row.latency_ms == null ? '—' : `${row.latency_ms} ms` },
     { title: '解析 IP / 错误', width: 210, render: (_, row) => <>{row.resolved_ip || '—'}{row.error && <div style={{ color: '#cf1322' }}>{row.error}</div>}</> },
     { title: '下发 ID / 范围快照', width: 285, render: (_, row) => row.ownership_known ? <Typography.Paragraph style={{ margin: 0 }} ellipsis={{ rows: 2, expandable: true }}>{scopeText(row.ownership)}</Typography.Paragraph> : <Tag color="warning">归属快照暂不可用</Tag> },
-   ]} expandable={{ expandedRowRender: row => <Typography.Paragraph>当时下发来源：{row.ownership_known ? row.ownership.sources?.join('；') || '无' : '快照暂不可用'}。端口仅用于检测。</Typography.Paragraph> }} locale={{ emptyText: error ? '记录读取失败' : '暂无记录；启用监控并收到探针新结果后开始积累' }} />
+   ]} expandable={{ expandedRowRender: row => <Typography.Paragraph>当时下发来源：{row.ownership_known ? row.ownership.sources?.join('；') || '无' : '快照暂不可用'}</Typography.Paragraph> }} locale={{ emptyText: error ? '记录读取失败' : '暂无记录' }} />
    <Pagination current={page} pageSize={50} total={total} showSizeChanger={false} showTotal={v => `共 ${v} 条`} onChange={setPage} style={{ marginTop: 14 }} />
    {legacyContent && <Collapse style={{ marginTop: 18 }} items={[{ key: 'legacy', label: '旧版主动检测任务记录', children: legacyContent }]} />}
   </>}

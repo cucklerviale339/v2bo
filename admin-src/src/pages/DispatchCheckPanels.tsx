@@ -4,6 +4,7 @@ import { Alert, Button, Form, Input, InputNumber, Modal, Pagination, Popconfirm,
 import { CopyOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiDelete, apiGet, apiJsonPost, unwrapList } from '../lib/api';
 import { copyText } from '../lib/clipboard';
+import { getMonitorPort, rememberMonitorPort } from '../lib/monitorPortPreference';
 
 const POOL = '/dns-failover/dispatch-pool';
 const RUNS = '/dns-failover/dispatch-runs';
@@ -106,10 +107,9 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
  const visible = items.filter(p => `${p.ip} ${p.name} ${p.port} ${dispatchScopeText(p.ownership)} ${p.references.join(' ')}`.toLowerCase().includes(search.trim().toLowerCase()));
  return <div style={{ padding: 16 }}>
   {historyHost && <MonitoringHistoryModal host={historyHost} source="pool" onClose={() => setHistoryHost(undefined)} />}
-  <Alert showIcon type="info" message="备用 IP 持续测活" description="按 IP＋port 管理；所有在线启用探针均有新鲜结果并连续成功 2 次，且没有地址配置引用时，才标记可用。离线探针不参与通过条件。每枚探针最多启用 1000 个入口及备用池目标，备用池使用全部启用探针。" />
   <Space wrap style={{ margin: '14px 0' }}>
    <Tag>共 {items.length}</Tag><Tag color="success">可用 {items.filter(p => p.available).length}</Tag><Tag color="blue">有引用 {items.filter(p => p.used).length}</Tag>
-   <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={() => { batchForm.setFieldsValue({ port: 443, check_interval_sec: 30, tcp_timeout_ms: 3000 }); setBatch(true); }}>批量添加</Button>
+   <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={() => { batchForm.setFieldsValue({ port: getMonitorPort('pool'), check_interval_sec: 30, tcp_timeout_ms: 3000 }); setBatch(true); }}>批量添加</Button>
    <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>刷新</Button>
    <Button icon={<CopyOutlined />} disabled={!items.some(p => p.available)} onClick={() => void copyAvailable()}>复制可用 IP</Button>
    <Button disabled={!selected.length || busy || selected.some(id => !items.find(p => p.id === id)?.enabled)} onClick={() => action(() => apiJsonPost(`${POOL}/refresh`, { ids: selected }), '已清除旧状态，等待重新测活')}>重新测活所选</Button>
@@ -132,7 +132,7 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
    { title: '操作', fixed: 'right', width: 230, render: (_, p) => <Space><Button type="link" onClick={() => setHistoryHost(p.ip)}>历史</Button><Button type="link" disabled={busy} onClick={() => { form.setFieldsValue(p); setEditing(p); }}>编辑</Button><Button type="link" disabled={busy || !p.enabled} onClick={() => action(() => apiJsonPost(`${POOL}/refresh`, { ids: [p.id] }), '已提交重新测活')}>重新测活</Button></Space> },
   ]} locale={{ emptyText: '暂无备用资源，点击批量添加' }} />
   <Modal open={batch} title="批量添加备用 IP" confirmLoading={busy} closable={!busy} maskClosable={!busy} onCancel={() => setBatch(false)} onOk={saveBatch} okText="添加">
-   <Form form={batchForm} layout="vertical"><Form.Item name="lines" label="每行：IP [端口] [名称]" rules={[{ required: true, message: '请输入备用 IP' }]} extra="支持 IPv4、IPv6、IPv4:port 和 [IPv6]:port；省略端口时使用下方默认值。重复 IP＋port 会使整批添加取消。"><Input.TextArea rows={7} placeholder={'192.0.2.10 443 备用一\n[2001:db8::10]:8443 备用二'} /></Form.Item><Form.Item name="port" label="默认 port" rules={[{ required: true }]}><InputNumber min={1} max={65535} precision={0} /></Form.Item><Form.Item name="check_interval_sec" label="检测间隔（秒）" rules={[{ required: true }]}><InputNumber min={5} max={3600} precision={0} /></Form.Item><Form.Item name="tcp_timeout_ms" label="TCP 超时（毫秒）" rules={[{ required: true }]}><InputNumber min={100} max={60000} precision={0} /></Form.Item></Form>
+   <Form form={batchForm} layout="vertical"><Form.Item name="lines" label="每行：IP [端口] [名称]" rules={[{ required: true, message: '请输入备用 IP' }]} extra="支持 IPv4、IPv6、IPv4:port 和 [IPv6]:port；省略端口时使用下方默认值。重复 IP＋port 会使整批添加取消。"><Input.TextArea rows={7} placeholder={'192.0.2.10 443 备用一\n[2001:db8::10]:8443 备用二'} /></Form.Item><Form.Item name="port" label="默认 port" rules={[{ required: true }]}><InputNumber min={1} max={65535} precision={0} onChange={value => rememberMonitorPort('pool', value)} /></Form.Item><Form.Item name="check_interval_sec" label="检测间隔（秒）" rules={[{ required: true }]}><InputNumber min={5} max={3600} precision={0} /></Form.Item><Form.Item name="tcp_timeout_ms" label="TCP 超时（毫秒）" rules={[{ required: true }]}><InputNumber min={100} max={60000} precision={0} /></Form.Item></Form>
   </Modal>
   <Modal open={!!editing} title={`编辑备用资源 · ${editing ? addr(editing.ip, editing.port) : ''}`} confirmLoading={busy} closable={!busy} maskClosable={!busy} onCancel={() => setEditing(null)} onOk={saveEdit}>
    <Form form={form} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true }, { max: 255 }]}><Input /></Form.Item><Form.Item name="port" label="探测 port" rules={[{ required: true }]}><InputNumber min={1} max={65535} precision={0} /></Form.Item><Form.Item name="enabled" label="启用测活" valuePropName="checked"><Switch /></Form.Item><Form.Item name="check_interval_sec" label="检测间隔（秒）" rules={[{ required: true }]}><InputNumber min={5} max={3600} precision={0} /></Form.Item><Form.Item name="tcp_timeout_ms" label="TCP 超时（毫秒）" rules={[{ required: true }]}><InputNumber min={100} max={60000} precision={0} /></Form.Item><Form.Item name="sort" label="排序（越小越靠前）" rules={[{ required: true }]}><InputNumber min={0} max={2147483647} precision={0} /></Form.Item></Form>
@@ -159,7 +159,7 @@ export function DispatchRunsPanel({ active }: { active: boolean }) {
  const refresh = useRef<() => void>(() => {});
  useEffect(() => { if (!active) return; let alive = true; let seq = 0; const load = async () => { const n = ++seq; try { const r = await apiGet(RUNS, { page }); if (alive && n === seq) { setRows(unwrapList(r)); setTotal(r.total); setError(''); } } catch (e) { if (alive && n === seq) setError(errorText(e)); } }; refresh.current = () => void load(); void load(); const timer = window.setInterval(load, 5000); return () => { alive = false; clearInterval(timer); }; }, [page, active]);
  const clear = async () => { setClearing(true); try { await apiDelete(RUNS); message.success('已清理结束的任务'); if (page === 1) refresh.current(); else setPage(1); } catch (e) { message.error(errorText(e)); } finally { setClearing(false); } };
- return <div style={{ padding: 16 }}><Alert showIcon type="info" message="历史检测记录保留 7 天" description="此处查看已有检测任务的地址、port、探针及下发 ID 归属快照。主动检测入口已移除；持续监控和重新测活的结果在入口监控及备用 IP 池中查看。" />
+ return <div style={{ padding: 16 }}>
   <Space style={{ margin: '14px 0' }}><Button icon={<ReloadOutlined />} onClick={() => refresh.current()}>刷新</Button><Popconfirm title="清理全部已结束的任务？" description="正在执行的任务会保留。" onConfirm={clear}><Button danger loading={clearing}>清理记录</Button></Popconfirm></Space>
   {error && <Alert type="error" message={error} />}
   <Table<Run> size="small" rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 900 }} expandable={{ expandedRowRender: r => <RunResults runID={r.id} active={active} /> }} columns={[

@@ -35,12 +35,16 @@ func (s *DBService) loadNodeAddressSelector(ctx context.Context) (*nodeAddressSe
 		return nil, err
 	}
 
+	return loadNodeAddressSelectorFrom(ctx, s.db)
+}
+
+func loadNodeAddressSelectorFrom(ctx context.Context, q DispatchQueryer) (*nodeAddressSelector, error) {
 	selector := &nodeAddressSelector{
 		bindings: make(map[string]int64),
 		rules:    make(map[int64][]nodeAddressRule),
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.group_id, r.host, r.match_user_ids, r.match_user_id_ranges, r.extra_nodes, r.extra_nodes_position
+	rows, err := q.QueryContext(ctx, `SELECT r.id, r.group_id, r.host, r.match_user_ids, r.match_user_id_ranges, r.extra_nodes, r.extra_nodes_position
 FROM v2_node_address_rule r
 JOIN v2_node_address_group g ON g.id = r.group_id
 WHERE g.enabled = 1 AND r.enabled = 1
@@ -86,7 +90,7 @@ ORDER BY r.group_id ASC, r.sort ASC NULLS LAST, r.id ASC`)
 		return nil, fmt.Errorf("iterate node address rules: %w", err)
 	}
 
-	bindingRows, err := s.db.QueryContext(ctx, `SELECT b.server_type, b.server_id, b.address_group_id
+	bindingRows, err := q.QueryContext(ctx, `SELECT b.server_type, b.server_id, b.address_group_id
 FROM v2_node_address_binding b
 JOIN v2_node_address_group g ON g.id = b.address_group_id
 WHERE g.enabled = 1

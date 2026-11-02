@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"net/netip"
@@ -13,6 +14,10 @@ import (
 	"forest/go-api/internal/platform/userselector"
 	"forest/go-api/internal/subscribelink"
 )
+
+type DispatchQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
 
 // DispatchEntry describes configured ID ownership, not account eligibility.
 // IDs remain strings so JavaScript cannot round large identifiers.
@@ -39,23 +44,50 @@ func (s *DBService) DispatchEntries(ctx context.Context) ([]DispatchEntry, error
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
-	addresses, err := s.loadNodeAddressSelector(ctx)
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return nil, err
+	}
+	return DispatchEntriesFrom(ctx, s.db)
+}
+
+// DispatchEntriesFrom uses the same address selectors inside an already initialized transaction.
+func DispatchEntriesFrom(ctx context.Context, q DispatchQueryer) ([]DispatchEntry, error) {
+	entries, err := DispatchEntriesBeforeInvestigationFrom(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	insiders, err := s.loadInsiderSelector(ctx)
+	return investigationCatalog(ctx, q, entries)
+}
+
+// Original configured ownership, before investigation assignments split it.
+func DispatchEntriesBeforeInvestigationFrom(ctx context.Context, q DispatchQueryer) ([]DispatchEntry, error) {
+	addresses, err := loadNodeAddressSelectorFrom(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	insiders, err := loadInsiderSelectorFrom(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	servers := make([]map[string]any, 0)
 	for _, table := range serverFetchTables {
-		rows, err := s.queryRowsAsMaps(ctx, `SELECT id, host FROM `+table.table+` WHERE "show" = 1 ORDER BY id ASC`)
+		rows, err := q.QueryContext(ctx, `SELECT id, host FROM `+table.table+` WHERE "show" = 1 ORDER BY id ASC`)
 		if err != nil {
 			return nil, fmt.Errorf("query dispatch node addresses: %w", err)
 		}
-		for _, row := range rows {
-			row["type"] = table.serverType
-			servers = append(servers, row)
+		for rows.Next() {
+			var id int64
+			var host string
+			if err := rows.Scan(&id, &host); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			servers = append(servers, map[string]any{"id": id, "host": host, "type": table.serverType})
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
 		}
 	}
 	return configuredDispatchEntries(ctx, servers, addresses, insiders)

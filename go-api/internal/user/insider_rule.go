@@ -17,7 +17,11 @@ func (s *DBService) loadInsiderSelector(ctx context.Context) (*insiderSelector, 
 	if err := s.ensureNodeAddressSchema(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, match_user_ids, match_user_id_ranges, host, extra_nodes, extra_nodes_position FROM v2_insider_rule WHERE enabled=1 ORDER BY id ASC`)
+	return loadInsiderSelectorFrom(ctx, s.db)
+}
+
+func loadInsiderSelectorFrom(ctx context.Context, q DispatchQueryer) (*insiderSelector, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, match_user_ids, match_user_id_ranges, host, extra_nodes, extra_nodes_position FROM v2_insider_rule WHERE enabled=1 ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query insider rules: %w", err)
 	}

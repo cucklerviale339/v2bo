@@ -131,6 +131,7 @@ type dispatchQueryer interface {
 func dispatchPoolReferences(ctx context.Context, q dispatchQueryer) (map[string][]string, error) {
 	refs := map[string][]string{}
 	queries := []string{
+		`SELECT host,'谁是卧底 #'||id FROM v2_dispatch_investigation_group WHERE active AND host<>''`,
 		`SELECT host,'内鬼管理规则 #'||id FROM v2_insider_rule WHERE host<>''`,
 		`SELECT host,'节点地址规则 #'||id FROM v2_node_address_rule WHERE host<>''`,
 	}
