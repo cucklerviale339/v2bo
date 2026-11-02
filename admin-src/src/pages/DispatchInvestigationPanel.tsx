@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { apiGet, apiPut, unwrapData, unwrapList } from '../lib/api';
 import DispatchMonitorStatus, { type DispatchMonitorStatusEntry } from './DispatchMonitorStatus';
+import '../styles/investigation.css';
 
 type Settings = { enabled: boolean; scope: 'all' | 'multi_range'; revision: number; entry_window_minutes: number; global_window_minutes: number; global_max: number };
 type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number };
@@ -10,6 +11,38 @@ type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
 const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑' };
+const groupTitle = (g: Group) => g.parent_id === 0 && g.kind === 'candidate' && g.name === '卧底' ? '入口组' : g.name;
+const processStates: Record<string, [string, string]> = {
+ '正常观察中': ['观察中', 'active'],
+ '等待入口正常后开始观察': ['待入口恢复', 'waiting'],
+ '等待入口恢复正常后重新观察': ['待入口恢复', 'waiting'],
+ '等待新入口确认正常': ['待入口确认', 'waiting'],
+ '新入口尚未确认正常，不按本轮失败筛选': ['待入口确认', 'waiting'],
+ '等待连续超时满 10 分钟，或探针结果不一致': ['故障确认中', 'waiting'],
+ '缺少贯穿故障期间的独立正常对照入口，等待确认': ['待对照确认', 'waiting'],
+ '同一原始组及其后代处于频率限制窗口': ['组内限频', 'paused'],
+ '达到全局自动处理频率限制': ['全局限频', 'paused'],
+ '不在当前生效范围，保留分组和地址，暂停自动处理': ['范围外暂停', 'paused'],
+ '监控未启用、探针离线或数据过期': ['监控未就绪', 'paused'],
+ '实际下发关系已变化，暂停自动处理': ['下发已变更', 'paused'],
+ '下发规则发生变化，等待重新确认': ['待规则确认', 'waiting'],
+ '故障起点早于有效观察期': ['等待新一轮', 'waiting'],
+ '探针会话重置中': ['探针重置中', 'waiting'],
+ '证据写入曾失败，请恢复正常后重新观察': ['记录异常', 'error'],
+ '人工编辑后重新观察': ['重新观察', 'waiting'],
+ '新成员加入，重新观察': ['重新观察', 'waiting'],
+ '监控配置或会话变更，重新观察': ['重新观察', 'waiting'],
+ '证据恢复后重新开始观察': ['重新观察', 'waiting'],
+ '本轮无人拉取，成员不变，已更换入口': ['已换入口', 'waiting'],
+ '本轮已完成筛选': ['已筛选', 'paused'],
+};
+function processState(g: Group, enabled?: boolean) {
+ if (g.manual_only || g.user_ids.length <= 1) return { label: '仅人工', tone: 'paused', detail: '仅人工操作，不参与自动筛选或入口分配' };
+ if (enabled === undefined) return { label: '—', tone: 'paused', detail: '等待设置加载' };
+ if (!enabled) return { label: '已关闭', tone: 'paused', detail: '总开关已关闭，暂停自动处理' };
+ const [label, tone] = processStates[g.reason] || (/^等待 \d+ 个同检测端口的健康未占用备用 IP$/.test(g.reason) ? ['待补 IP', 'waiting'] : g.reason.startsWith('本轮未修改：') ? ['处理受阻', 'error'] : ['待处理', 'waiting']);
+ return { label, tone, detail: g.reason || '等待自动处理' };
+}
 
 export default function DispatchInvestigationPanel({ active = true }: { active?: boolean }) {
  const [form] = Form.useForm<Settings>(), [editForm] = Form.useForm<Group>();
@@ -36,27 +69,26 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   try { const values = await editForm.validateFields(); setSaving(true); generation.current++; await apiPut(endpoint + '/groups', { id: editing.id, revision: editing.revision, name: values.name, host: values.host, manual_only: values.manual_only }); setEditing(undefined); message.success('分组已保存'); await load(); }
   catch (e: any) { if (!e.errorFields) message.error(e.message || '保存失败'); } finally { setSaving(false); }
  };
- return <div style={{ padding: 16 }}>
-  <Space style={{ marginBottom: 12 }}><Typography.Text strong>谁是卧底</Typography.Text><Tag color={settings?.enabled ? 'processing' : 'default'}>{settings?.enabled ? '已开启' : '已关闭'}</Tag></Space>
+ return <div className="investigation-panel">
+  <div className="investigation-heading"><Space size={10}><Typography.Text strong>谁是卧底</Typography.Text><span className={`investigation-switch-state${settings?.enabled ? ' is-on' : ''}`}>{settings?.enabled ? '运行中' : '已关闭'}</span></Space><span className="investigation-caption">{groups.length} 个分组</span></div>
   {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
   {workerError && <Alert type="error" showIcon message={workerError} style={{ marginBottom: 12 }} />}
-  <Form form={form} layout="inline" disabled={!settings || saving} style={{ gap: 12, marginBottom: 16 }}>
+  <Form form={form} layout="vertical" disabled={!settings || saving} className="investigation-settings">
    <Form.Item name="enabled" label="总开关" valuePropName="checked"><Switch aria-label="谁是卧底总开关" /></Form.Item>
    <Form.Item name="scope" label="生效范围" rules={[{ required: true }]}><Select style={{ width: 180 }} options={[{ value: 'all', label: '全部入口组' }, { value: 'multi_range', label: '仅多ID范围组' }]} /></Form.Item>
-   <Form.Item name="entry_window_minutes" label="同原始组每 N 分钟最多一次" rules={[{ required: true }]}><InputNumber min={1} max={10080} precision={0} /></Form.Item>
+   <Form.Item name="entry_window_minutes" label="单组间隔（分钟）" tooltip="同一原始组及其子组共享间隔，每个间隔最多处理一次" rules={[{ required: true }]}><InputNumber min={1} max={10080} precision={0} /></Form.Item>
    <Form.Item name="global_window_minutes" label="全局窗口（分钟）" rules={[{ required: true }]}><InputNumber min={1} max={10080} precision={0} /></Form.Item>
-   <Form.Item name="global_max" label="全局最多次数" rules={[{ required: true }]}><InputNumber min={1} max={100} precision={0} /></Form.Item>
-   <Button type="primary" disabled={!settings} loading={saving} onClick={save}>保存</Button><Button onClick={() => { initialized.current = false; void load(); }}>刷新</Button>
+   <Form.Item name="global_max" label="窗口内最多次数" rules={[{ required: true }]}><InputNumber min={1} max={100} precision={0} /></Form.Item>
+   <Space className="investigation-settings-actions"><Button type="primary" disabled={!settings} loading={saving} onClick={save}>保存</Button><Button onClick={() => { initialized.current = false; void load(); }}>刷新</Button></Space>
   </Form>
-  <Table<Group> rowKey="id" size="small" dataSource={groups} pagination={{ pageSize: 15 }} scroll={{ x: 1300 }} columns={[
-   { title: '分组', render: (_, g) => <><strong>{g.name}</strong><div>#{g.id} · 原始组 #{g.root_id}{g.parent_id ? ` · 来源 #${g.parent_id}` : ''}</div></> },
-   { title: '类型', render: (_, g) => <Space direction="vertical" size={0}><Tag color={g.kind === 'confirmed' ? 'error' : g.kind === 'observation' ? 'default' : 'processing'}>{kindName[g.kind]}</Tag>{(g.manual_only || g.user_ids.length <= 1) && <Tag>仅人工操作</Tag>}</Space> },
-   { title: '人数', render: (_, g) => g.user_ids.length }, { title: '下发入口', dataIndex: 'host' },
+  <Table<Group> className="investigation-groups" rowKey="id" size="middle" dataSource={groups} pagination={{ pageSize: 15, showSizeChanger: false }} scroll={{ x: 1120 }} columns={[
+   { title: '分组', width: 230, render: (_, g) => <div className="investigation-group-name"><span className={`investigation-kind-dot kind-${g.kind}`} /><strong>{groupTitle(g)}</strong><span className="investigation-group-number">#{g.id}</span></div> },
+   { title: '人数', width: 85, align: 'right', render: (_, g) => <span className="investigation-number">{g.user_ids.length.toLocaleString()}</span> }, { title: '下发入口', width: 210, render: (_, g) => <Typography.Text className="investigation-host" copyable>{g.host}</Typography.Text> },
    { title: '监控状态', width: 190, render: (_, g) => { if (error) return <Tag>状态读取失败</Tag>; const m = monitors.find(m => m.id === g.monitor_id && m.host === g.host); return m ? <DispatchMonitorStatus entry={m} /> : <Tag>未参与当前下发</Tag>; } },
-   { title: '处理状态', render: (_, g) => <>{g.reason}{g.no_pull_count > 0 && <div>无人拉取累计 {g.no_pull_count} 次</div>}</> },
-   { title: '操作', render: (_, g) => <Button type="link" onClick={() => { setEditing(g); editForm.setFieldsValue({ ...g, manual_only: g.manual_only || g.user_ids.length <= 1 }); }}>编辑</Button> },
-  ]} expandable={{ expandedRowRender: g => <Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text> }} locale={{ emptyText: '暂无分组' }} />
-  <Typography.Title level={5}>筛选历史</Typography.Title>
+   { title: '自动处理', render: (_, g) => { const state = processState(g, settings?.enabled); return <div className="investigation-process"><Tooltip title={state.detail}><span tabIndex={0} className={`investigation-process-state tone-${state.tone}`}>{state.label}</span></Tooltip>{g.no_pull_count > 0 && <span className="investigation-caption">未拉取 ×{g.no_pull_count}</span>}</div>; } },
+   { title: '操作', width: 70, render: (_, g) => <Button type="link" onClick={() => { setEditing(g); editForm.setFieldsValue({ ...g, manual_only: g.manual_only || g.user_ids.length <= 1 }); }}>编辑</Button> },
+  ]} expandable={{ expandedRowRender: g => <div className="investigation-details"><div className="investigation-detail-meta"><span>类型：{g.parent_id === 0 && g.kind === 'candidate' ? '初始入口' : kindName[g.kind]}</span><span>原始组：#{g.root_id}</span>{g.parent_id > 0 && <span>父组：#{g.parent_id}</span>}</div>{g.reason && <div className="investigation-detail-reason">处理说明：{g.reason}</div>}<div className="investigation-members"><span className="investigation-caption">成员 ID</span><Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text></div></div> }} locale={{ emptyText: '暂无分组' }} />
+  <div className="investigation-history-heading"><Typography.Text strong>筛选历史</Typography.Text><span className="investigation-caption">{total} 条记录</span></div>
   <Table<Event> rowKey="id" size="small" dataSource={events} pagination={{ current: page, pageSize: 20, total, onChange: setPage, showSizeChanger: false }} scroll={{ x: 1100 }} columns={[
    { title: '时间', render: (_, e) => stamp(e.created_at) }, { title: '原始组 / 来源组', render: (_, e) => e.root_id ? `#${e.root_id} / #${e.group_id}` : '—' },
    { title: '结果', render: (_, e) => <Tag>{kindName[e.kind] || e.kind}</Tag> }, { title: '首次失败', render: (_, e) => stamp(e.first_failure_at) },
