@@ -158,7 +158,7 @@ func TestPostgresDispatchSplitReparentSubtreePreservesCooldown(t *testing.T) {
 		t.Fatal(f.view())
 	}
 	first := f.view().Operations[0]
-	child := f.timeout(first.IPA)
+	child := f.confirmedTimeout(first.IPA)
 	f.exec(`UPDATE v2_dispatch_auto_split_operation SET updated_at=$1 WHERE status='succeeded'`, time.Now().Unix()-1201)
 	f.exec(`UPDATE v2_dispatch_auto_split_cooldown SET last_success_at=$1`, time.Now().Unix()-1201)
 	if !f.process(child) {
@@ -181,7 +181,7 @@ func TestPostgresDispatchSplitReparentSubtreePreservesCooldown(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT last_success_at FROM v2_dispatch_auto_split_cooldown WHERE root_group_id=$1`, first.ChildAID).Scan(&cooldown); err != nil || cooldown < time.Now().Unix()-10 {
 		t.Fatal("cooldown reset by detach", cooldown, err)
 	}
-	next := f.timeout(second.IPA)
+	next := f.confirmedTimeout(second.IPA)
 	if f.process(next) {
 		t.Fatal("reparent bypassed quota")
 	}

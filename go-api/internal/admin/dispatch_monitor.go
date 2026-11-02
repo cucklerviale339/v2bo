@@ -326,6 +326,9 @@ func (s *DBService) DeleteDispatchMonitors(ctx context.Context, hosts []string) 
 	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureNodeAddressSchema(ctx); err != nil {
+		return err
+	}
 	entries, err := s.dispatchEntries(ctx)
 	if err != nil {
 		return err
@@ -378,7 +381,13 @@ VALUES($1,443,FALSE,30,3000,TRUE) ON CONFLICT(host) DO UPDATE SET enabled=FALSE,
 			return err
 		}
 	}
-	return tx.Commit()
+	if _, err = excludeDeletedInvestigations(ctx, tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err == nil {
+		s.invalidateDispatchCatalog()
+	}
+	return err
 }
 
 // Negative target IDs keep monitoring separate from DNS failover target IDs.
@@ -633,7 +642,10 @@ func (s *DBService) InitializeDispatchMonitorSchema(ctx context.Context) error {
 	if err := s.ensureNodeAddressSchema(ctx); err != nil {
 		return err
 	}
-	return s.ensureDispatchMonitorSchema(ctx)
+	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
+		return err
+	}
+	return s.excludeDeletedInvestigations(ctx)
 }
 
 func (s *DBService) dispatchTaskHosts(ctx context.Context) (map[string]bool, error) {

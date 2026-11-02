@@ -60,7 +60,11 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   try {
    const [res, monitorRes] = await Promise.all([apiGet(endpoint, { page }), apiGet('/dns-failover/dispatch-entries', { include_deleted: true })]);
    if (seq !== generation.current) return;
-   const data = unwrapData(res); setSettings(data.settings); setGroups(data.groups || []); setEvents(data.events || []); setTotal(data.total || 0); setMonitors(unwrapList(monitorRes)); setError(''); setWorkerError(data.worker_error || '');
+   const data = unwrapData(res), nextMonitors = unwrapList(monitorRes) as Monitor[];
+   // Also hide a deleted entry while a concurrent exclusion is being applied.
+   const deletedMonitorIDs = new Set(nextMonitors.filter(m => m.deleted).map(m => m.id));
+   setSettings(data.settings); setGroups((data.groups || []).filter((g: Group) => !deletedMonitorIDs.has(g.monitor_id))); setEvents(data.events || []); setTotal(data.total || 0); setMonitors(nextMonitors); setError(''); setWorkerError(data.worker_error || '');
+   setEditing(current => current && deletedMonitorIDs.has(current.monitor_id) ? undefined : current);
    if (!initialized.current) { form.setFieldsValue(data.settings); revision.current = data.settings.revision; initialized.current = true; }
   } catch (e: any) { if (seq === generation.current) setError(e.message || '读取失败'); }
  };

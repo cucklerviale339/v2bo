@@ -31,6 +31,12 @@ func TestDispatchTimeoutRequiresContinuousFreshEvidence(t *testing.T) {
 		{"old session", func(v []DispatchHistorySample) { v[10].RunID = 2 }},
 		{"old version", func(v []DispatchHistorySample) { v[10].Version = 2 }},
 		{"missing latest write", func(v []DispatchHistorySample) { v[0].Sequence-- }},
+		{"missing intermediate write", func(v []DispatchHistorySample) { v[8].Sequence-- }},
+		{"missing intermediate sample", func(v []DispatchHistorySample) {
+			for i := 8; i < len(v); i++ {
+				v[i].Sequence--
+			}
+		}},
 		{"long reporting gap", func(v []DispatchHistorySample) {
 			for i := 10; i < len(v); i++ {
 				v[i].ReportedAt -= 120
@@ -147,6 +153,14 @@ func (f *splitIntegration) view() DispatchAutoSplitView {
 	}
 	return v
 }
+
+func (f *splitIntegration) confirmedTimeout(host string) dispatchSplitCandidate {
+	f.t.Helper()
+	c := f.timeout(host)
+	// Simulate a successful first sample followed by over ten minutes of timeout.
+	f.exec(`UPDATE v2_dispatch_history SET success=TRUE,payload=jsonb_set(jsonb_set(payload,'{success}','true'::jsonb),'{error}','""'::jsonb) WHERE target_id=$1 AND source='entry' AND version=$2 AND run_id=$3 AND sequence=(SELECT min(sequence) FROM v2_dispatch_history WHERE target_id=$1 AND source='entry' AND version=$2 AND run_id=$3)`, c.ID, c.Version, c.RunID)
+	return c
+}
 func (f *splitIntegration) process(c dispatchSplitCandidate) bool {
 	f.t.Helper()
 	changed, err := f.s.processDispatchAutoSplit(f.ctx, c)
@@ -206,8 +220,8 @@ func TestPostgresDispatchAutoSplitAtomicityAndStableFamily(t *testing.T) {
 	if err = f.db.QueryRow(`SELECT port FROM v2_server_vmess WHERE id=7`).Scan(&ports); err != nil || ports != "443" {
 		t.Fatal("subscription port changed", ports, err)
 	}
-	ca := f.timeout(op.IPA)
-	cb := f.timeout(op.IPB)
+	ca := f.confirmedTimeout(op.IPA)
+	cb := f.confirmedTimeout(op.IPB)
 	if f.process(ca) || f.process(cb) || f.successes() != 1 {
 		t.Fatal("new IP or ID range bypassed inherited cooldown")
 	}

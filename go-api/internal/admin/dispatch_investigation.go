@@ -73,6 +73,9 @@ func (s *DBService) ensureInvestigation(ctx context.Context) error {
 	if err := s.ensureDispatchAutoSplitSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.excludeDeletedInvestigations(ctx); err != nil {
+		return err
+	}
 	return s.migrateInvestigationNames(ctx)
 }
 
@@ -177,10 +180,11 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 	if err != nil {
 		return out, err
 	}
-	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM v2_dispatch_investigation_event`).Scan(&out.Total); err != nil {
+	const visibleEvents = ` FROM v2_dispatch_investigation_event e WHERE NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_monitor m ON m.id=g.monitor_id WHERE g.id=e.group_id AND m.deleted)`
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*)`+visibleEvents).Scan(&out.Total); err != nil {
 		return out, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,root_id,group_id,kind,first_failure_at,created_at,payload FROM v2_dispatch_investigation_event ORDER BY id DESC LIMIT 20 OFFSET $1`, (page-1)*20)
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.root_id,e.group_id,e.kind,e.first_failure_at,e.created_at,e.payload`+visibleEvents+` ORDER BY e.id DESC LIMIT 20 OFFSET $1`, (page-1)*20)
 	if err != nil {
 		return out, err
 	}

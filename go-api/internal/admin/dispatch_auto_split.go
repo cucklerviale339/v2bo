@@ -164,14 +164,16 @@ func dispatchTimeoutSpan(samples []DispatchHistorySample, c dispatchSplitCandida
 		return false
 	}
 	previous := c.Reported
+	sequence := c.Sequence
 	for _, x := range samples {
-		if x.Version != c.Version || x.RunID != c.RunID || x.Success || x.Error != "timeout" || x.ReportedAt < armed || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+		if x.Version != c.Version || x.RunID != c.RunID || x.Sequence != sequence || x.Success || x.Error != "timeout" || x.ReportedAt < armed || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
 			return false
 		}
 		if now-x.ReportedAt >= 600 {
 			return true
 		}
 		previous = x.ReportedAt
+		sequence--
 	}
 	return false
 }
@@ -242,7 +244,30 @@ func (s *DBService) splitEvidence(ctx context.Context, tx *sql.Tx, c dispatchSpl
 	if err = rows.Err(); err != nil {
 		return false, err
 	}
-	return dispatchTimeoutSpan(samples, c, now, armed), nil
+	if !dispatchTimeoutSpan(samples, c, now, armed) {
+		return false, nil
+	}
+	// An automatically assigned address must prove it worked in this exact
+	// configuration/session before a later incident may consume more pool IPs.
+	var descendant bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_auto_split_group g WHERE g.monitor_id=$1 AND (g.parent_group_id IS NOT NULL OR EXISTS(SELECT 1 FROM v2_dispatch_auto_split_operation o WHERE o.status='succeeded' AND (o.child_a_id=g.id OR o.child_b_id=g.id))))`, c.ID).Scan(&descendant); err != nil {
+		return false, err
+	}
+	if descendant {
+		boundary := samples[0]
+		for _, sample := range samples {
+			boundary = sample
+			if now-sample.ReportedAt >= 600 {
+				break
+			}
+		}
+		var healthyBefore bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_history WHERE source='entry' AND kind='sample' AND target_id=$1 AND probe_id=$2 AND version=$3 AND run_id=$4 AND success=TRUE AND sequence<$5 AND created_at<=$6)`, c.ID, c.ProbeID, c.Version, c.RunID, boundary.Sequence, boundary.ReportedAt).Scan(&healthyBefore); err != nil {
+			return false, err
+		}
+		return healthyBefore, nil
+	}
+	return true, nil
 }
 
 func (s *DBService) runDispatchAutoSplitCycle(ctx context.Context) error {
