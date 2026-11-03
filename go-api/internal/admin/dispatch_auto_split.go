@@ -164,16 +164,14 @@ func dispatchTimeoutSpan(samples []DispatchHistorySample, c dispatchSplitCandida
 		return false
 	}
 	previous := c.Reported
-	sequence := c.Sequence
-	for _, x := range samples {
-		if x.Version != c.Version || x.RunID != c.RunID || x.Sequence != sequence || x.Success || x.Error != "timeout" || x.ReportedAt < armed || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+	for i, x := range samples {
+		if x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.Success || x.Error != "timeout" || x.ReportedAt < armed || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
 			return false
 		}
 		if now-x.ReportedAt >= 600 {
 			return true
 		}
 		previous = x.ReportedAt
-		sequence--
 	}
 	return false
 }

@@ -43,7 +43,7 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 }
 
 // Returns a cutoff only when its beginning is preceded by a fresh successful
-// sample. Unknown starts, missing sequences and all other error types fail shut.
+// sample. Unknown starts, broken sample continuity and other error types fail shut.
 func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch int64) (int64, bool) {
 	if c.Success || c.Error != "timeout" || !dispatchSplitFresh(c, now) || len(samples) < 2 {
 		return 0, false
@@ -52,10 +52,9 @@ func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitC
 		return 0, false
 	}
 	previous := c.Reported
-	seq := c.Sequence + 1
 	first := int64(0)
-	for _, x := range samples {
-		if x.Version != c.Version || x.RunID != c.RunID || x.Sequence != seq-1 || x.ReportedAt < epoch || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+	for i, x := range samples {
+		if x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.ReportedAt < epoch || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
 			return 0, false
 		}
 		if x.Success {
@@ -66,7 +65,6 @@ func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitC
 		}
 		first = x.ReportedAt
 		previous = x.ReportedAt
-		seq = x.Sequence
 	}
 	return 0, false
 }
@@ -76,16 +74,14 @@ func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCa
 		return false
 	}
 	previous := c.Reported
-	seq := c.Sequence + 1
-	for _, x := range samples {
-		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || x.Sequence != seq-1 || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+	for i, x := range samples {
+		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
 			return false
 		}
 		if x.ReportedAt <= first-max(int64(60), c.Interval) {
 			return true
 		}
 		previous = x.ReportedAt
-		seq = x.Sequence
 	}
 	return false
 }
