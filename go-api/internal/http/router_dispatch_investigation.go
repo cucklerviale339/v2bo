@@ -14,12 +14,17 @@ type investigationService interface {
 	GetInvestigation(context.Context, int64) (admin.InvestigationView, error)
 	SaveInvestigation(context.Context, admin.InvestigationSettings) error
 	EditInvestigation(context.Context, admin.InvestigationEdit) error
+	ConfirmInvestigation(context.Context, admin.InvestigationAction) error
+	TriggerInvestigation(context.Context, admin.InvestigationAction) error
 }
 
 func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.Service, path string) {
 	edit := path == "dispatch-investigation/groups"
-	if (edit && r.Method != http.MethodPut) || (!edit && r.Method != http.MethodPut && r.Method != http.MethodGet) {
-		if edit {
+	action := path == "dispatch-investigation/confirm" || path == "dispatch-investigation/trigger"
+	if (action && r.Method != http.MethodPost) || (edit && r.Method != http.MethodPut) || (!action && !edit && r.Method != http.MethodPut && r.Method != http.MethodGet) {
+		if action {
+			w.Header().Set("Allow", "POST")
+		} else if edit {
 			w.Header().Set("Allow", "PUT")
 		} else {
 			w.Header().Set("Allow", "GET, PUT")
@@ -35,7 +40,17 @@ func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.S
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var err error
-	if edit {
+	if action {
+		var req admin.InvestigationAction
+		if !decodeStrictDNSFailoverJSON(w, r, &req) {
+			return
+		}
+		if path == "dispatch-investigation/confirm" {
+			err = s.ConfirmInvestigation(ctx, req)
+		} else {
+			err = s.TriggerInvestigation(ctx, req)
+		}
+	} else if edit {
 		var req admin.InvestigationEdit
 		if !decodeStrictDNSFailoverJSON(w, r, &req) {
 			return

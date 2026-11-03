@@ -66,6 +66,10 @@ check_port INTEGER NOT NULL CHECK (check_port BETWEEN 1 AND 65535), enabled BOOL
 check_interval_sec INTEGER NOT NULL CHECK(check_interval_sec BETWEEN 1 AND 86400),
 tcp_timeout_ms INTEGER NOT NULL CHECK(tcp_timeout_ms BETWEEN 1 AND 60000), version BIGINT NOT NULL DEFAULT 1)`,
 		`ALTER TABLE v2_dispatch_monitor ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE`,
+		`CREATE TABLE IF NOT EXISTS v2_dispatch_monitor_restart (
+monitor_id BIGINT NOT NULL, probe_id BIGINT NOT NULL, version BIGINT NOT NULL,
+from_run BIGINT NOT NULL, to_run BIGINT NOT NULL CHECK(to_run>from_run),
+created_at BIGINT NOT NULL, PRIMARY KEY(monitor_id,probe_id,version,to_run))`,
 		`CREATE TABLE IF NOT EXISTS v2_dispatch_monitor_probe (
 monitor_id BIGINT NOT NULL REFERENCES v2_dispatch_monitor(id) ON DELETE CASCADE,
 probe_id BIGINT NOT NULL REFERENCES v2_dns_probe(id) ON DELETE CASCADE,
@@ -89,6 +93,11 @@ FOREIGN KEY(monitor_id,probe_id) REFERENCES v2_dispatch_monitor_probe(monitor_id
 		return err
 	}
 	defer tx.Rollback()
+	// Only service startup may bridge sessions. Reconnects and configuration
+	// changes still invalidate old runs; queued old reports remain rejected.
+	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_monitor_restart(monitor_id,probe_id,version,from_run,to_run,created_at) SELECT b.monitor_id,b.probe_id,m.version,b.run_id,b.run_id+1,EXTRACT(EPOCH FROM clock_timestamp())::bigint FROM v2_dispatch_monitor_probe b JOIN v2_dispatch_monitor m ON m.id=b.monitor_id ON CONFLICT DO NOTHING`); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_monitor_probe SET run_id=run_id+1`); err != nil {
 		return err
 	}

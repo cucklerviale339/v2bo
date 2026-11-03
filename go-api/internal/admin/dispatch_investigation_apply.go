@@ -75,7 +75,7 @@ func (s *DBService) healthyObservation(ctx context.Context, tx *sql.Tx, g Invest
 	return nil, nil
 }
 
-func (s *DBService) applyInvestigation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup, evidence investigationEvidence, before []usersvc.DispatchEntry, finish func(string) error) error {
+func (s *DBService) applyInvestigation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup, evidence investigationEvidence, before []usersvc.DispatchEntry, duration int64, finish func(string) error) error {
 	// Address changes, pool consumption and the two automatic systems serialize
 	// on the same advisory lock. Existing address writers are also table-locked.
 	if err := lockInvestigationAddresses(ctx, tx); err != nil {
@@ -269,12 +269,15 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		if !fresh || key != g.ConfigKey {
 			return fmt.Errorf("监控配置或新鲜证据发生变化")
 		}
-		_, reason, e := s.investigationEvidence(ctx, tx, g, states, before)
+		latestEvidence, reason, e := s.investigationEvidenceWithDuration(ctx, tx, g, states, before, duration)
 		if e != nil {
 			return e
 		}
 		if reason != "" {
 			return fmt.Errorf("%s", reason)
+		}
+		if latestEvidence.First != evidence.First {
+			return fmt.Errorf("故障起点发生变化，已取消本次处理")
 		}
 		if g.LegacyRootID > 0 {
 			if _, e = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_auto_split_cooldown(root_group_id,last_success_at) VALUES($1,$2) ON CONFLICT(root_group_id) DO UPDATE SET last_success_at=GREATEST(EXCLUDED.last_success_at,v2_dispatch_auto_split_cooldown.last_success_at)`, g.LegacyRootID, now); e != nil {

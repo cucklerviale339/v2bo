@@ -126,12 +126,20 @@ func (s *fakeInvestigation) EditInvestigation(context.Context, admin.Investigati
 	s.calls++
 	return nil
 }
+func (s *fakeInvestigation) ConfirmInvestigation(context.Context, admin.InvestigationAction) error {
+	s.calls++
+	return nil
+}
+func (s *fakeInvestigation) TriggerInvestigation(context.Context, admin.InvestigationAction) error {
+	s.calls++
+	return nil
+}
 func TestInvestigationAdminOnlyAndStrictSettings(t *testing.T) {
 	s := &fakeInvestigation{fakeDNSAdminService: &fakeDNSAdminService{}}
 	path := "/api/v1/control/dns-failover/dispatch-investigation"
 	router := NewRouter(config.Config{AdminPath: "control"}, WithSessionService(&fakeSessionService{authErr: session.ErrUnauthorized}), WithAdminService(s))
-	for _, p := range []string{path, path + "/groups"} {
-		for _, method := range []string{"GET", "PUT"} {
+	for _, p := range []string{path, path + "/groups", path + "/confirm", path + "/trigger"} {
+		for _, method := range []string{"GET", "PUT", "POST"} {
 			if r := dnsFailoverRequest(router, method, p, `{}`); r.Code != 403 || s.calls != 0 {
 				t.Fatal(r.Code)
 			}
@@ -148,5 +156,17 @@ func TestInvestigationAdminOnlyAndStrictSettings(t *testing.T) {
 	}
 	if r := dnsFailoverRequest(router, "POST", path, `{}`); r.Code != 405 {
 		t.Fatal(r.Code)
+	}
+	for _, action := range []string{"confirm", "trigger"} {
+		before := s.calls
+		if r := dnsFailoverRequest(router, "GET", path+"/"+action, ""); r.Code != 405 || s.calls != before {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		if r := dnsFailoverRequest(router, "POST", path+"/"+action, `{"id":1,"revision":1,"force":true}`); r.Code != 400 || s.calls != before {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		if r := dnsFailoverRequest(router, "POST", path+"/"+action, `{"id":1,"revision":1}`); r.Code != 200 || s.calls != before+1 {
+			t.Fatal(r.Code, r.Body.String())
+		}
 	}
 }

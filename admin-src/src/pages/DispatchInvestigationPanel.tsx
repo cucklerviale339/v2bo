@@ -1,16 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { apiGet, apiPut, unwrapData, unwrapList } from '../lib/api';
+import { apiGet, apiJsonPost, apiPut, unwrapData, unwrapList } from '../lib/api';
 import DispatchMonitorStatus, { type DispatchMonitorStatusEntry } from './DispatchMonitorStatus';
 import '../styles/investigation.css';
 
 type Settings = { enabled: boolean; scope: 'all' | 'multi_range'; revision: number; entry_window_minutes: number; global_window_minutes: number; global_max: number };
-type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number };
+type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number };
 type Event = { id: number; root_id: number; group_id: number; kind: string; first_failure_at: number; created_at: number; payload: { before?: Group; pulled_ids?: number[]; unpulled_ids?: number[]; recent_ids?: number[]; older_ids?: number[]; recent_window_minutes?: number; partitions?: { group_id: number; user_ids: number[]; kind: string; host: string; merged_into?: number }[]; evidence?: { controls?: Record<string, string[]> }; reason?: string; host?: string; user_ids?: number[]; after?: any } };
 type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
-const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑' };
+const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑', confirmed_entry: '人工确认入口', manual_trigger: '人工立即触发' };
 function memberRanges(ids: string[]) {
  const sorted = [...new Set(ids.filter(id => /^[1-9]\d*$/.test(id)))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
  const ranges: string[] = [];
@@ -35,6 +35,7 @@ const processStates: Record<string, [string, string]> = {
  '探针会话重置中': ['探针重置中', 'waiting'],
  '证据写入曾失败，请恢复正常后重新观察': ['记录异常', 'error'],
  '人工编辑后重新观察': ['重新观察', 'waiting'],
+ '人工确认入口，重新观察': ['已人工确认', 'active'],
  '新成员加入，重新观察': ['重新观察', 'waiting'],
  '监控配置或会话变更，重新观察': ['重新观察', 'waiting'],
  '证据恢复后重新开始观察': ['重新观察', 'waiting'],
@@ -54,6 +55,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  const [settings, setSettings] = useState<Settings>(), [groups, setGroups] = useState<Group[]>([]), [events, setEvents] = useState<Event[]>([]);
  const [monitors, setMonitors] = useState<Monitor[]>([]), [error, setError] = useState(''), [workerError, setWorkerError] = useState('');
  const [saving, setSaving] = useState(false), [editing, setEditing] = useState<Group>(), [page, setPage] = useState(1), [total, setTotal] = useState(0);
+ const [action, setAction] = useState<{ group: Group; kind: 'confirm' | 'trigger' }>(), [actionBusy, setActionBusy] = useState(false), [actionError, setActionError] = useState('');
  const generation = useRef(0), initialized = useRef(false), revision = useRef(0);
  const load = async () => {
   const seq = ++generation.current;
@@ -78,6 +80,15 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   try { const values = await editForm.validateFields(); setSaving(true); generation.current++; await apiPut(endpoint + '/groups', { id: editing.id, revision: editing.revision, name: values.name, host: values.host, manual_only: values.manual_only }); setEditing(undefined); message.success('分组已保存'); await load(); }
   catch (e: any) { if (!e.errorFields) message.error(e.message || '保存失败'); } finally { setSaving(false); }
  };
+ const runAction = async () => {
+  if (!action || actionBusy) return;
+  setActionBusy(true); setActionError(''); generation.current++;
+  try {
+   await apiJsonPost(endpoint + '/' + action.kind, { id: action.group.id, revision: action.group.revision });
+   message.success(action.kind === 'confirm' ? '入口已确认，开始新一轮观察' : '本轮处理已完成'); setAction(undefined); await load();
+  } catch (e: any) { setActionError(e.message || '操作失败，请刷新后重试'); }
+  finally { setActionBusy(false); }
+ };
  return <div className="investigation-panel">
   <div className="investigation-heading"><Space size={10}><Typography.Text strong>谁是卧底</Typography.Text><span className={`investigation-switch-state${settings?.enabled ? ' is-on' : ''}`}>{settings?.enabled ? '运行中' : '已关闭'}</span></Space><span className="investigation-caption">{groups.length} 个分组</span></div>
   {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
@@ -90,14 +101,14 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    <Form.Item name="global_max" label="窗口内最多次数" rules={[{ required: true }]}><InputNumber min={1} max={100} precision={0} /></Form.Item>
    <Space className="investigation-settings-actions"><Button type="primary" disabled={!settings} loading={saving} onClick={save}>保存</Button><Button onClick={() => { initialized.current = false; void load(); }}>刷新</Button></Space>
   </Form>
-  <Table<Group> className="investigation-groups" rowKey="id" size="middle" dataSource={groups} pagination={{ pageSize: 15, showSizeChanger: false }} scroll={{ x: 1320 }} columns={[
+  <Table<Group> className="investigation-groups" rowKey="id" size="middle" dataSource={groups} pagination={{ pageSize: 15, showSizeChanger: false }} scroll={{ x: 1500 }} columns={[
    { title: '分组', width: 200, render: (_, g) => <div className="investigation-group-name"><span className={`investigation-kind-dot kind-${g.kind}`} /><strong>{g.name}</strong><span className="investigation-group-number">#{g.id}</span></div> },
    { title: '人数', width: 75, align: 'right', render: (_, g) => <span className="investigation-number">{g.user_ids.length.toLocaleString()}</span> },
    { title: 'ID 范围', width: 250, render: (_, g) => { const ranges = memberRanges(g.user_ids); return ranges ? <Typography.Paragraph className="investigation-id-ranges" copyable={{ text: ranges }} ellipsis={{ rows: 2, tooltip: <div className="investigation-ranges-tooltip">{ranges}</div> }}>{ranges}</Typography.Paragraph> : '—'; } },
    { title: '下发入口', width: 200, render: (_, g) => <Typography.Text className="investigation-host" copyable>{g.host}</Typography.Text> },
    { title: '监控状态', width: 190, render: (_, g) => { if (error) return <Tag>状态读取失败</Tag>; const m = monitors.find(m => m.id === g.monitor_id && m.host === g.host); return m ? <DispatchMonitorStatus entry={m} /> : <Tag>未参与当前下发</Tag>; } },
    { title: '自动处理', render: (_, g) => { const state = processState(g, settings?.enabled); return <div className="investigation-process"><Tooltip title={state.detail}><span tabIndex={0} className={`investigation-process-state tone-${state.tone}`}>{state.label}</span></Tooltip>{g.no_pull_count > 0 && <span className="investigation-caption">未拉取 ×{g.no_pull_count}</span>}</div>; } },
-   { title: '操作', width: 70, render: (_, g) => <Button type="link" onClick={() => { setEditing(g); editForm.setFieldsValue({ ...g, manual_only: g.manual_only || g.user_ids.length <= 1 }); }}>编辑</Button> },
+   { title: '操作', width: 260, render: (_, g) => <Space size={0}><Button type="link" disabled={saving || actionBusy} onClick={() => { setEditing(g); editForm.setFieldsValue({ ...g, manual_only: g.manual_only || g.user_ids.length <= 1 }); }}>编辑</Button>{!g.manual_only && g.user_ids.length > 1 && <><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'confirm' }); }}>确认入口</Button><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'trigger' }); }}>立即触发</Button></>}</Space> },
   ]} expandable={{ expandedRowRender: g => <div className="investigation-details"><div className="investigation-detail-meta"><span>类型：{g.parent_id === 0 && g.kind === 'candidate' ? '初始入口' : kindName[g.kind]}</span><span>原始组：#{g.root_id}</span>{g.parent_id > 0 && <span>父组：#{g.parent_id}</span>}</div>{g.reason && <div className="investigation-detail-reason">处理说明：{g.reason}</div>}<div className="investigation-members"><span className="investigation-caption">成员 ID</span><Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text></div></div> }} locale={{ emptyText: '暂无分组' }} />
   <div className="investigation-history-heading"><Typography.Text strong>筛选历史</Typography.Text><span className="investigation-caption">{total} 条记录</span></div>
   <Table<Event> rowKey="id" size="small" dataSource={events} pagination={{ current: page, pageSize: 20, total, onChange: setPage, showSizeChanger: false }} scroll={{ x: 1100 }} columns={[
@@ -108,6 +119,11 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   ]} expandable={{ expandedRowRender: e => <div>{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
   <Modal open={!!editing} title="编辑分组" onCancel={() => setEditing(undefined)} onOk={saveEdit} confirmLoading={saving} okText="保存" destroyOnClose>
    <Form form={editForm} layout="vertical"><Form.Item name="name" label="组名" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item><Form.Item label="ID 范围"><Input.TextArea aria-label="ID 范围" readOnly value={editing ? memberRanges(editing.user_ids) || '—' : ''} autoSize={{ minRows: 2, maxRows: 5 }} /></Form.Item><Form.Item name="host" label="下发地址" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={!!editing && editing.user_ids.length <= 1} /></Form.Item></Form>
+  </Modal>
+  <Modal open={!!action} title={action?.kind === 'confirm' ? '确认入口' : '立即触发'} onCancel={() => { if (!actionBusy) setAction(undefined); }} onOk={runAction} confirmLoading={actionBusy} cancelButtonProps={{ disabled: actionBusy }} closable={!actionBusy} maskClosable={!actionBusy} keyboard={!actionBusy} okText={action?.kind === 'confirm' ? '确认并开始观察' : '立即触发'} destroyOnClose>
+   <Typography.Paragraph><strong>{action?.group.name}</strong> · #{action?.group.id}<br />入口：{action?.group.host}<br />成员：{action?.group.user_ids.length} 人</Typography.Paragraph>
+   <Typography.Paragraph>{action?.kind === 'confirm' ? '确认当前入口进入新一轮观察，从本次确认后重新记录拉取与检测结果。成员和下发地址不变，不立即换 IP。此前记录不参与本轮筛选。' : '跳过连续超时 10 分钟的等待，按当前证据执行筛选、二分或换 IP。仍须故障起点明确、同探针有正常对照、备用 IP 可用，并遵守组内及全局限频。处理成功后会改变相关用户的实际下发入口。'}</Typography.Paragraph>
+   {actionError && <Alert type="error" showIcon message={actionError} />}
   </Modal>
  </div>;
 }

@@ -37,6 +37,7 @@ type InvestigationGroup struct {
 	Generation   int64    `json:"generation"`
 	EpochAt      int64    `json:"epoch_at"`
 	ReadyAt      int64    `json:"ready_at"`
+	ConfirmedAt  int64    `json:"confirmed_at"`
 	ConfigKey    string   `json:"-"`
 	Reason       string   `json:"reason"`
 	NoPullCount  int64    `json:"no_pull_count"`
@@ -144,7 +145,7 @@ func readInvestigationSettings(ctx context.Context, q interface {
 	return v, err
 }
 func readInvestigationGroups(ctx context.Context, q dispatchQueryer, active bool) ([]InvestigationGroup, error) {
-	rows, err := q.QueryContext(ctx, `SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE((SELECT jsonb_agg(m.user_id::text ORDER BY m.user_id) FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id WHERE m.group_id=g.id),'[]'::jsonb) FROM v2_dispatch_investigation_group g WHERE NOT $1 OR g.active ORDER BY g.id`, active)
+	rows, err := q.QueryContext(ctx, `SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE((SELECT c.confirmed_at FROM v2_dispatch_investigation_confirmation c WHERE c.group_id=g.id AND c.generation=g.generation),0),COALESCE((SELECT jsonb_agg(m.user_id::text ORDER BY m.user_id) FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id WHERE m.group_id=g.id),'[]'::jsonb) FROM v2_dispatch_investigation_group g WHERE NOT $1 OR g.active ORDER BY g.id`, active)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +154,7 @@ func readInvestigationGroups(ctx context.Context, q dispatchQueryer, active bool
 	for rows.Next() {
 		var g InvestigationGroup
 		var ids []byte
-		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &ids); err != nil {
+		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(ids, &g.UserIDs); err != nil {

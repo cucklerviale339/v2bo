@@ -849,7 +849,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
 			checkPath := strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")
-			if checkPath == "dispatch-investigation" || checkPath == "dispatch-investigation/groups" {
+			if checkPath == "dispatch-investigation" || checkPath == "dispatch-investigation/groups" || checkPath == "dispatch-investigation/confirm" || checkPath == "dispatch-investigation/trigger" {
 				w.Header().Set("Cache-Control", "no-store")
 				if _, ok := authenticateRequest(w, r, state.session, true); !ok {
 					return

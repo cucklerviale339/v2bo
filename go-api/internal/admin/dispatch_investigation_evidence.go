@@ -22,7 +22,7 @@ type investigationEvidence struct {
 }
 
 func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSplitCandidate, from int64) ([]DispatchHistorySample, error) {
-	rows, err := q.QueryContext(ctx, `SELECT payload FROM v2_dispatch_history WHERE source='entry' AND kind='sample' AND target_id=$1 AND probe_id=$2 AND version=$3 AND run_id=$4 AND created_at>=$5 ORDER BY sequence DESC LIMIT 15000`, c.ID, c.ProbeID, c.Version, c.RunID, from)
+	rows, err := q.QueryContext(ctx, `WITH RECURSIVE runs(run_id) AS (SELECT $4::bigint UNION SELECT r.from_run FROM v2_dispatch_monitor_restart r JOIN runs ON r.to_run=runs.run_id WHERE r.monitor_id=$1 AND r.probe_id=$2 AND r.version=$3) SELECT payload FROM v2_dispatch_history WHERE source='entry' AND kind='sample' AND target_id=$1 AND probe_id=$2 AND version=$3 AND run_id IN(SELECT run_id FROM runs) AND created_at>=$5 ORDER BY created_at DESC,id DESC LIMIT 15000`, c.ID, c.ProbeID, c.Version, c.RunID, from)
 	if err != nil {
 		return nil, err
 	}
@@ -37,6 +37,9 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 		if err = json.Unmarshal(raw, &v); err != nil {
 			return nil, err
 		}
+		// Membership in the recursive run chain is checked in SQL. Normalize
+		// that identity only; time and sequence continuity remain mandatory.
+		v.RunID = c.RunID
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -45,6 +48,10 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 // Returns a cutoff only when its beginning is preceded by a fresh successful
 // sample. Unknown starts, broken sample continuity and other error types fail shut.
 func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch int64) (int64, bool) {
+	return investigationTimeoutStartAfterConfirmation(samples, c, now, epoch, 0, 600)
+}
+
+func investigationTimeoutStartAfterConfirmation(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch, confirmed, duration int64) (int64, bool) {
 	if c.Success || c.Error != "timeout" || !dispatchSplitFresh(c, now) || len(samples) < 2 {
 		return 0, false
 	}
@@ -58,7 +65,7 @@ func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitC
 			return 0, false
 		}
 		if x.Success {
-			return first, first > 0 && now-first >= 600
+			return first, first > 0 && now-first >= duration
 		}
 		if x.Error != "timeout" {
 			return 0, false
@@ -66,7 +73,10 @@ func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitC
 		first = x.ReportedAt
 		previous = x.ReportedAt
 	}
-	return 0, false
+	// An explicit confirmation establishes a new, auditable baseline even
+	// for an already failing address. Never borrow failures before that round.
+	maxGap := c.Interval + (c.Timeout+999)/1000 + 5
+	return first, confirmed >= epoch && confirmed > 0 && previous >= confirmed && previous-confirmed <= maxGap && first > 0 && now-first >= duration
 }
 
 func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCandidate, first, now int64) bool {
@@ -121,6 +131,10 @@ func investigationProbeConfig(ctx context.Context, tx *sql.Tx, monitor int64) (s
 }
 
 func (s *DBService) investigationEvidence(ctx context.Context, tx *sql.Tx, g InvestigationGroup, probes []investigationProbe, entries []usersvc.DispatchEntry) (investigationEvidence, string, error) {
+	return s.investigationEvidenceWithDuration(ctx, tx, g, probes, entries, 600)
+}
+
+func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *sql.Tx, g InvestigationGroup, probes []investigationProbe, entries []usersvc.DispatchEntry, duration int64) (investigationEvidence, string, error) {
 	now := time.Now().Unix()
 	result := investigationEvidence{Controls: map[int64][]string{}}
 	targetIPs := map[int64]string{}
@@ -143,8 +157,11 @@ func (s *DBService) investigationEvidence(ctx context.Context, tx *sql.Tx, g Inv
 		if err != nil {
 			return result, "", err
 		}
-		first, ok := investigationTimeoutStart(samples, p.dispatchSplitCandidate, now, g.EpochAt)
+		first, ok := investigationTimeoutStartAfterConfirmation(samples, p.dispatchSplitCandidate, now, g.EpochAt, g.ConfirmedAt, duration)
 		if !ok {
+			if duration == 0 {
+				return result, "故障起点或连续超时证据不完整，请先确认入口并等待新检测记录", nil
+			}
 			return result, "等待连续超时满 10 分钟，或探针结果不一致", nil
 		}
 		targetIPs[p.ProbeID] = usersvc.NormalizeDispatchHost(p.ResolvedIP)
@@ -215,7 +232,7 @@ func (s *DBService) investigationEvidence(ctx context.Context, tx *sql.Tx, g Inv
 			if !c.Success || !dispatchSplitFresh(c, now) {
 				continue
 			}
-			samples, e := investigationSamples(ctx, tx, c, max(g.EpochAt, result.First-max(defaultProbeOfflineSec, 2*(c.Interval+(c.Timeout+999)/1000))))
+			samples, e := investigationSamples(ctx, tx, c, result.First-max(defaultProbeOfflineSec, 2*(c.Interval+(c.Timeout+999)/1000)))
 			if e != nil {
 				return result, "", e
 			}
@@ -265,6 +282,10 @@ func investigationPullPartition(all []int64, pulled map[int64]bool) ([]int64, []
 }
 
 func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
+	return s.processInvestigationAction(ctx, id, 0, false)
+}
+
+func (s *DBService) processInvestigationAction(ctx context.Context, id, revision int64, immediate bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -273,12 +294,21 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout='500ms'; SET LOCAL statement_timeout='5s'`); err != nil {
 		return err
 	}
-	var locked bool
-	if err = tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(7642309023)`).Scan(&locked); err != nil || !locked {
-		return err
+	if immediate {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7642309023)`); err != nil {
+			return err
+		}
+	} else {
+		var locked bool
+		if err = tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(7642309023)`).Scan(&locked); err != nil || !locked {
+			return err
+		}
 	}
 	settings, err := readInvestigationSettings(ctx, tx, true)
 	if err != nil || !settings.Enabled {
+		if err == nil && immediate {
+			return splitEditInvalid("总开关已关闭")
+		}
 		return err
 	}
 	groups, err := readInvestigationGroups(ctx, tx, true)
@@ -292,10 +322,19 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 		}
 	}
 	if g.ID == 0 || g.ManualOnly || len(g.UserIDs) <= 1 {
+		if immediate {
+			return splitEditInvalid("分组不存在或仅允许人工编辑")
+		}
 		return nil
+	}
+	if immediate && g.Revision != revision {
+		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
 	now := time.Now().Unix()
 	finish := func(reason string) error {
+		if immediate {
+			return splitEditInvalid(reason)
+		}
 		if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET reason=$2 WHERE id=$1`, id, reason); e != nil {
 			return e
 		}
@@ -321,15 +360,28 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 		g.ConfigKey = key
 	}
 	if g.ConfigKey != key {
-		if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
-			return err
+		resumable, e := investigationRestartMatches(ctx, tx, g, key)
+		if e != nil {
+			return e
 		}
-		return tx.Commit()
+		if resumable {
+			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,revision=revision+1 WHERE id=$1`, id, key); err != nil {
+				return err
+			}
+			g.ConfigKey = key
+		} else {
+			if immediate {
+				return splitEditInvalid("监控配置或会话已变化，请刷新并重新确认入口")
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}
 	}
 	if !fresh {
-		if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET ready_at=0,epoch_at=$2,generation=generation+1 WHERE id=$1 AND ready_at<>0`, id, now); err != nil {
-			return err
-		}
+		// Retain the round while startup awaits fresh reports. A reporting gap
+		// still fails continuity checks and cannot turn into timeout evidence.
 		return finish("监控未启用、探针离线或数据过期")
 	}
 	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
@@ -350,6 +402,9 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 		allSuccess = allSuccess && p.Success
 	}
 	if allSuccess {
+		if immediate {
+			return splitEditInvalid("当前入口检测正常，无需触发")
+		}
 		var failedAt int64
 		if err = tx.QueryRowContext(ctx, `SELECT delivery_failure_at FROM v2_dispatch_investigation_health WHERE id=1`).Scan(&failedAt); err != nil {
 			return err
@@ -374,7 +429,11 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 	if g.ReadyAt == 0 {
 		return finish("新入口尚未确认正常，不按本轮失败筛选")
 	}
-	evidence, reason, err := s.investigationEvidence(ctx, tx, g, probes, entries)
+	duration := int64(600)
+	if immediate {
+		duration = 0
+	}
+	evidence, reason, err := s.investigationEvidenceWithDuration(ctx, tx, g, probes, entries, duration)
 	if err != nil {
 		return err
 	}
@@ -405,5 +464,10 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 	if count >= settings.GlobalMax {
 		return finish("达到全局自动处理频率限制")
 	}
-	return s.applyInvestigation(ctx, tx, g, groups, evidence, entries, finish)
+	if immediate {
+		if err = investigationAudit(ctx, tx, g.RootID, g.ID, "manual_trigger", evidence.First, map[string]any{"host": g.Host, "revision": revision, "evidence": evidence}); err != nil {
+			return err
+		}
+	}
+	return s.applyInvestigation(ctx, tx, g, groups, evidence, entries, duration, finish)
 }

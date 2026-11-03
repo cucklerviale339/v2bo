@@ -18,6 +18,7 @@ import (
 func TestPostgresDispatchUpgradeConcurrentFirstReaders(t *testing.T) {
 	f := newSplitIntegration(t)
 	f.exec(`DROP TABLE v2_dispatch_investigation_member,
+v2_dispatch_investigation_confirmation,
 v2_dispatch_investigation_delivery_recent,v2_dispatch_investigation_delivery,
 v2_dispatch_investigation_event,v2_dispatch_investigation_health,
 v2_dispatch_investigation_settings,v2_dispatch_investigation_group`)
