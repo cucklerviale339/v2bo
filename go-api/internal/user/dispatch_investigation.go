@@ -29,6 +29,11 @@ type InvestigationAssignment struct {
 	OriginHost, Host                    string
 }
 
+type InvestigationMembers struct {
+	Host string
+	IDs  map[int64]bool
+}
+
 func NormalizeDispatchHost(host string) string {
 	host = strings.TrimSpace(host)
 	if ip, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil && ip.Zone() == "" {
@@ -70,10 +75,10 @@ func applyInvestigationAssignment(item map[string]any, assignments []Investigati
 
 // Apply only to ownership already produced by the existing three address
 // layers. Disabled/removed rules and nodes therefore do not reappear here.
-func investigationCatalog(ctx context.Context, q DispatchQueryer, entries []DispatchEntry) ([]DispatchEntry, error) {
+func investigationCatalog(ctx context.Context, q DispatchQueryer, entries []DispatchEntry) ([]DispatchEntry, map[int64]InvestigationMembers, error) {
 	assignments, err := LoadInvestigationAssignments(ctx, q, 0)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byHost := map[string]DispatchEntry{}
 	for _, e := range entries {
@@ -81,11 +86,16 @@ func investigationCatalog(ctx context.Context, q DispatchQueryer, entries []Disp
 	}
 	result := map[string]*dispatchOwnership{}
 	masks := map[string][]dispatchSpan{}
+	members := map[int64]InvestigationMembers{}
 	for _, a := range assignments {
 		original, ok := byHost[a.OriginHost]
 		if !ok || !DispatchEntryContains(original, a.UserID) {
 			continue
 		}
+		if members[a.GroupID].IDs == nil {
+			members[a.GroupID] = InvestigationMembers{Host: a.Host, IDs: map[int64]bool{}}
+		}
+		members[a.GroupID].IDs[a.UserID] = true
 		masks[a.OriginHost] = append(masks[a.OriginHost], dispatchSpan{a.UserID, a.UserID})
 		addDispatchOwnership(result, a.Host, []dispatchSpan{{a.UserID, a.UserID}}, fmt.Sprintf("谁是卧底 #%d", a.GroupID))
 	}
@@ -123,7 +133,7 @@ func investigationCatalog(ctx context.Context, q DispatchQueryer, entries []Disp
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
-	return out, nil
+	return out, members, nil
 }
 
 type InvestigationDelivery struct {

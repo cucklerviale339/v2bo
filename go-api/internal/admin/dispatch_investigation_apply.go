@@ -81,12 +81,18 @@ func (s *DBService) applyInvestigation(ctx context.Context, tx *sql.Tx, g Invest
 	if err := lockInvestigationAddresses(ctx, tx); err != nil {
 		return err
 	}
-	actual, err := usersvc.DispatchEntriesFrom(ctx, tx)
+	actual, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, tx)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(before, actual) {
 		return finish("下发规则发生变化，等待重新确认")
+	}
+	stored := g
+	stored.UserIDs = append(append([]string{}, g.UserIDs...), g.ExcludedUserIDs...)
+	current := currentInvestigationGroups([]InvestigationGroup{stored}, members)
+	if len(current) != 1 || !reflect.DeepEqual(g.UserIDs, current[0].UserIDs) {
+		return finish("分组实际成员发生变化，等待重新确认")
 	}
 	settings, err := readInvestigationSettings(ctx, tx, false)
 	if err != nil {

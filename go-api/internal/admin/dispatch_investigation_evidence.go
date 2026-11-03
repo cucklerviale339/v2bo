@@ -315,6 +315,11 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if err != nil {
 		return err
 	}
+	entries, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
+	groups = currentInvestigationGroups(groups, members)
 	var g InvestigationGroup
 	for _, v := range groups {
 		if v.ID == id {
@@ -383,19 +388,6 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		// Retain the round while startup awaits fresh reports. A reporting gap
 		// still fails continuity checks and cannot turn into timeout evidence.
 		return finish("监控未启用、探针离线或数据过期")
-	}
-	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
-	if err != nil {
-		return err
-	}
-	actual := map[string]usersvc.DispatchEntry{}
-	for _, e := range entries {
-		actual[e.Host] = e
-	}
-	for _, userID := range investigationGroupIDs(g) {
-		if !usersvc.DispatchEntryContains(actual[g.Host], userID) {
-			return finish("实际下发关系已变化，暂停自动处理")
-		}
 	}
 	allSuccess := true
 	for _, p := range probes {

@@ -72,10 +72,18 @@ func (s *DBService) ConfirmInvestigation(ctx context.Context, v InvestigationAct
 	if !settings.Enabled {
 		return splitEditInvalid("总开关已关闭")
 	}
+	if err = lockInvestigationAddresses(ctx, tx); err != nil {
+		return err
+	}
 	groups, err := readInvestigationGroups(ctx, tx, true)
 	if err != nil {
 		return err
 	}
+	_, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
+	groups = currentInvestigationGroups(groups, members)
 	var g InvestigationGroup
 	for _, x := range groups {
 		if x.ID == v.ID {
@@ -105,24 +113,6 @@ func (s *DBService) ConfirmInvestigation(ctx context.Context, v InvestigationAct
 	for _, p := range probes {
 		if s.dispatchProbeResetBlocked(p.ProbeID) {
 			return splitEditInvalid("探针会话重置中")
-		}
-	}
-	if err = lockInvestigationAddresses(ctx, tx); err != nil {
-		return err
-	}
-	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
-	if err != nil {
-		return err
-	}
-	var actual usersvc.DispatchEntry
-	for _, e := range entries {
-		if e.Host == g.Host {
-			actual = e
-		}
-	}
-	for _, id := range investigationGroupIDs(g) {
-		if !usersvc.DispatchEntryContains(actual, id) {
-			return splitEditInvalid("实际下发关系已变化")
 		}
 	}
 	// Evidence timestamps are seconds. Exclude the entire click second to

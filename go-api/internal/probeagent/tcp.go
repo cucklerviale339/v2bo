@@ -2,6 +2,7 @@ package probeagent
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"strconv"
@@ -43,14 +44,29 @@ func (c TCPChecker) Check(ctx context.Context, host string, port int, timeout ti
 		var err error
 		addrs, err = resolver.LookupNetIP(checkCtx, "ip", host)
 		if err != nil {
-			return failedCheck(checkCtx.Err(), "")
+			if errors.Is(err, context.Canceled) || errors.Is(checkCtx.Err(), context.Canceled) {
+				return failedCheck(context.Canceled, "")
+			}
+			return CheckResult{Error: "dns_error"}
 		}
+		// Resolution can return addresses as its budget expires. No TCP
+		// attempt was made, so this is not evidence of a TCP outage.
+		if checkCtx.Err() != nil {
+			if errors.Is(checkCtx.Err(), context.Canceled) {
+				return failedCheck(context.Canceled, "")
+			}
+			return CheckResult{Error: "dns_error"}
+		}
+	}
+	if len(addrs) == 0 {
+		return CheckResult{Error: "dns_error"}
 	}
 	dialer := c.Dialer
 	if dialer == nil {
 		dialer = &net.Dialer{}
 	}
 	lastIP := ""
+	var lastErr error
 	for index, addr := range addrs {
 		if err := checkCtx.Err(); err != nil {
 			return failedCheck(err, lastIP)
@@ -61,6 +77,7 @@ func (c TCPChecker) Check(ctx context.Context, host string, port int, timeout ti
 		attemptCtx, attemptCancel := context.WithTimeout(checkCtx, remaining/time.Duration(len(addrs)-index))
 		started := time.Now()
 		conn, err := dialer.DialContext(attemptCtx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
+		lastErr = err
 		attemptCancel()
 		if err == nil {
 			_ = conn.Close()
@@ -68,7 +85,10 @@ func (c TCPChecker) Check(ctx context.Context, host string, port int, timeout ti
 			return CheckResult{Success: true, LatencyMS: &latency, ResolvedIP: ip}
 		}
 	}
-	return failedCheck(checkCtx.Err(), lastIP)
+	if errors.Is(checkCtx.Err(), context.Canceled) {
+		return failedCheck(context.Canceled, lastIP)
+	}
+	return failedCheck(lastErr, lastIP)
 }
 
 func deadline(ctx context.Context) time.Time {
@@ -78,10 +98,10 @@ func deadline(ctx context.Context) time.Time {
 
 func failedCheck(err error, ip string) CheckResult {
 	kind := "connect_error"
-	if err == context.Canceled {
+	var networkErr net.Error
+	if errors.Is(err, context.Canceled) {
 		kind = "cancelled"
-	}
-	if err == context.DeadlineExceeded {
+	} else if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkErr) && networkErr.Timeout()) {
 		kind = "timeout"
 	}
 	return CheckResult{Error: kind, ResolvedIP: ip}

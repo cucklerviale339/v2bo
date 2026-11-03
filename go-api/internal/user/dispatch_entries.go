@@ -52,9 +52,16 @@ func (s *DBService) DispatchEntries(ctx context.Context) ([]DispatchEntry, error
 
 // DispatchEntriesFrom uses the same address selectors inside an already initialized transaction.
 func DispatchEntriesFrom(ctx context.Context, q DispatchQueryer) ([]DispatchEntry, error) {
+	entries, _, err := DispatchEntriesWithInvestigationMembersFrom(ctx, q)
+	return entries, err
+}
+
+// Return ownership and effective investigation members from the same projection.
+// A shared destination alone cannot admit members whose original source vanished.
+func DispatchEntriesWithInvestigationMembersFrom(ctx context.Context, q DispatchQueryer) ([]DispatchEntry, map[int64]InvestigationMembers, error) {
 	entries, err := DispatchEntriesBeforeInvestigationFrom(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return investigationCatalog(ctx, q, entries)
 }

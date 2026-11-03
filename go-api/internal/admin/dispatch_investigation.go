@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,25 +24,26 @@ type InvestigationSettings struct {
 	GlobalMax           int64  `json:"global_max"`
 }
 type InvestigationGroup struct {
-	ID           int64    `json:"id"`
-	RootID       int64    `json:"root_id"`
-	ParentID     int64    `json:"parent_id"`
-	LegacyRootID int64    `json:"legacy_root_id"`
-	Name         string   `json:"name"`
-	Kind         string   `json:"kind"`
-	Host         string   `json:"host"`
-	MonitorID    int64    `json:"monitor_id"`
-	Active       bool     `json:"active"`
-	ManualOnly   bool     `json:"manual_only"`
-	Revision     int64    `json:"revision"`
-	Generation   int64    `json:"generation"`
-	EpochAt      int64    `json:"epoch_at"`
-	ReadyAt      int64    `json:"ready_at"`
-	ConfirmedAt  int64    `json:"confirmed_at"`
-	ConfigKey    string   `json:"-"`
-	Reason       string   `json:"reason"`
-	NoPullCount  int64    `json:"no_pull_count"`
-	UserIDs      []string `json:"user_ids"`
+	ID              int64    `json:"id"`
+	RootID          int64    `json:"root_id"`
+	ParentID        int64    `json:"parent_id"`
+	LegacyRootID    int64    `json:"legacy_root_id"`
+	Name            string   `json:"name"`
+	Kind            string   `json:"kind"`
+	Host            string   `json:"host"`
+	MonitorID       int64    `json:"monitor_id"`
+	Active          bool     `json:"active"`
+	ManualOnly      bool     `json:"manual_only"`
+	Revision        int64    `json:"revision"`
+	Generation      int64    `json:"generation"`
+	EpochAt         int64    `json:"epoch_at"`
+	ReadyAt         int64    `json:"ready_at"`
+	ConfirmedAt     int64    `json:"confirmed_at"`
+	ConfigKey       string   `json:"-"`
+	Reason          string   `json:"reason"`
+	NoPullCount     int64    `json:"no_pull_count"`
+	UserIDs         []string `json:"user_ids"`
+	ExcludedUserIDs []string `json:"excluded_user_ids,omitempty"`
 }
 type InvestigationEvent struct {
 	ID             int64           `json:"id"`
@@ -181,11 +183,11 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 	if err != nil {
 		return out, err
 	}
-	entries, err := usersvc.DispatchEntriesFrom(ctx, s.db)
+	_, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, s.db)
 	if err != nil {
 		return out, err
 	}
-	out.Groups = visibleInvestigationGroups(out.Groups, entries)
+	out.Groups = currentInvestigationGroups(out.Groups, members)
 	const visibleEvents = ` FROM v2_dispatch_investigation_event e WHERE NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_monitor m ON m.id=g.monitor_id WHERE g.id=e.group_id AND m.deleted)`
 	if err = s.db.QueryRowContext(ctx, `SELECT count(*)`+visibleEvents).Scan(&out.Total); err != nil {
 		return out, err
@@ -210,22 +212,24 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 
 // Visibility follows current dispatch ownership. Do not alter stored groups
 // or assignments when a node/rule is temporarily disabled or reconfigured.
-func visibleInvestigationGroups(groups []InvestigationGroup, entries []usersvc.DispatchEntry) []InvestigationGroup {
-	actual := make(map[string]usersvc.DispatchEntry, len(entries))
-	for _, entry := range entries {
-		actual[entry.Host] = entry
-	}
+func currentInvestigationGroups(groups []InvestigationGroup, members map[int64]usersvc.InvestigationMembers) []InvestigationGroup {
 	visible := make([]InvestigationGroup, 0, len(groups))
 	for _, g := range groups {
-		entry, ok := actual[g.Host]
-		if !ok {
+		if members[g.ID].Host != g.Host {
 			continue
 		}
+		ids := []string{}
+		var excluded []string
 		for _, id := range investigationGroupIDs(g) {
-			if usersvc.DispatchEntryContains(entry, id) {
-				visible = append(visible, g)
-				break
+			if members[g.ID].IDs[id] {
+				ids = append(ids, strconv.FormatInt(id, 10))
+			} else {
+				excluded = append(excluded, strconv.FormatInt(id, 10))
 			}
+		}
+		g.UserIDs, g.ExcludedUserIDs = ids, excluded
+		if len(ids) > 0 {
+			visible = append(visible, g)
 		}
 	}
 	return visible
@@ -539,9 +543,17 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	if err = lockInvestigationAddresses(ctx, tx); err != nil {
 		return err
 	}
-	before, err := usersvc.DispatchEntriesFrom(ctx, tx)
+	before, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, tx)
 	if err != nil {
 		return err
+	}
+	current := currentInvestigationGroups([]InvestigationGroup{g}, members)
+	if len(current) == 0 {
+		return splitEditInvalid("分组已不参与当前下发")
+	}
+	g = current[0]
+	if len(g.UserIDs) <= 1 && !v.ManualOnly {
+		return splitEditInvalid("单人组只能人工操作")
 	}
 	now := time.Now().Unix()
 	monitor := g.MonitorID
