@@ -181,6 +181,11 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 	if err != nil {
 		return out, err
 	}
+	entries, err := usersvc.DispatchEntriesFrom(ctx, s.db)
+	if err != nil {
+		return out, err
+	}
+	out.Groups = visibleInvestigationGroups(out.Groups, entries)
 	const visibleEvents = ` FROM v2_dispatch_investigation_event e WHERE NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_monitor m ON m.id=g.monitor_id WHERE g.id=e.group_id AND m.deleted)`
 	if err = s.db.QueryRowContext(ctx, `SELECT count(*)`+visibleEvents).Scan(&out.Total); err != nil {
 		return out, err
@@ -201,6 +206,29 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 	out.WorkerError = s.investigationLastError
 	s.dispatchAutoSplitMu.Unlock()
 	return out, rows.Err()
+}
+
+// Visibility follows current dispatch ownership. Do not alter stored groups
+// or assignments when a node/rule is temporarily disabled or reconfigured.
+func visibleInvestigationGroups(groups []InvestigationGroup, entries []usersvc.DispatchEntry) []InvestigationGroup {
+	actual := make(map[string]usersvc.DispatchEntry, len(entries))
+	for _, entry := range entries {
+		actual[entry.Host] = entry
+	}
+	visible := make([]InvestigationGroup, 0, len(groups))
+	for _, g := range groups {
+		entry, ok := actual[g.Host]
+		if !ok {
+			continue
+		}
+		for _, id := range investigationGroupIDs(g) {
+			if usersvc.DispatchEntryContains(entry, id) {
+				visible = append(visible, g)
+				break
+			}
+		}
+	}
+	return visible
 }
 func (s *DBService) SaveInvestigation(ctx context.Context, v InvestigationSettings) error {
 	if v.Scope != "" && v.Scope != "all" && v.Scope != "multi_range" {

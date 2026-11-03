@@ -11,10 +11,11 @@
 .investigation-panel .investigation-settings .ant-input-number,.investigation-panel .investigation-settings .ant-select{width:100%!important}
 .investigation-panel .investigation-settings .ant-switch{margin:5px 0}
 .investigation-settings-actions{min-height:32px}
-.investigation-panel .investigation-groups .ant-table-thead>tr>th{font-size:12px;color:#737b87;font-weight:500;background:#fafbfc;padding-top:12px;padding-bottom:12px}
-.investigation-panel .investigation-groups .ant-table-tbody>tr.ant-table-row>td{background:#fff;padding-top:15px;padding-bottom:15px;border-bottom:1px solid #eff0f3}
+.investigation-panel .investigation-groups .ant-table-thead>tr>th{font-size:12px;color:#737b87;font-weight:500;background:#fafbfc;padding:9px 8px}
+.investigation-panel .investigation-groups .ant-table-tbody>tr.ant-table-row>td{background:#fff;padding:9px 8px;border-bottom:1px solid #eff0f3}
+.investigation-panel .investigation-actions .ant-btn{padding-inline:5px;font-size:12px}
 .investigation-panel .investigation-groups .ant-table-tbody>tr.ant-table-row:hover>td{background:#fafbfc}
-.investigation-group-name{display:flex;align-items:center;gap:9px;line-height:22px}
+.investigation-group-name{display:flex;align-items:center;gap:6px;line-height:22px}
 .investigation-group-name strong{font-size:14px;font-weight:600;color:#262d38;overflow-wrap:anywhere}
 .investigation-group-number{white-space:nowrap;font-variant-numeric:tabular-nums}
 .investigation-kind-dot{width:7px;height:7px;border-radius:50%;background:#6a88af;flex-shrink:0}
