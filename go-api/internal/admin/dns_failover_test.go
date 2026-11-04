@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -189,6 +190,9 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 	if len(probes) != 1 || probes[0].LastHeartbeatAt == nil || *probes[0].LastHeartbeatAt != 90 {
 		t.Fatalf("unexpected probes: %#v", probes)
 	}
+	if checked := probes[0].StatusCheckedAt; checked < time.Now().Unix()-5 || checked > time.Now().Unix() {
+		t.Fatalf("probe status must include the current server time, got %d", checked)
+	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
@@ -233,6 +237,37 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSProbeListUsesServerHeartbeatForOnlineStatus(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	now := time.Now().Unix()
+	rows := sqlmock.NewRows([]string{"id", "name", "token_plaintext", "enabled", "version", "arch", "public_ip", "last_heartbeat_at", "prewarm_count", "created_at", "updated_at"})
+	for i, heartbeat := range []any{now - 20, now - 120, nil, now + 3600, now - 20} {
+		enabled := 1
+		if i == 4 {
+			enabled = 0
+		}
+		rows.AddRow(i+1, "fixture", "", enabled, "v1", "amd64", "", heartbeat, 0, now, now)
+	}
+	mock.ExpectQuery(`SELECT id, name, token_plaintext`).WillReturnRows(rows)
+	probes, err := service.ListDNSProbes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, probe := range probes {
+		if probe.Online != (i == 0) || probe.StatusCheckedAt < now || probe.StatusCheckedAt > time.Now().Unix() {
+			t.Fatalf("unexpected server status: %#v", probe)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

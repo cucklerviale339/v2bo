@@ -17,6 +17,13 @@ type aiTelegramService interface {
 	RevokeBinding(context.Context, int64, int64) error
 }
 
+type telegramMiniAppInstaller interface {
+	InstallTelegramMiniApp(context.Context) (map[string]any, error)
+}
+
+// Keep the production admin backend wired to the installation capability.
+var _ telegramMiniAppInstaller = (*admin.DBService)(nil)
+
 func WithAIOpsTelegram(service aiTelegramService) Option {
 	return func(state *routerState) {
 		if concrete, ok := service.(*aiops.TelegramBridge); ok && concrete == nil {
@@ -111,9 +118,7 @@ func handleAITelegram(w http.ResponseWriter, r *http.Request, sessions session.S
 		if !decodeSupportJSON(w, r, &req) {
 			return
 		}
-		installer, ok := panel.(interface {
-			InstallTelegramMiniApp(context.Context) (map[string]any, error)
-		})
+		installer, ok := panel.(telegramMiniAppInstaller)
 		if !ok {
 			err = aiops.ErrUnavailable
 		} else {

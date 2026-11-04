@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/session"
@@ -19,6 +20,38 @@ import (
 type fakeAITelegram struct {
 	calls         int
 	actor, target int64
+}
+
+type fakeMiniAppPanel struct {
+	admin.Service
+	calls int
+}
+
+func (f *fakeMiniAppPanel) InstallTelegramMiniApp(ctx context.Context) (map[string]any, error) {
+	f.calls++
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, fmt.Errorf("installation deadline missing")
+	}
+	return map[string]any{"installed": true, "url": "https://panel.example.test/ai-ops-mini"}, nil
+}
+
+func TestAITelegramMiniAppInstallationReachesPanel(t *testing.T) {
+	panel := &fakeMiniAppPanel{}
+	router := NewRouter(config.Config{AdminPath: "test"}, WithSessionService(aiTestSession{identity: &session.Identity{ID: 7, IsAdmin: 1}}), WithAIOpsTelegram(&fakeAITelegram{}), WithAdminService(panel))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/test/ai-ops/telegram/mini-app", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer fixture")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var result struct {
+		Data struct {
+			Installed bool   `json:"installed"`
+			URL       string `json:"url"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(w.Body.Bytes(), &result) != nil || w.Code != http.StatusOK || panel.calls != 1 || !result.Data.Installed || result.Data.URL != "https://panel.example.test/ai-ops-mini" {
+		t.Fatalf("installation not wired: status=%d calls=%d body=%s", w.Code, panel.calls, w.Body.String())
+	}
 }
 
 func (f *fakeAITelegram) Status(_ context.Context, actor int64) (aiops.TelegramStatus, error) {

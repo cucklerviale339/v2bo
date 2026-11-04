@@ -45,6 +45,8 @@ type DNSProbeRecord struct {
 	Arch            string `json:"arch"`
 	PublicIP        string `json:"public_ip"`
 	LastHeartbeatAt *int64 `json:"last_heartbeat_at"`
+	Online          bool   `json:"online"`
+	StatusCheckedAt int64  `json:"status_checked_at"`
 	PrewarmCount    int64  `json:"prewarm_count"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
@@ -256,6 +258,8 @@ ORDER BY id ASC`)
 			return nil, fmt.Errorf("读取探针列表失败: %w", err)
 		}
 		probe.Enabled = enabled != 0
+		probe.StatusCheckedAt = time.Now().Unix()
+		probe.Online = probe.Enabled && dnsProbeHeartbeatFresh(lastHeartbeat, probe.StatusCheckedAt, defaultProbeOfflineSec)
 		if lastHeartbeat.Valid {
 			value := lastHeartbeat.Int64
 			probe.LastHeartbeatAt = &value
