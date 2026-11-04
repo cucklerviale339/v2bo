@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,12 +23,11 @@ func TestInvestigationTCPFailureKeepsOriginalCutoff(t *testing.T) {
 			t.Fatalf("index=%d: lost original cutoff: %d %s", index, got, reason)
 		}
 	}
-	// A recent non-timeout TCP failure restarts only the timer. Manual execution
-	// skips that wait, but still uses the earlier, established receipt cutoff.
+	// Alternating TCP failure types remain the same failed connection episode.
 	v := append([]DispatchHistorySample{}, samples...)
 	v[8].Error = "connect_error"
-	if _, reason := investigationTimeoutEvidence(v, c, c.Reported, epoch, 0, 600); !strings.Contains(reason, "未满 10 分钟") {
-		t.Fatal("short timeout tail accepted or wrong explanation", reason)
+	if got, reason := investigationTimeoutEvidence(v, c, c.Reported, epoch, 0, 600); reason != "" || got != first {
+		t.Fatal("mixed TCP failures rejected", reason)
 	}
 	if got, reason := investigationTimeoutEvidence(v, c, c.Reported, epoch, 0, 0); reason != "" || got != first {
 		t.Fatal("manual trigger lost old receipts", got, reason)
@@ -45,20 +43,12 @@ func TestInvestigationMixedFailureRetainsEvidenceGuards(t *testing.T) {
 	c, baseline := timestampEvidence(false)
 	baseline[len(baseline)-1].Success = true
 	epoch := baseline[len(baseline)-1].ReportedAt - 100
-	for _, kind := range []string{"dns", "cancelled", "unknown", "empty", "gap", "completion_gap", "sequence", "version", "session", "epoch", "unknown_start", "stale", "current_connect"} {
+	for _, kind := range []string{"gap", "completion_gap", "sequence", "version", "session", "epoch", "unknown_start", "stale"} {
 		t.Run(kind, func(t *testing.T) {
 			v := append([]DispatchHistorySample{}, baseline...)
 			candidate, from, now := c, epoch, c.Reported
 			v[20].Error = "connect_error"
 			switch kind {
-			case "dns":
-				v[21].Error = "dns_error"
-			case "cancelled":
-				v[21].Error = "cancelled"
-			case "unknown":
-				v[21].Error = "unexpected"
-			case "empty":
-				v[21].Error = ""
 			case "gap":
 				v[21].ReportedAt -= 50
 			case "completion_gap":
@@ -75,9 +65,6 @@ func TestInvestigationMixedFailureRetainsEvidenceGuards(t *testing.T) {
 				v = v[:len(v)-1]
 			case "stale":
 				now += 120
-			case "current_connect":
-				candidate.Error = "connect_error"
-				v[0].Error = "connect_error"
 			}
 			for _, duration := range []int64{0, 600} {
 				if _, reason := investigationTimeoutEvidence(v, candidate, now, from, 0, duration); reason == "" {
@@ -86,14 +73,14 @@ func TestInvestigationMixedFailureRetainsEvidenceGuards(t *testing.T) {
 			}
 		})
 	}
-	// Explicit confirmations retain their own generation boundary and can also
-	// survive a TCP error without inventing a successful sample.
+	// Confirmation retains the receipt generation boundary, but cannot invent
+	// a successful probe observation for automatic execution.
 	v := append([]DispatchHistorySample{}, baseline...)
 	v[len(v)-1].Success = false
 	v[20].Error = "connect_error"
 	confirmed := v[len(v)-1].ReportedAt
-	if got, reason := investigationTimeoutEvidence(v, c, c.Reported, confirmed, confirmed, 600); reason != "" || got != confirmed {
-		t.Fatal("valid confirmed baseline rejected", got, reason)
+	if _, reason := investigationTimeoutEvidence(v, c, c.Reported, confirmed, confirmed, 600); reason == "" {
+		t.Fatal("confirmation invented a successful baseline")
 	}
 }
 

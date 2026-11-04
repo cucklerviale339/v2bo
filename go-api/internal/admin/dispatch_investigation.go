@@ -297,7 +297,7 @@ func (s *DBService) cleanupInvestigationDeliveries(ctx context.Context) error {
 	if err := s.ensureNodeAddressSchema(ctx); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `WITH cleared AS (DELETE FROM v2_dispatch_investigation_delivery_recent d WHERE delivered_at<$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g WHERE g.id=d.group_id AND g.active AND g.generation=d.generation)) DELETE FROM v2_dispatch_investigation_delivery d WHERE delivered_at<$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g WHERE g.id=d.group_id AND g.active AND g.generation=d.generation)`, time.Now().Add(-90*24*time.Hour).Unix())
+	_, err := s.db.ExecContext(ctx, `WITH incidents AS (DELETE FROM v2_dispatch_investigation_incident d WHERE reported_at<$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g WHERE g.id=d.group_id AND g.active AND g.generation=d.generation)), cleared AS (DELETE FROM v2_dispatch_investigation_delivery_recent d WHERE delivered_at<$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g WHERE g.id=d.group_id AND g.active AND g.generation=d.generation)) DELETE FROM v2_dispatch_investigation_delivery d WHERE delivered_at<$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g WHERE g.id=d.group_id AND g.active AND g.generation=d.generation)`, time.Now().Add(-90*24*time.Hour).Unix())
 	return err
 }
 

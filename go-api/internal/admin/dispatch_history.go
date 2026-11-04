@@ -30,25 +30,28 @@ var dispatchHistorySchema = []string{
 }
 
 type DispatchHistorySample struct {
-	Source         string                `json:"source"`
-	TargetID       int64                 `json:"target_id"`
-	ProbeID        int64                 `json:"probe_id"`
-	Version        int64                 `json:"version"`
-	RunID          int64                 `json:"run_id"`
-	Sequence       int64                 `json:"sequence"`
-	Success        bool                  `json:"success"`
-	LatencyMS      *int64                `json:"latency_ms"`
-	Error          string                `json:"error"`
-	ResolvedIP     string                `json:"resolved_ip"`
-	ReportedAt     int64                 `json:"reported_at"`
-	Streak         int64                 `json:"streak"`
-	Host           string                `json:"host"`
-	Port           int64                 `json:"port"`
-	Name           string                `json:"name"`
-	ProbeName      string                `json:"probe_name"`
-	Status         string                `json:"status"`
-	Ownership      usersvc.DispatchEntry `json:"ownership"`
-	OwnershipKnown bool                  `json:"ownership_known"`
+	// Investigation-only provenance; never supplied by a probe or persisted as history.
+	RecordedRestartBefore   bool                  `json:"-"`
+	UnverifiedRestartBefore bool                  `json:"-"`
+	Source                  string                `json:"source"`
+	TargetID                int64                 `json:"target_id"`
+	ProbeID                 int64                 `json:"probe_id"`
+	Version                 int64                 `json:"version"`
+	RunID                   int64                 `json:"run_id"`
+	Sequence                int64                 `json:"sequence"`
+	Success                 bool                  `json:"success"`
+	LatencyMS               *int64                `json:"latency_ms"`
+	Error                   string                `json:"error"`
+	ResolvedIP              string                `json:"resolved_ip"`
+	ReportedAt              int64                 `json:"reported_at"`
+	Streak                  int64                 `json:"streak"`
+	Host                    string                `json:"host"`
+	Port                    int64                 `json:"port"`
+	Name                    string                `json:"name"`
+	ProbeName               string                `json:"probe_name"`
+	Status                  string                `json:"status"`
+	Ownership               usersvc.DispatchEntry `json:"ownership"`
+	OwnershipKnown          bool                  `json:"ownership_known"`
 }
 
 type DispatchHistoryRecord struct {

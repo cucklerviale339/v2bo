@@ -17,7 +17,7 @@ import (
 // first admin/user/background readers really race on a b23bd18-era database.
 func TestPostgresDispatchUpgradeConcurrentFirstReaders(t *testing.T) {
 	f := newSplitIntegration(t)
-	f.exec(`DROP TABLE v2_dispatch_investigation_member,
+	f.exec(`DROP TABLE v2_dispatch_investigation_incident,v2_dispatch_investigation_member,
 v2_dispatch_investigation_confirmation,
 v2_dispatch_investigation_delivery_recent,v2_dispatch_investigation_delivery,
 v2_dispatch_investigation_event,v2_dispatch_investigation_health,

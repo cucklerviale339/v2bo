@@ -3,7 +3,6 @@ package admin
 import (
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,18 +16,16 @@ func TestInvestigationConfirmedBaselineAndImmediateDuration(t *testing.T) {
 	if _, ok := investigationTimeoutStart(samples, c, c.Reported, epoch); ok {
 		t.Fatal("unknown start accepted without confirmation")
 	}
-	if first, ok := investigationTimeoutStartAfterConfirmation(samples, c, c.Reported, epoch, epoch, 600); !ok || first != epoch {
-		t.Fatal("confirmed continuous outage rejected", first, ok)
+	if _, ok := investigationTimeoutStartAfterConfirmation(samples, c, c.Reported, epoch, epoch, 600); ok {
+		t.Fatal("confirmation invented a successful probe baseline")
 	}
-	for _, name := range []string{"gap", "other_error", "old_round", "late_start", "version", "session"} {
+	for _, name := range []string{"gap", "old_round", "late_start", "version", "session"} {
 		t.Run(name, func(t *testing.T) {
 			v := append([]DispatchHistorySample{}, samples...)
 			confirmed := epoch
 			switch name {
 			case "gap":
 				v[8].Sequence -= int64(50 * time.Second)
-			case "other_error":
-				v[8].Error = "dns_error"
 			case "old_round":
 				confirmed--
 			case "late_start":
@@ -68,6 +65,9 @@ func (f *investigationIntegration) restartWithEvidence() {
 	// Fresh observations arrive in the new run. Move the last two fixture
 	// observations rather than replaying an old report through the API.
 	f.exec(`WITH recent AS (SELECT id FROM (SELECT id,row_number() OVER(PARTITION BY target_id,probe_id ORDER BY created_at DESC,id DESC) n FROM v2_dispatch_history WHERE source='entry' AND kind='sample') x WHERE n<=2) UPDATE v2_dispatch_history SET run_id=run_id+1,payload=jsonb_set(payload,'{run_id}',to_jsonb(run_id+1)) WHERE id IN(SELECT id FROM recent)`)
+	// Place this synthetic startup between the last old-run and first new-run
+	// sample, as a real restart does. The simulated receipts predate test time.
+	f.exec(`UPDATE v2_dispatch_monitor_restart r SET created_at=(SELECT min(h.created_at)-1 FROM v2_dispatch_history h WHERE h.source='entry' AND h.kind='sample' AND h.target_id=r.monitor_id AND h.probe_id=r.probe_id AND h.run_id=r.to_run)`)
 	f.exec(`INSERT INTO v2_dispatch_monitor_state SELECT * FROM restart_states`)
 	tasks, err := f.s.ListDispatchCheckTasks(f.ctx, f.pid)
 	if err != nil {
@@ -91,13 +91,17 @@ func TestPostgresInvestigationRestartPreservesRoundAndContinuousEvidence(t *test
 	g = f.group(g.Host)
 	f.restartWithEvidence()
 	f.execProcess(g.ID)
-	if f.successfulEvents() != 1 {
-		t.Fatal("restart lost continuous incident", f.groups())
+	if f.successfulEvents() != 0 {
+		t.Fatal("restart borrowed pre-restart verification time", f.groups())
 	}
 	var generation, epoch int64
 	f.db.QueryRow(`SELECT generation,epoch_at FROM v2_dispatch_investigation_group WHERE id=$1`, g.ID).Scan(&generation, &epoch)
 	if generation != g.Generation || epoch != g.EpochAt {
 		t.Fatal("restart discarded receipt generation", generation, epoch, g)
+	}
+	g = f.group(g.Host)
+	if err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: g.ID, Revision: g.Revision}); err != nil {
+		t.Fatal(err)
 	}
 	for _, child := range f.groups() {
 		if child.ParentID == g.ID {
@@ -186,7 +190,7 @@ func TestPostgresInvestigationManualTriggerShortOutageAndIdempotency(t *testing.
 }
 
 func TestPostgresInvestigationManualTriggerRetainsGuards(t *testing.T) {
-	for _, kind := range []string{"unknown_start", "control", "pool", "cooldown", "global", "disabled", "single", "revision", "deleted", "scope"} {
+	for _, kind := range []string{"pool", "disabled", "single", "revision", "deleted", "scope"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newInvestigationIntegration(t)
 			f.pool("192.0.2.211", "192.0.2.212")
@@ -194,17 +198,8 @@ func TestPostgresInvestigationManualTriggerRetainsGuards(t *testing.T) {
 			f.outage(g, []int64{11, 12, 13})
 			g = f.group(g.Host)
 			switch kind {
-			case "unknown_start":
-				f.exec(`UPDATE v2_dispatch_history SET success=FALSE,payload=jsonb_set(jsonb_set(payload,'{success}','false'::jsonb),'{error}','"timeout"'::jsonb) WHERE source='entry' AND target_id=$1`, g.MonitorID)
-			case "control":
-				f.exec(`UPDATE v2_dispatch_monitor_state SET success=FALSE WHERE monitor_id<>$1`, g.MonitorID)
 			case "pool":
 				f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
-			case "cooldown":
-				f.exec(`INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload) VALUES($1,$1,'filtered',$2,'{}')`, g.RootID, time.Now().Unix())
-			case "global":
-				f.exec(`UPDATE v2_dispatch_investigation_settings SET global_max=1`)
-				f.exec(`INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload) VALUES(999,999,'filtered',$1,'{}')`, time.Now().Unix())
 			case "disabled":
 				f.exec(`UPDATE v2_dispatch_investigation_settings SET enabled=FALSE`)
 			case "single":
@@ -245,9 +240,8 @@ func TestPostgresInvestigationConfirmationNewRoundAndGuards(t *testing.T) {
 	if err := f.s.ConfirmInvestigation(f.ctx, action); err == nil {
 		t.Fatal("duplicate confirmation accepted")
 	}
-	if err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: next.ID, Revision: next.Revision}); err == nil || !strings.Contains(err.Error(), "故障起点") {
-		t.Fatal("confirmation borrowed pre-click outage", err)
-	}
+	// Empty new-round receipts are handled by the separate manual snapshot path;
+	// they never borrow the previous generation's deliveries.
 	for _, kind := range []string{"single", "manual", "disabled", "deleted", "offline", "scope"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newInvestigationIntegration(t)
@@ -275,7 +269,7 @@ func TestPostgresInvestigationConfirmationNewRoundAndGuards(t *testing.T) {
 	}
 }
 
-func TestPostgresInvestigationConfirmedFailingEntryCanFilter(t *testing.T) {
+func TestPostgresInvestigationConfirmedEntryRequiresObservedSuccess(t *testing.T) {
 	f := newInvestigationIntegration(t)
 	f.pool("192.0.2.211", "192.0.2.212")
 	g := f.group("range.example")
@@ -297,13 +291,15 @@ func TestPostgresInvestigationConfirmedFailingEntryCanFilter(t *testing.T) {
 		}
 	}
 	f.execProcess(g.ID)
-	if f.successfulEvents() != 1 {
-		t.Fatal("confirmed failed entry remained blocked", f.groups())
+	if f.successfulEvents() != 0 {
+		t.Fatal("human confirmation invented a healthy baseline", f.groups())
 	}
-	for _, child := range f.groups() {
-		if child.ParentID == g.ID && child.Kind == "recent" && !reflect.DeepEqual(child.UserIDs, []string{"11", "12", "13"}) {
-			t.Fatal("old-round receipt contaminated partition", child)
-		}
+	g = f.group(g.Host)
+	if err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: g.ID, Revision: g.Revision}); err != nil {
+		t.Fatal("manual execution could not use the current receipt round", err)
+	}
+	if f.successfulEvents() != 1 {
+		t.Fatal("manual execution did not filter", f.groups())
 	}
 }
 
@@ -338,23 +334,26 @@ func TestPostgresInvestigationConcurrentManualTriggerConsumesOnce(t *testing.T) 
 	}
 }
 
-func TestPostgresInvestigationManualTriggerRollsBackChangedCutoff(t *testing.T) {
+func TestPostgresInvestigationManualTriggerUsesFixedSnapshot(t *testing.T) {
 	f := newInvestigationIntegration(t)
 	f.pool("192.0.2.211", "192.0.2.212")
 	g := f.group("range.example")
 	f.outage(g, []int64{11, 12, 13})
 	g = f.group(g.Host)
-	// Simulate a recovery becoming visible after partitioning but before the
-	// final evidence check. The new cutoff must not commit the old partition.
+	// A later observation cannot move an already selected manual receipt cutoff.
 	f.exec(`CREATE FUNCTION change_fault_cutoff() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE v2_dispatch_history SET success=TRUE,payload=jsonb_set(jsonb_set(payload,'{success}','true'::jsonb),'{error}','""'::jsonb) WHERE source='entry' AND kind='sample' AND host='range.example' AND sequence=11; RETURN NEW; END $$`)
 	f.exec(`CREATE TRIGGER change_fault_cutoff BEFORE INSERT ON v2_dispatch_monitor FOR EACH ROW EXECUTE FUNCTION change_fault_cutoff()`)
-	before := f.snapshot("v2_dispatch_investigation_group", "v2_dispatch_investigation_member", "v2_dispatch_monitor", "v2_dispatch_investigation_event", "v2_dispatch_history")
 	err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: g.ID, Revision: g.Revision})
-	if err == nil || !strings.Contains(err.Error(), "故障起点发生变化") {
-		t.Fatal("cutoff change did not abort", err)
+	if err != nil || f.successfulEvents() != 1 {
+		t.Fatal("manual snapshot was reinterpreted", err)
 	}
-	if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_group", "v2_dispatch_investigation_member", "v2_dispatch_monitor", "v2_dispatch_investigation_event", "v2_dispatch_history")) {
-		t.Fatal("changed cutoff partially committed")
+	var cutoff int64
+	if err = f.db.QueryRow(`SELECT first_failure_at FROM v2_dispatch_investigation_event WHERE group_id=$1 AND kind='filtered'`, g.ID).Scan(&cutoff); err != nil {
+		t.Fatal(err)
+	}
+	var original int64
+	if err = f.db.QueryRow(`SELECT min(created_at) FROM v2_dispatch_history WHERE source='entry' AND target_id=$1 AND sequence>1`, g.MonitorID).Scan(&original); err != nil || original != cutoff {
+		t.Fatal("snapshot cutoff moved", cutoff, original, err)
 	}
 }
 

@@ -16,9 +16,13 @@ type investigationProbe struct {
 	ResolvedIP string
 }
 type investigationEvidence struct {
-	First    int64              `json:"first_failure_at"`
-	Probes   []int64            `json:"probe_ids"`
-	Controls map[int64][]string `json:"controls"`
+	First        int64              `json:"first_failure_at"`
+	Probes       []int64            `json:"probe_ids"`
+	Controls     map[int64][]string `json:"controls"`
+	Mode         string             `json:"mode"`
+	CutoffSource string             `json:"cutoff_source"`
+	WindowFrom   int64              `json:"verification_from,omitempty"`
+	Warnings     []string           `json:"warnings,omitempty"`
 }
 
 func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSplitCandidate, from int64) ([]DispatchHistorySample, error) {
@@ -28,6 +32,7 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 	}
 	defer rows.Close()
 	out := []DispatchHistorySample{}
+	runs := []int64{}
 	for rows.Next() {
 		var raw []byte
 		var v DispatchHistorySample
@@ -39,14 +44,40 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 		}
 		// Membership in the recursive run chain is checked in SQL. Normalize
 		// that identity only; time and sequence continuity remain mandatory.
+		runs = append(runs, v.RunID)
 		v.RunID = c.RunID
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := 0; i+1 < len(out); i++ {
+		if runs[i] == runs[i+1] {
+			continue
+		}
+		// Proven startup edges establish provenance, never elapsed failure time.
+		// Legacy PostgreSQL epoch casts round fractional seconds, while Go
+		// receipts truncate them. Allow only that one-second precision difference.
+		edges, e := q.QueryContext(ctx, `WITH RECURSIVE chain(run_id) AS (SELECT $4::bigint UNION SELECT r.from_run FROM v2_dispatch_monitor_restart r JOIN chain c ON r.to_run=c.run_id WHERE r.monitor_id=$1 AND r.probe_id=$2 AND r.version=$3 AND r.created_at BETWEEN $6-1 AND $7+1) SELECT EXISTS(SELECT 1 FROM chain WHERE run_id=$5)`, c.ID, c.ProbeID, c.Version, runs[i], runs[i+1], out[i+1].ReportedAt, out[i].ReportedAt)
+		if e != nil {
+			return nil, e
+		}
+		if edges.Next() {
+			err = edges.Scan(&out[i].RecordedRestartBefore)
+		} else {
+			err = edges.Err()
+		}
+		edges.Close()
+		if err != nil {
+			return nil, err
+		}
+		out[i].UnverifiedRestartBefore = !out[i].RecordedRestartBefore
+	}
+	return out, nil
 }
 
-// The receipt cutoff is the first failure after success (or explicit confirmation).
-// The timeout timer is separate: connect_error resets it without moving that cutoff.
+// Compatibility helpers for checking a complete, unbroken observation sequence.
 func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch int64) (int64, bool) {
 	return investigationTimeoutStartAfterConfirmation(samples, c, now, epoch, 0, 600)
 }
@@ -57,57 +88,24 @@ func investigationTimeoutStartAfterConfirmation(samples []DispatchHistorySample,
 }
 
 func investigationTimeoutEvidence(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch, confirmed, duration int64) (int64, string) {
-	if c.Success || c.Error != "timeout" || !dispatchSplitFresh(c, now) {
-		return 0, "等待全部探针新鲜且一致超时"
+	incident := investigationIncidentFrom(samples, c, epoch, confirmed, investigationIncident{})
+	return investigationAutomaticDecision(incident, samples, c, now, duration)
+}
+
+func investigationAutomaticDecision(incident investigationIncident, samples []DispatchHistorySample, c dispatchSplitCandidate, now, duration int64) (int64, string) {
+	if c.Success || !dispatchSplitFresh(c, now) {
+		return 0, "等待全部探针新鲜且一致检测失败"
 	}
-	if len(samples) < 2 {
-		return 0, "故障起点不明，保留本轮观察数据，暂停处理"
+	if incident.First == 0 || !incident.Baseline {
+		return 0, "故障起点不明，保留本轮观察数据，可人工立即触发"
 	}
-	if samples[0].Sequence != c.Sequence || samples[0].ReportedAt != c.Reported {
-		return 0, "故障检测记录不连续或与当前配置不一致"
+	if incident.Uncertain {
+		return 0, "故障期间存在未知检测空档，可人工立即触发"
 	}
-	previous := c.Reported
-	first := int64(0)
-	timeoutFirst := int64(0)
-	timeoutSpan := true
-	complete := func() (int64, string) {
-		if first == 0 {
-			return 0, "故障起点不明，保留本轮观察数据，暂停处理"
-		}
-		if timeoutFirst == 0 || now-timeoutFirst < duration {
-			return 0, "连续超时未满 10 分钟，保留本轮首次故障起点"
-		}
-		return first, ""
+	if !investigationFailureWindow(samples, c, now, duration) {
+		return 0, "等待当前连续检测失败满 10 分钟，原观察数据保留"
 	}
-	for i, x := range samples {
-		if x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.ReportedAt < epoch || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
-			return 0, "故障检测记录不连续或与当前配置不一致"
-		}
-		if x.Success {
-			return complete()
-		}
-		switch x.Error {
-		case "timeout":
-			if timeoutSpan {
-				timeoutFirst = x.ReportedAt
-			}
-		case "connect_error":
-			// This is still a failed TCP connection, never a timeout or recovery.
-			// Scan farther only to establish the original, uninterrupted outage.
-			timeoutSpan = false
-		default:
-			return 0, "故障期间存在 DNS、取消或未知检测错误，暂停处理"
-		}
-		first = x.ReportedAt
-		previous = x.ReportedAt
-	}
-	// An explicit confirmation establishes a new, auditable baseline even
-	// for an already failing address. Never borrow failures before that round.
-	maxGap := c.Interval + (c.Timeout+999)/1000 + 5
-	if confirmed >= epoch && confirmed > 0 && previous >= confirmed && previous-confirmed <= maxGap {
-		return complete()
-	}
-	return 0, "故障起点不明，保留本轮观察数据，暂停处理"
+	return incident.First, ""
 }
 
 func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCandidate, first, now int64) bool {
@@ -116,10 +114,13 @@ func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCa
 	}
 	previous := c.Reported
 	for i, x := range samples {
-		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || (i > 0 && (samples[i-1].RecordedRestartBefore || samples[i-1].UnverifiedRestartBefore || !dispatchEvidenceFollows(samples[i-1], x, c) || previous-x.ReportedAt > c.Interval+(c.Timeout+999)/1000+5)) || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
 			return false
 		}
 		if x.ReportedAt <= first-max(int64(60), c.Interval) {
+			if c.Sequence >= 100000000000000000 && c.Sequence-x.Sequence < (c.Reported-first+max(int64(60), c.Interval))*int64(time.Second) {
+				continue
+			}
 			return true
 		}
 		previous = x.ReportedAt
@@ -167,7 +168,7 @@ func (s *DBService) investigationEvidence(ctx context.Context, tx *sql.Tx, g Inv
 
 func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *sql.Tx, g InvestigationGroup, probes []investigationProbe, entries []usersvc.DispatchEntry, duration int64) (investigationEvidence, string, error) {
 	now := time.Now().Unix()
-	result := investigationEvidence{Controls: map[int64][]string{}}
+	result := investigationEvidence{Controls: map[int64][]string{}, Mode: "automatic", CutoffSource: "established_incident"}
 	targetIPs := map[int64]string{}
 	var failedAt int64
 	if err := tx.QueryRowContext(ctx, `SELECT delivery_failure_at FROM v2_dispatch_investigation_health WHERE id=1`).Scan(&failedAt); err != nil {
@@ -188,7 +189,11 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 		if err != nil {
 			return result, "", err
 		}
-		first, reason := investigationTimeoutEvidence(samples, p.dispatchSplitCandidate, now, g.EpochAt, g.ConfirmedAt, duration)
+		incident, e := loadInvestigationIncident(ctx, tx, g, p, samples)
+		if e != nil {
+			return result, "", e
+		}
+		first, reason := investigationAutomaticDecision(incident, samples, p.dispatchSplitCandidate, now, duration)
 		if reason != "" {
 			return result, reason, nil
 		}
@@ -205,9 +210,13 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 			result.First = first
 		}
 		result.Probes = append(result.Probes, p.ProbeID)
+		window := p.Reported - duration
+		if result.WindowFrom == 0 || window < result.WindowFrom {
+			result.WindowFrom = window
+		}
 	}
-	// Select controls by identities that were healthy at T and throughout the
-	// entire incident. Several failing peers do not invalidate healthy controls.
+	// Controls cover the same current verification window as the failing target.
+	// Earlier upgrade downtime does not permanently poison healthy controls.
 	actual := map[string]bool{}
 	for _, e := range entries {
 		actual[e.Host] = true
@@ -260,11 +269,11 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 			if !c.Success || !dispatchSplitFresh(c, now) {
 				continue
 			}
-			samples, e := investigationSamples(ctx, tx, c, result.First-max(defaultProbeOfflineSec, 2*(c.Interval+(c.Timeout+999)/1000)))
+			samples, e := investigationSamples(ctx, tx, c, result.WindowFrom-max(defaultProbeOfflineSec, 2*(c.Interval+(c.Timeout+999)/1000)))
 			if e != nil {
 				return result, "", e
 			}
-			if investigationControlSpan(samples, c, result.First, now) {
+			if investigationControlSpan(samples, c, result.WindowFrom, now) {
 				healthy[identity] = c.Host
 			}
 		}
@@ -273,7 +282,7 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 			needed = 1
 		}
 		if len(healthy) < needed {
-			return result, "缺少贯穿故障期间的独立正常对照入口，等待确认", nil
+			return result, "缺少贯穿当前故障确认窗口的独立正常对照入口", nil
 		}
 		hosts := []string{}
 		for _, host := range healthy {
@@ -393,26 +402,31 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		g.ConfigKey = key
 	}
 	if g.ConfigKey != key {
-		resumable, e := investigationRestartMatches(ctx, tx, g, key)
-		if e != nil {
-			return e
-		}
-		if resumable {
-			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,revision=revision+1 WHERE id=$1`, id, key); err != nil {
+		if immediate {
+			// Human execution preserves receipt ownership even if monitoring changed.
+			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2 WHERE id=$1`, id, key); err != nil {
 				return err
 			}
 			g.ConfigKey = key
 		} else {
-			if immediate {
-				return splitEditInvalid("监控配置或会话已变化，请刷新并重新确认入口")
+			resumable, e := investigationRestartMatches(ctx, tx, g, key)
+			if e != nil {
+				return e
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
-				return err
+			if resumable {
+				if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,revision=revision+1 WHERE id=$1`, id, key); err != nil {
+					return err
+				}
+				g.ConfigKey = key
+			} else {
+				if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
+					return err
+				}
+				return tx.Commit()
 			}
-			return tx.Commit()
 		}
 	}
-	if !fresh {
+	if !immediate && !fresh {
 		// Retain the round while startup awaits fresh reports. A reporting gap
 		// still fails continuity checks and cannot turn into timeout evidence.
 		return finish("监控未启用、探针离线或数据过期")
@@ -421,9 +435,15 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	for _, p := range probes {
 		allSuccess = allSuccess && p.Success
 	}
-	if allSuccess {
-		if immediate {
-			return splitEditInvalid("当前入口检测正常，无需触发")
+	if !immediate && allSuccess {
+		for _, p := range probes {
+			samples, e := investigationSamples(ctx, tx, p.dispatchSplitCandidate, g.EpochAt)
+			if e != nil {
+				return e
+			}
+			if _, e = loadInvestigationIncident(ctx, tx, g, p, samples); e != nil {
+				return e
+			}
 		}
 		var failedAt int64
 		if err = tx.QueryRowContext(ctx, `SELECT delivery_failure_at FROM v2_dispatch_investigation_health WHERE id=1`).Scan(&failedAt); err != nil {
@@ -446,43 +466,51 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		}
 		return finish("正常观察中")
 	}
-	if g.ReadyAt == 0 {
+	if !immediate && g.ReadyAt == 0 {
 		return finish("新入口尚未确认正常，不按本轮失败筛选")
 	}
 	duration := int64(600)
 	if immediate {
 		duration = 0
 	}
-	evidence, reason, err := s.investigationEvidenceWithDuration(ctx, tx, g, probes, entries, duration)
+	var evidence investigationEvidence
+	var reason string
+	if immediate {
+		evidence, err = s.manualInvestigationEvidence(ctx, tx, g, probes)
+	} else {
+		evidence, reason, err = s.investigationEvidenceWithDuration(ctx, tx, g, probes, entries, duration)
+	}
 	if err != nil {
 		return err
 	}
 	if reason != "" {
 		return finish(reason)
 	}
-	if evidence.First < max(g.ReadyAt, settings.ArmedAt) {
+	if !immediate && evidence.First < max(g.ReadyAt, settings.ArmedAt) {
 		return finish("故障起点早于有效观察期")
 	}
 	// Share limits across the whole immutable family and the previous splitter.
-	var last, count int64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls')`, g.RootID).Scan(&last); err != nil {
-		return err
-	}
-	if g.LegacyRootID > 0 {
-		var legacy int64
-		if err = tx.QueryRowContext(ctx, `SELECT GREATEST(COALESCE((SELECT last_success_at FROM v2_dispatch_auto_split_cooldown WHERE root_group_id=$1),0),COALESCE((SELECT max(updated_at) FROM v2_dispatch_auto_split_operation WHERE root_group_id=$1 AND status='succeeded'),0))`, g.LegacyRootID).Scan(&legacy); err != nil {
+	if !immediate {
+		var last, count int64
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls')`, g.RootID).Scan(&last); err != nil {
 			return err
 		}
-		last = max(last, legacy)
-	}
-	if last > 0 && now-last < settings.EntryWindowMinutes*60 {
-		return finish("同一原始组及其后代处于频率限制窗口")
-	}
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
-		return err
-	}
-	if count >= settings.GlobalMax {
-		return finish("达到全局自动处理频率限制")
+		if g.LegacyRootID > 0 {
+			var legacy int64
+			if err = tx.QueryRowContext(ctx, `SELECT GREATEST(COALESCE((SELECT last_success_at FROM v2_dispatch_auto_split_cooldown WHERE root_group_id=$1),0),COALESCE((SELECT max(updated_at) FROM v2_dispatch_auto_split_operation WHERE root_group_id=$1 AND status='succeeded'),0))`, g.LegacyRootID).Scan(&legacy); err != nil {
+				return err
+			}
+			last = max(last, legacy)
+		}
+		if last > 0 && now-last < settings.EntryWindowMinutes*60 {
+			return finish("同一原始组及其后代处于频率限制窗口")
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
+			return err
+		}
+		if count >= settings.GlobalMax {
+			return finish("达到全局自动处理频率限制")
+		}
 	}
 	if immediate {
 		if err = investigationAudit(ctx, tx, g.RootID, g.ID, "manual_trigger", evidence.First, map[string]any{"host": g.Host, "revision": revision, "evidence": evidence}); err != nil {

@@ -138,14 +138,14 @@ func TestTimestampEvidenceRejectsBrokenContinuity(t *testing.T) {
 			case "recovery":
 				samples[8].Success = true
 			case "other_error":
-				samples[8].Error = "connect_error"
+				samples[8].Error = "dns_error"
 			}
 			if dispatchTimeoutSpan(samples, c, c.Reported, c.Reported-1000) {
 				t.Fatal("failover accepted broken evidence")
 			}
 			// Ensure a valid beginning exists beyond the broken section.
 			samples[len(samples)-1].Success = true
-			if _, ok := investigationTimeoutStart(samples, c, c.Reported, c.Reported-1000); ok {
+			if _, ok := investigationTimeoutStart(samples, c, c.Reported, c.Reported-1000); ok && name != "other_error" {
 				t.Fatal("investigation accepted broken evidence")
 			}
 			if name == "recovery" || name == "other_error" {

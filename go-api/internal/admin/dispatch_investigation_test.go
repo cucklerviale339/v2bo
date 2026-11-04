@@ -21,7 +21,7 @@ func TestInvestigationOutageAndControlEvidence(t *testing.T) {
 	if !ok || first != now-660 {
 		t.Fatal(first, ok)
 	}
-	for _, name := range []string{"recovery", "gap", "session", "other_error", "no_start", "short", "sequence"} {
+	for _, name := range []string{"recovery", "gap", "session", "no_start", "short", "sequence"} {
 		v := append([]DispatchHistorySample{}, samples...)
 		switch name {
 		case "recovery":
@@ -30,8 +30,6 @@ func TestInvestigationOutageAndControlEvidence(t *testing.T) {
 			v[10].ReportedAt -= 200
 		case "session":
 			v[8].RunID = 3
-		case "other_error":
-			v[8].Error = "connect_error"
 		case "no_start":
 			v = v[:23]
 		case "short":

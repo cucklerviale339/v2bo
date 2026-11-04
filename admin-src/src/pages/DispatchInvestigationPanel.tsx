@@ -6,7 +6,7 @@ import '../styles/investigation.css';
 
 type Settings = { enabled: boolean; scope: 'all' | 'multi_range'; revision: number; entry_window_minutes: number; global_window_minutes: number; global_max: number };
 type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number };
-type Event = { id: number; root_id: number; group_id: number; kind: string; first_failure_at: number; created_at: number; payload: { before?: Group; pulled_ids?: number[]; unpulled_ids?: number[]; recent_ids?: number[]; older_ids?: number[]; recent_window_minutes?: number; partitions?: { group_id: number; user_ids: number[]; kind: string; host: string; merged_into?: number }[]; evidence?: { controls?: Record<string, string[]> }; reason?: string; host?: string; user_ids?: number[]; after?: any } };
+type Event = { id: number; root_id: number; group_id: number; kind: string; first_failure_at: number; created_at: number; payload: { before?: Group; pulled_ids?: number[]; unpulled_ids?: number[]; recent_ids?: number[]; older_ids?: number[]; recent_window_minutes?: number; partitions?: { group_id: number; user_ids: number[]; kind: string; host: string; merged_into?: number }[]; evidence?: { controls?: Record<string, string[]>; mode?: string; cutoff_source?: string; warnings?: string[] }; reason?: string; host?: string; user_ids?: number[]; after?: any } };
 type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
@@ -25,6 +25,11 @@ const processStates: Record<string, [string, string]> = {
  '新入口尚未确认正常，不按本轮失败筛选': ['待入口确认', 'waiting'],
  '等待连续超时满 10 分钟，或探针结果不一致': ['故障确认中', 'waiting'],
  '等待全部探针新鲜且一致超时': ['待探针确认', 'waiting'],
+ '等待全部探针新鲜且一致检测失败': ['待故障确认', 'waiting'],
+ '等待当前连续检测失败满 10 分钟，原观察数据保留': ['故障计时中', 'waiting'],
+ '故障起点不明，保留本轮观察数据，可人工立即触发': ['可人工触发', 'paused'],
+ '故障期间存在未知检测空档，可人工立即触发': ['可人工触发', 'paused'],
+ '缺少贯穿当前故障确认窗口的独立正常对照入口': ['待正常对照', 'waiting'],
  '连续超时未满 10 分钟，保留本轮首次故障起点': ['超时计时中', 'waiting'],
  '故障起点不明，保留本轮观察数据，暂停处理': ['起点待核实', 'paused'],
  '故障检测记录不连续或与当前配置不一致': ['检测证据不完整', 'paused'],
@@ -119,16 +124,16 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   <div className="investigation-history-heading"><Typography.Text strong>筛选历史</Typography.Text><span className="investigation-caption">{total} 条记录</span></div>
   <Table<Event> rowKey="id" size="small" dataSource={events} pagination={{ current: page, pageSize: 20, total, onChange: setPage, showSizeChanger: false }} scroll={{ x: 1100 }} columns={[
    { title: '时间', render: (_, e) => stamp(e.created_at) }, { title: '原始组 / 来源组', render: (_, e) => e.root_id ? `#${e.root_id} / #${e.group_id}` : '—' },
-   { title: '结果', render: (_, e) => <Tag>{kindName[e.kind] || e.kind}</Tag> }, { title: '首次失败', render: (_, e) => stamp(e.first_failure_at) },
+   { title: '结果', render: (_, e) => <Tag>{kindName[e.kind] || e.kind}</Tag> }, { title: '筛选截止', render: (_, e) => stamp(e.first_failure_at) },
    { title: '拉取 / 未拉取', render: (_, e) => e.payload.pulled_ids ? `${e.payload.pulled_ids.length} / ${e.payload.unpulled_ids?.length || 0}` : '—' },
    { title: '处理后入口', render: (_, e) => e.payload.partitions?.map((p, i) => <div key={i}>#{p.group_id} · {kindName[p.kind]} · {p.user_ids.length} 人 → {p.host}{p.merged_into ? '（归并）' : ''}</div>) || e.payload.host || '—' },
-  ]} expandable={{ expandedRowRender: e => <div>{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
+  ]} expandable={{ expandedRowRender: e => <div>{e.payload.evidence?.mode && <div>执行方式：{e.payload.evidence.mode === 'manual' ? '人工立即触发' : '自动触发'} · 截止依据：{({ established_incident: '已记录故障起点', first_observed_failure: '首次观察失败', manual_snapshot: '人工操作时点' } as Record<string, string>)[e.payload.evidence.cutoff_source || ''] || '—'}</div>}{e.payload.evidence?.warnings?.map((warning, i) => <div key={i}>{warning}</div>)}{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
   <Modal open={!!editing} title="编辑分组" onCancel={() => setEditing(undefined)} onOk={saveEdit} confirmLoading={saving} okText="保存" destroyOnClose>
    <Form form={editForm} layout="vertical"><Form.Item name="name" label="组名" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item><Form.Item label="ID 范围"><Input.TextArea aria-label="ID 范围" readOnly value={editing ? memberRanges(editing.user_ids) || '—' : ''} autoSize={{ minRows: 2, maxRows: 5 }} /></Form.Item><Form.Item name="host" label="下发地址" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={!!editing && editing.user_ids.length <= 1} /></Form.Item></Form>
   </Modal>
   <Modal open={!!action} title={action?.kind === 'confirm' ? '确认入口' : '立即触发'} onCancel={() => { if (!actionBusy) setAction(undefined); }} onOk={runAction} confirmLoading={actionBusy} cancelButtonProps={{ disabled: actionBusy }} closable={!actionBusy} maskClosable={!actionBusy} keyboard={!actionBusy} okText={action?.kind === 'confirm' ? '确认并开始观察' : '立即触发'} destroyOnClose>
    <Typography.Paragraph><strong>{action?.group.name}</strong> · #{action?.group.id}<br />入口：{action?.group.host}<br />成员：{action?.group.user_ids.length} 人</Typography.Paragraph>
-   <Typography.Paragraph>{action?.kind === 'confirm' ? '确认当前入口进入新一轮观察，从本次确认后重新记录拉取与检测结果。成员和下发地址不变，不立即换 IP。此前记录不参与本轮筛选。' : '跳过连续超时 10 分钟的等待，按当前证据执行筛选、二分或换 IP。仍须故障起点明确、同探针有正常对照、备用 IP 可用，并遵守组内及全局限频。处理成功后会改变相关用户的实际下发入口。'}</Typography.Paragraph>
+   <Typography.Paragraph>{action?.kind === 'confirm' ? '确认当前入口进入新一轮观察，从本次确认后重新记录拉取与检测结果。成员和下发地址不变，不立即换 IP。此前记录不参与本轮筛选。' : '立即按当前轮次的拉取记录执行筛选、二分或换 IP。使用已记录的首次失败作为截止时间；没有失败记录时，以本次操作时点为截止时间。不等待自动故障确认、正常对照或自动限频。需要足够的健康备用 IP，处理成功后会改变相关用户的实际下发入口。'}</Typography.Paragraph>
    {actionError && <Alert type="error" showIcon message={actionError} />}
   </Modal>
  </div>;

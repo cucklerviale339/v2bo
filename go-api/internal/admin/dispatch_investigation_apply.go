@@ -272,18 +272,20 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		if e != nil {
 			return e
 		}
-		if !fresh || key != g.ConfigKey {
+		if key != g.ConfigKey || (evidence.Mode != "manual" && !fresh) {
 			return fmt.Errorf("监控配置或新鲜证据发生变化")
 		}
-		latestEvidence, reason, e := s.investigationEvidenceWithDuration(ctx, tx, g, states, before, duration)
-		if e != nil {
-			return e
-		}
-		if reason != "" {
-			return fmt.Errorf("%s", reason)
-		}
-		if latestEvidence.First != evidence.First {
-			return fmt.Errorf("故障起点发生变化，已取消本次处理")
+		if evidence.Mode != "manual" {
+			latestEvidence, reason, e := s.investigationEvidenceWithDuration(ctx, tx, g, states, before, duration)
+			if e != nil {
+				return e
+			}
+			if reason != "" {
+				return fmt.Errorf("%s", reason)
+			}
+			if latestEvidence.First != evidence.First {
+				return fmt.Errorf("故障起点发生变化，已取消本次处理")
+			}
 		}
 		if g.LegacyRootID > 0 {
 			if _, e = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_auto_split_cooldown(root_group_id,last_success_at) VALUES($1,$2) ON CONFLICT(root_group_id) DO UPDATE SET last_success_at=GREATEST(EXCLUDED.last_success_at,v2_dispatch_auto_split_cooldown.last_success_at)`, g.LegacyRootID, now); e != nil {
