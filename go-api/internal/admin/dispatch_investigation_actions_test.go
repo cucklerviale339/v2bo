@@ -28,7 +28,7 @@ func TestInvestigationConfirmedBaselineAndImmediateDuration(t *testing.T) {
 			case "gap":
 				v[8].Sequence -= int64(50 * time.Second)
 			case "other_error":
-				v[8].Error = "connect_error"
+				v[8].Error = "dns_error"
 			case "old_round":
 				confirmed--
 			case "late_start":

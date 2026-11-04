@@ -45,30 +45,58 @@ func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSpli
 	return out, rows.Err()
 }
 
-// Returns a cutoff only when its beginning is preceded by a fresh successful
-// sample. Unknown starts, broken sample continuity and other error types fail shut.
+// The receipt cutoff is the first failure after success (or explicit confirmation).
+// The timeout timer is separate: connect_error resets it without moving that cutoff.
 func investigationTimeoutStart(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch int64) (int64, bool) {
 	return investigationTimeoutStartAfterConfirmation(samples, c, now, epoch, 0, 600)
 }
 
 func investigationTimeoutStartAfterConfirmation(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch, confirmed, duration int64) (int64, bool) {
-	if c.Success || c.Error != "timeout" || !dispatchSplitFresh(c, now) || len(samples) < 2 {
-		return 0, false
+	first, reason := investigationTimeoutEvidence(samples, c, now, epoch, confirmed, duration)
+	return first, reason == ""
+}
+
+func investigationTimeoutEvidence(samples []DispatchHistorySample, c dispatchSplitCandidate, now, epoch, confirmed, duration int64) (int64, string) {
+	if c.Success || c.Error != "timeout" || !dispatchSplitFresh(c, now) {
+		return 0, "等待全部探针新鲜且一致超时"
+	}
+	if len(samples) < 2 {
+		return 0, "故障起点不明，保留本轮观察数据，暂停处理"
 	}
 	if samples[0].Sequence != c.Sequence || samples[0].ReportedAt != c.Reported {
-		return 0, false
+		return 0, "故障检测记录不连续或与当前配置不一致"
 	}
 	previous := c.Reported
 	first := int64(0)
+	timeoutFirst := int64(0)
+	timeoutSpan := true
+	complete := func() (int64, string) {
+		if first == 0 {
+			return 0, "故障起点不明，保留本轮观察数据，暂停处理"
+		}
+		if timeoutFirst == 0 || now-timeoutFirst < duration {
+			return 0, "连续超时未满 10 分钟，保留本轮首次故障起点"
+		}
+		return first, ""
+	}
 	for i, x := range samples {
 		if x.Version != c.Version || x.RunID != c.RunID || (i > 0 && !dispatchEvidenceFollows(samples[i-1], x, c)) || x.ReportedAt < epoch || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
-			return 0, false
+			return 0, "故障检测记录不连续或与当前配置不一致"
 		}
 		if x.Success {
-			return first, first > 0 && now-first >= duration
+			return complete()
 		}
-		if x.Error != "timeout" {
-			return 0, false
+		switch x.Error {
+		case "timeout":
+			if timeoutSpan {
+				timeoutFirst = x.ReportedAt
+			}
+		case "connect_error":
+			// This is still a failed TCP connection, never a timeout or recovery.
+			// Scan farther only to establish the original, uninterrupted outage.
+			timeoutSpan = false
+		default:
+			return 0, "故障期间存在 DNS、取消或未知检测错误，暂停处理"
 		}
 		first = x.ReportedAt
 		previous = x.ReportedAt
@@ -76,7 +104,10 @@ func investigationTimeoutStartAfterConfirmation(samples []DispatchHistorySample,
 	// An explicit confirmation establishes a new, auditable baseline even
 	// for an already failing address. Never borrow failures before that round.
 	maxGap := c.Interval + (c.Timeout+999)/1000 + 5
-	return first, confirmed >= epoch && confirmed > 0 && previous >= confirmed && previous-confirmed <= maxGap && first > 0 && now-first >= duration
+	if confirmed >= epoch && confirmed > 0 && previous >= confirmed && previous-confirmed <= maxGap {
+		return complete()
+	}
+	return 0, "故障起点不明，保留本轮观察数据，暂停处理"
 }
 
 func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCandidate, first, now int64) bool {
@@ -157,12 +188,9 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 		if err != nil {
 			return result, "", err
 		}
-		first, ok := investigationTimeoutStartAfterConfirmation(samples, p.dispatchSplitCandidate, now, g.EpochAt, g.ConfirmedAt, duration)
-		if !ok {
-			if duration == 0 {
-				return result, "故障起点或连续超时证据不完整，请先确认入口并等待新检测记录", nil
-			}
-			return result, "等待连续超时满 10 分钟，或探针结果不一致", nil
+		first, reason := investigationTimeoutEvidence(samples, p.dispatchSplitCandidate, now, g.EpochAt, g.ConfirmedAt, duration)
+		if reason != "" {
+			return result, reason, nil
 		}
 		targetIPs[p.ProbeID] = usersvc.NormalizeDispatchHost(p.ResolvedIP)
 		for _, sample := range samples {
