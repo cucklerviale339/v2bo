@@ -47,7 +47,10 @@ func DispatchEntryContains(e DispatchEntry, id int64) bool {
 }
 
 func LoadInvestigationAssignments(ctx context.Context, q DispatchQueryer, userID int64) ([]InvestigationAssignment, error) {
-	rows, err := q.QueryContext(ctx, `SELECT m.group_id,m.root_id,m.user_id,m.origin_host,g.host,g.generation FROM v2_dispatch_investigation_member m JOIN v2_dispatch_investigation_group g ON g.id=m.group_id WHERE g.active AND ($1::bigint=0 OR m.user_id=$1) ORDER BY m.root_id,m.user_id`, userID)
+	// A frozen roster can outlive an account. Apply overrides only to accounts
+	// that still exist, matching the roster used by automatic and manual actions.
+	// The underlying configured ID ranges remain independent of account state.
+	rows, err := q.QueryContext(ctx, `SELECT m.group_id,m.root_id,m.user_id,m.origin_host,g.host,g.generation FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id JOIN v2_dispatch_investigation_group g ON g.id=m.group_id WHERE g.active AND ($1::bigint=0 OR m.user_id=$1) ORDER BY m.root_id,m.user_id`, userID)
 	if err != nil {
 		return nil, err
 	}

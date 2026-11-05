@@ -39,7 +39,8 @@ type dispatchRuleScope struct {
 }
 
 // DispatchEntries projects enabled nodes and address rules over the positive ID space.
-// It does not read v2_user, permissions, account status, UA, plan or age.
+// Original rules ignore account existence, permissions, status, UA, plan and age;
+// investigation overrides apply only to accounts that still exist.
 func (s *DBService) DispatchEntries(ctx context.Context) ([]DispatchEntry, error) {
 	if s.db == nil {
 		return nil, ErrUnavailable

@@ -114,7 +114,7 @@ func TestDispatchSpansMaxIDAndHoles(t *testing.T) {
 	}
 }
 
-func TestDispatchCatalogDoesNotReadAccountsOrNodePermissions(t *testing.T) {
+func TestDispatchCatalogDoesNotFilterAccountEligibilityOrNodePermissions(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,9 @@ func TestDispatchCatalogDoesNotReadAccountsOrNodePermissions(t *testing.T) {
 	for _, table := range serverFetchTables {
 		mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(`SELECT id, host FROM %s WHERE "show" = 1 ORDER BY id ASC`, table.table))).WillReturnRows(sqlmock.NewRows([]string{"id", "host"}).AddRow(int64(1), "shared.example"))
 	}
-	mock.ExpectQuery(`SELECT m.group_id,m.root_id`).WithArgs(int64(0)).WillReturnRows(sqlmock.NewRows([]string{"group_id", "root_id", "user_id", "origin_host", "host", "generation"}))
+	// Only existing accounts may receive investigation overrides. The original
+	// configured range still includes every positive ID without eligibility checks.
+	mock.ExpectQuery(`SELECT m.group_id,m.root_id.*JOIN v2_user u ON u.id=m.user_id`).WithArgs(int64(0)).WillReturnRows(sqlmock.NewRows([]string{"group_id", "root_id", "user_id", "origin_host", "host", "generation"}))
 	entries, err := s.DispatchEntries(context.Background())
 	if err != nil {
 		t.Fatal(err)

@@ -52,7 +52,9 @@ func TestPostgresDispatchMonitorLifecycle(t *testing.T) {
 	for _, kind := range []string{"shadowsocks", "vmess", "trojan", "tuic", "hysteria", "vless", "anytls", "v2node"} {
 		exec("CREATE TABLE v2_server_" + kind + ` (id BIGINT PRIMARY KEY,host TEXT,"show" SMALLINT NOT NULL DEFAULT 1)`)
 	}
-	// Deliberately no v2_user or node permission columns: ownership is configuration only.
+	// Configured ownership does not require accounts or eligibility/permission
+	// columns. Only investigation overrides depend on account existence.
+	exec(`CREATE TABLE v2_user(id BIGINT PRIMARY KEY)`)
 	exec(`INSERT INTO v2_server_vmess(id,host,"show") VALUES(7,'base.example',1),(8,'disabled-bound.example',0),(9,'disabled-base.example',0)`)
 	if err := postgres.EnsureNodeAddressSchema(ctx, db); err != nil {
 		t.Fatal(err)
