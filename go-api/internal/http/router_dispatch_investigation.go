@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,6 +70,16 @@ func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.S
 		if errors.Is(err, admin.ErrDNSProbeInvalidRequest) {
 			code = 400
 			message = err.Error()
+		} else if errors.Is(err, admin.ErrInvestigationBusy) {
+			code = http.StatusConflict
+			message = err.Error()
+			w.Header().Set("Retry-After", "2")
+		} else {
+			log.Printf("Entry investigation request failed action=%s: %v", path, err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = http.StatusGatewayTimeout
+				message = "处理请求超时，请刷新分组状态后重试"
+			}
 		}
 		writeJSON(w, code, map[string]any{"message": message})
 		return

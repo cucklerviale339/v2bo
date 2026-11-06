@@ -110,8 +110,9 @@ func TestDispatchDeliveryCreditsOnlySuccessfulActualBody(t *testing.T) {
 
 type fakeInvestigation struct {
 	*fakeDNSAdminService
-	calls    int
-	settings admin.InvestigationSettings
+	calls      int
+	settings   admin.InvestigationSettings
+	triggerErr error
 }
 
 func (s *fakeInvestigation) GetInvestigation(context.Context, int64) (admin.InvestigationView, error) {
@@ -132,7 +133,25 @@ func (s *fakeInvestigation) ConfirmInvestigation(context.Context, admin.Investig
 }
 func (s *fakeInvestigation) TriggerInvestigation(context.Context, admin.InvestigationAction) error {
 	s.calls++
-	return nil
+	return s.triggerErr
+}
+
+func TestInvestigationTriggerBusyAndDeadlineResponses(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		code    int
+		message string
+	}{{admin.ErrInvestigationBusy, http.StatusConflict, "其他入口任务正在处理"}, {context.DeadlineExceeded, http.StatusGatewayTimeout, "请刷新分组状态"}} {
+		s := &fakeInvestigation{fakeDNSAdminService: &fakeDNSAdminService{}, triggerErr: tc.err}
+		router := NewRouter(config.Config{AdminPath: "control"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}), WithAdminService(s))
+		r := dnsFailoverRequest(router, "POST", "/api/v1/control/dns-failover/dispatch-investigation/trigger", `{"id":1,"revision":1}`)
+		if r.Code != tc.code || !strings.Contains(r.Body.String(), tc.message) || s.calls != 1 {
+			t.Fatal(r.Code, r.Body.String(), s.calls)
+		}
+		if tc.code == http.StatusConflict && r.Header().Get("Retry-After") != "2" {
+			t.Fatal("missing retry hint", r.Header())
+		}
+	}
 }
 func TestInvestigationAdminOnlyAndStrictSettings(t *testing.T) {
 	s := &fakeInvestigation{fakeDNSAdminService: &fakeDNSAdminService{}}

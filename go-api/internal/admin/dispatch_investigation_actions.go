@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,43 @@ import (
 type InvestigationAction struct {
 	ID       int64 `json:"id"`
 	Revision int64 `json:"revision"`
+}
+
+var ErrInvestigationBusy = errors.New("其他入口任务正在处理，请稍后重试")
+
+// Poll a nonblocking advisory lock so a short database lock timeout does not
+// abort the transaction. The request deadline bounds both waiting and work.
+func acquireInvestigationLock(ctx context.Context, tx *sql.Tx, immediate bool) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		var locked bool
+		if err := tx.QueryRowContext(waitCtx, `SELECT pg_try_advisory_xact_lock(7642309023)`).Scan(&locked); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if waitCtx.Err() != nil {
+				return ErrInvestigationBusy
+			}
+			return err
+		}
+		if locked {
+			return nil
+		}
+		if !immediate {
+			return ErrInvestigationBusy
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return ErrInvestigationBusy
+		case <-timer.C:
+		}
+	}
 }
 
 // Config identity includes the probe roster and enable flags. A run change
@@ -134,6 +172,16 @@ func (s *DBService) TriggerInvestigation(ctx context.Context, v InvestigationAct
 	if v.ID < 1 || v.Revision < 1 {
 		return splitEditInvalid("分组或版本无效")
 	}
+	// The automatic worker yields before taking its next group while a human
+	// is waiting or executing. PostgreSQL remains the cross-process guard.
+	s.dispatchAutoSplitMu.Lock()
+	s.investigationManualPending++
+	s.dispatchAutoSplitMu.Unlock()
+	defer func() {
+		s.dispatchAutoSplitMu.Lock()
+		s.investigationManualPending--
+		s.dispatchAutoSplitMu.Unlock()
+	}()
 	if err := s.ensureInvestigation(ctx); err != nil {
 		return err
 	}

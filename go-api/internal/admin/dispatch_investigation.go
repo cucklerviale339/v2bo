@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -147,7 +149,17 @@ func readInvestigationSettings(ctx context.Context, q interface {
 	return v, err
 }
 func readInvestigationGroups(ctx context.Context, q dispatchQueryer, active bool) ([]InvestigationGroup, error) {
-	rows, err := q.QueryContext(ctx, `SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE((SELECT c.confirmed_at FROM v2_dispatch_investigation_confirmation c WHERE c.group_id=g.id AND c.generation=g.generation),0),COALESCE((SELECT jsonb_agg(m.user_id::text ORDER BY m.user_id) FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id WHERE m.group_id=g.id),'[]'::jsonb) FROM v2_dispatch_investigation_group g WHERE NOT $1 OR g.active ORDER BY g.id`, active)
+	return readInvestigationGroupsWhere(ctx, q, `NOT $1 OR g.active`, active)
+}
+
+// Aggregate the roster once. A correlated aggregate scans the entire account
+// table again for every group on installations with larger rosters.
+func readInvestigationGroupsWhere(ctx context.Context, q dispatchQueryer, predicate string, args ...any) ([]InvestigationGroup, error) {
+	rows, err := q.QueryContext(ctx, `WITH selected AS MATERIALIZED (SELECT g.* FROM v2_dispatch_investigation_group g WHERE `+predicate+`), roster AS (
+SELECT m.group_id,jsonb_agg(m.user_id::text ORDER BY m.user_id) AS ids
+FROM selected g JOIN v2_dispatch_investigation_member m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
+SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb)
+FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_investigation_confirmation c ON c.group_id=g.id AND c.generation=g.generation ORDER BY g.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -308,52 +320,97 @@ func (s *DBService) runInvestigationCycle(ctx context.Context) error {
 	s.dispatchAutoSplitMu.Lock()
 	s.investigationLastError = ""
 	if err != nil {
-		s.investigationLastError = "自动筛选暂不可用，本轮未继续执行；请检查服务日志"
+		s.investigationLastError = "入口筛选存在执行错误，未完成的分组将在后续轮次重试；请检查服务日志"
 	}
 	s.dispatchAutoSplitMu.Unlock()
 	return err
 }
 func (s *DBService) investigationCycle(ctx context.Context) error {
 	if err := s.ensureInvestigation(ctx); err != nil {
-		return err
+		return fmt.Errorf("准备入口筛选: %w", err)
 	}
 	settings, err := readInvestigationSettings(ctx, s.db, false)
 	if err != nil || !settings.Enabled {
 		return err
 	}
 	if err = s.bootstrapInvestigation(ctx); err != nil {
-		return err
+		return fmt.Errorf("初始化入口分组: %w", err)
 	}
-	groups, err := readInvestigationGroups(ctx, s.db, true)
+	// Scheduling needs only IDs; each action loads its current group again under
+	// the shared lock. Do not materialize all rosters for this inventory pass.
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM v2_dispatch_investigation_group WHERE active AND NOT manual_only ORDER BY id`)
 	if err != nil {
 		return err
 	}
-	// A bounded rotating batch prevents a large inventory starving later roots.
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
 	s.dispatchAutoSplitMu.Lock()
 	cursor := s.investigationCursor
 	s.dispatchAutoSplitMu.Unlock()
-	index := sort.Search(len(groups), func(i int) bool { return groups[i].ID > cursor })
-	groups = append(append([]InvestigationGroup{}, groups[index:]...), groups[:index]...)
-	for i, g := range groups {
+	cursor, err = investigationBatch(ctx, ids, cursor, func(ctx context.Context, id int64) error {
+		return s.processInvestigationAction(ctx, id, 0, false)
+	})
+	s.dispatchAutoSplitMu.Lock()
+	s.investigationCursor = cursor
+	s.dispatchAutoSplitMu.Unlock()
+	return err
+}
+
+const investigationActionBudget = 8 * time.Second
+
+// Budget exhaustion between actions is an ordinary yield, not a failed cycle.
+// A single failed group must not starve the remaining roots. Busy groups stay
+// at the front of the next pass so manual work can finish without losing them.
+func investigationBatch(ctx context.Context, ids []int64, cursor int64, process func(context.Context, int64) error) (int64, error) {
+	index := sort.Search(len(ids), func(i int) bool { return ids[i] > cursor })
+	ids = append(append([]int64{}, ids[index:]...), ids[:index]...)
+	var failures []error
+	for i, id := range ids {
 		if i >= 30 {
 			break
 		}
-		s.dispatchAutoSplitMu.Lock()
-		s.investigationCursor = g.ID
-		s.dispatchAutoSplitMu.Unlock()
-		if g.ManualOnly || len(g.UserIDs) <= 1 {
-			continue
+		if err := ctx.Err(); err != nil {
+			return cursor, errors.Join(append(failures, err)...)
 		}
-		if err = s.processInvestigation(ctx, g.ID); err != nil {
-			return err
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < investigationActionBudget {
+			break
+		}
+		actionCtx, cancel := context.WithTimeout(ctx, investigationActionBudget)
+		err := process(actionCtx, id)
+		cancel()
+		if errors.Is(err, ErrInvestigationBusy) {
+			break
+		}
+		cursor = id
+		if err != nil {
+			failures = append(failures, fmt.Errorf("处理分组 #%d: %w", id, err))
 		}
 	}
-	return nil
+	return cursor, errors.Join(failures...)
 }
 
 // Freeze the existing account roster without consulting availability, plans or
 // permissions. The original selector remains the admission boundary forever.
 func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
+	s.dispatchAutoSplitMu.Lock()
+	pending := s.investigationManualPending > 0
+	s.dispatchAutoSplitMu.Unlock()
+	if pending {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -368,18 +425,6 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 	}
 	settings, err := readInvestigationSettings(ctx, tx, true)
 	if err != nil || !settings.Enabled {
-		return err
-	}
-	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
-	if err != nil {
-		return err
-	}
-	byHost := map[string]usersvc.DispatchEntry{}
-	for _, e := range entries {
-		byHost[e.Host] = e
-	}
-	eligibleHosts, err := investigationScopeHosts(ctx, tx, settings.Scope)
-	if err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.host,COALESCE(g.root_group_id,0) FROM v2_dispatch_monitor m LEFT JOIN v2_dispatch_auto_split_group g ON g.monitor_id=m.id WHERE m.enabled AND NOT m.deleted AND EXISTS(SELECT 1 FROM v2_dispatch_monitor_probe b WHERE b.monitor_id=m.id) AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group i WHERE i.monitor_id=m.id) ORDER BY m.id`)
@@ -403,6 +448,21 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 		err = rows.Err()
 	}
 	rows.Close()
+	if err != nil {
+		return err
+	}
+	if len(originals) == 0 {
+		return nil
+	}
+	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
+	byHost := map[string]usersvc.DispatchEntry{}
+	for _, e := range entries {
+		byHost[e.Host] = e
+	}
+	eligibleHosts, err := investigationScopeHosts(ctx, tx, settings.Scope)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -26,7 +27,11 @@ type investigationEvidence struct {
 }
 
 func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSplitCandidate, from int64) ([]DispatchHistorySample, error) {
-	rows, err := q.QueryContext(ctx, `WITH RECURSIVE runs(run_id) AS (SELECT $4::bigint UNION SELECT r.from_run FROM v2_dispatch_monitor_restart r JOIN runs ON r.to_run=runs.run_id WHERE r.monitor_id=$1 AND r.probe_id=$2 AND r.version=$3) SELECT payload FROM v2_dispatch_history WHERE source='entry' AND kind='sample' AND target_id=$1 AND probe_id=$2 AND version=$3 AND run_id IN(SELECT run_id FROM runs) AND created_at>=$5 ORDER BY created_at DESC,id DESC LIMIT 15000`, c.ID, c.ProbeID, c.Version, c.RunID, from)
+	return investigationSamplesLimit(ctx, q, c, from, 15000)
+}
+
+func investigationSamplesLimit(ctx context.Context, q dispatchQueryer, c dispatchSplitCandidate, from int64, limit int) ([]DispatchHistorySample, error) {
+	rows, err := q.QueryContext(ctx, `WITH RECURSIVE runs(run_id) AS (SELECT $4::bigint UNION SELECT r.from_run FROM v2_dispatch_monitor_restart r JOIN runs ON r.to_run=runs.run_id WHERE r.monitor_id=$1 AND r.probe_id=$2 AND r.version=$3) SELECT payload FROM v2_dispatch_history WHERE source='entry' AND kind='sample' AND target_id=$1 AND probe_id=$2 AND version=$3 AND run_id IN(SELECT run_id FROM runs) AND created_at>=$5 ORDER BY created_at DESC,id DESC LIMIT $6`, c.ID, c.ProbeID, c.Version, c.RunID, from, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -319,10 +324,28 @@ func investigationPullPartition(all []int64, pulled map[int64]bool) ([]int64, []
 }
 
 func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
-	return s.processInvestigationAction(ctx, id, 0, false)
+	err := s.processInvestigationAction(ctx, id, 0, false)
+	if errors.Is(err, ErrInvestigationBusy) {
+		return nil
+	}
+	return err
 }
 
-func (s *DBService) processInvestigationAction(ctx context.Context, id, revision int64, immediate bool) error {
+func (s *DBService) processInvestigationAction(ctx context.Context, id, revision int64, immediate bool) (err error) {
+	stage, host := "获取处理锁", ""
+	defer func() {
+		if err != nil && !errors.Is(err, ErrInvestigationBusy) && !errors.Is(err, ErrDNSProbeInvalidRequest) {
+			err = fmt.Errorf("入口分组 #%d (%s)，阶段 %s: %w", id, host, stage, err)
+		}
+	}()
+	if !immediate {
+		s.dispatchAutoSplitMu.Lock()
+		pending := s.investigationManualPending > 0
+		s.dispatchAutoSplitMu.Unlock()
+		if pending {
+			return ErrInvestigationBusy
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -331,16 +354,10 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout='500ms'; SET LOCAL statement_timeout='5s'`); err != nil {
 		return err
 	}
-	if immediate {
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7642309023)`); err != nil {
-			return err
-		}
-	} else {
-		var locked bool
-		if err = tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(7642309023)`).Scan(&locked); err != nil || !locked {
-			return err
-		}
+	if err = acquireInvestigationLock(ctx, tx, immediate); err != nil {
+		return err
 	}
+	stage = "读取设置与当前分组"
 	settings, err := readInvestigationSettings(ctx, tx, true)
 	if err != nil || !settings.Enabled {
 		if err == nil && immediate {
@@ -348,10 +365,11 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		}
 		return err
 	}
-	groups, err := readInvestigationGroups(ctx, tx, true)
+	groups, err := readInvestigationGroupsWhere(ctx, tx, `g.active AND g.id=$1`, id)
 	if err != nil {
 		return err
 	}
+	stage = "核对实际下发关系"
 	entries, members, err := usersvc.DispatchEntriesWithInvestigationMembersFrom(ctx, tx)
 	if err != nil {
 		return err
@@ -372,6 +390,8 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if immediate && g.Revision != revision {
 		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
+	host = g.Host
+	stage = "核对监控配置"
 	now := time.Now().Unix()
 	finish := func(reason string) error {
 		if immediate {
@@ -436,10 +456,21 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		allSuccess = allSuccess && p.Success
 	}
 	if !immediate && allSuccess {
+		stage = "更新正常入口观察状态"
 		for _, p := range probes {
-			samples, e := investigationSamples(ctx, tx, p.dispatchSplitCandidate, g.EpochAt)
+			// A real latest success supersedes every earlier incident. Only this
+			// branch can use one sample; failure evidence retains full history.
+			samples, e := investigationSamplesLimit(ctx, tx, p.dispatchSplitCandidate, g.EpochAt, 1)
 			if e != nil {
 				return e
+			}
+			// A newer report can arrive between the state and history reads.
+			// Use the full reconstruction unless this is the exact saved success.
+			if len(samples) != 1 || !samples[0].Success || samples[0].Sequence != p.Sequence || samples[0].ReportedAt != p.Reported {
+				samples, e = investigationSamples(ctx, tx, p.dispatchSplitCandidate, g.EpochAt)
+				if e != nil {
+					return e
+				}
 			}
 			if _, e = loadInvestigationIncident(ctx, tx, g, p, samples); e != nil {
 				return e
@@ -475,6 +506,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	}
 	var evidence investigationEvidence
 	var reason string
+	stage = "读取故障与拉取证据"
 	if immediate {
 		evidence, err = s.manualInvestigationEvidence(ctx, tx, g, probes)
 	} else {
@@ -517,5 +549,12 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 			return err
 		}
 	}
+	stage = "读取同根观察组"
+	groups, err = readInvestigationGroupsWhere(ctx, tx, `g.active AND g.root_id=$1`, g.RootID)
+	if err != nil {
+		return err
+	}
+	groups = currentInvestigationGroups(groups, members)
+	stage = "分组并分配备用入口"
 	return s.applyInvestigation(ctx, tx, g, groups, evidence, entries, duration, finish)
 }

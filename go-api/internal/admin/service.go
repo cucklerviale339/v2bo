@@ -508,6 +508,7 @@ type DBService struct {
 	dispatchAutoSplitCursorProbe int64
 	investigationLastError       string
 	investigationCursor          int64
+	investigationManualPending   int
 	investigationNamesMigrated   bool
 	investigationNameMu          sync.Mutex
 	dispatchEnsureMu             sync.Mutex
