@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"forest/go-api/internal/admin"
@@ -169,8 +168,13 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 	if s.requireSessionAccess(ctx, origin.ID, a.SessionID) != nil || s.requireSessionAccess(ctx, actor.ID, a.SessionID) != nil {
 		return fail()
 	}
-	if runtime.Validate(ctx, origin, operation.Name, parameters) != nil || runtime.Validate(ctx, actor, operation.Name, parameters) != nil {
-		return fail()
+	for _, validatingActor := range []PanelOperationActor{origin, actor} {
+		if err := runtime.Validate(ctx, validatingActor, operation.Name, parameters); err != nil {
+			if output, message, ok := panelOperationPreflightFailure(err); ok {
+				return "failed", output, message
+			}
+			return fail()
+		}
 	}
 	origin, err = panelActor(ctx, s.db, a.ActorID, false)
 	if err != nil {
@@ -188,7 +192,10 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 	// Approval preserves the approver's identity for audit, but must not grant
 	// an employee proposal broader database scope through an admin approver.
 	effectiveActor := PanelOperationActor{ID: actor.ID, IsAdmin: origin.IsAdmin && actor.IsAdmin}
-	if runtime.Validate(ctx, effectiveActor, operation.Name, parameters) != nil {
+	if err := runtime.Validate(ctx, effectiveActor, operation.Name, parameters); err != nil {
+		if output, message, ok := panelOperationPreflightFailure(err); ok {
+			return "failed", output, message
+		}
 		return fail()
 	}
 	var active bool
@@ -213,7 +220,7 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 			// This marker originates in the private HTTP adapter, never from an
 			// upstream response body or a model-supplied status. Failures after
 			// dispatch remain unknown regardless of their HTTP status.
-			if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {
+			if panelError.NotExecuted && panelOperationNotExecutedCode(code) {
 				return "failed", panelPreflightOutput(code), message
 			}
 			return "unknown", "", fmt.Sprintf("后台操作返回 HTTP %d（%s）：%s；可能已部分执行，请核对结果，禁止自动重试", panelError.Status, code, message)
@@ -229,6 +236,17 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 		return "succeeded", "后台操作已完成，但结果保存失败；请查询业务现状，不要重复执行", ""
 	}
 	return "succeeded", output, ""
+}
+
+func panelOperationPreflightFailure(err error) (string, string, bool) {
+	var panelError *PanelOperationError
+	if errors.As(err, &panelError) && panelError.NotExecuted {
+		code, message := panelOperationErrorText(panelError)
+		if panelOperationNotExecutedCode(code) {
+			return panelPreflightOutput(code), message, true
+		}
+	}
+	return "", "", false
 }
 
 func panelPreflightOutput(code string) string {

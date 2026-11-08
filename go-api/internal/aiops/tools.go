@@ -347,7 +347,7 @@ func safeAIError(e error) error {
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
-		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: panelError.NotExecuted && strings.HasPrefix(code, "dns_")}
+		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: panelError.NotExecuted && panelOperationNotExecutedCode(code)}
 	}
 	for _, v := range []error{ErrForbidden, ErrValidation, ErrConflict, ErrNotFound, ErrBusy, ErrUnavailable} {
 		if errors.Is(e, v) {

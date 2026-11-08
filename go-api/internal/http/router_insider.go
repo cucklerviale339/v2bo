@@ -23,6 +23,22 @@ type insiderRulePayload struct {
 	Enabled, Sort      *json.Number
 }
 
+func (payload insiderRulePayload) saveRequest() (admin.InsiderRuleSaveRequest, error) {
+	id, err := jsonNumberToInt64Pointer(payload.ID)
+	if err != nil {
+		return admin.InsiderRuleSaveRequest{}, errors.New("规则格式错误")
+	}
+	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
+	if err != nil {
+		return admin.InsiderRuleSaveRequest{}, errors.New("状态格式错误")
+	}
+	sortValue, err := jsonNumberToInt64Pointer(payload.Sort)
+	if err != nil {
+		return admin.InsiderRuleSaveRequest{}, errors.New("排序格式错误")
+	}
+	return admin.InsiderRuleSaveRequest{ID: id, Name: payload.Name, MatchUserIDs: payload.MatchUserIDs, MatchUserIDRanges: payload.MatchUserIDRanges, Members: payload.Members, Host: payload.Host, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Enabled: enabled, Sort: sortValue}, nil
+}
+
 func handleAdminInsiderRuleFetch(w http.ResponseWriter, r *http.Request, sessions session.Service, service admin.Service) bool {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
@@ -61,22 +77,12 @@ func handleAdminInsiderRuleSave(w http.ResponseWriter, r *http.Request, sessions
 		writeJSON(w, 400, map[string]any{"message": err.Error()})
 		return true
 	}
-	id, err := jsonNumberToInt64Pointer(payload.ID)
+	req, err := payload.saveRequest()
 	if err != nil {
-		writeJSON(w, 400, map[string]any{"message": "规则格式错误"})
+		writeJSON(w, 400, map[string]any{"message": err.Error()})
 		return true
 	}
-	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
-	if err != nil {
-		writeJSON(w, 400, map[string]any{"message": "状态格式错误"})
-		return true
-	}
-	sortValue, err := jsonNumberToInt64Pointer(payload.Sort)
-	if err != nil {
-		writeJSON(w, 400, map[string]any{"message": "排序格式错误"})
-		return true
-	}
-	ok, err := service.SaveInsiderRule(r.Context(), admin.InsiderRuleSaveRequest{ID: id, Name: payload.Name, MatchUserIDs: payload.MatchUserIDs, MatchUserIDRanges: payload.MatchUserIDRanges, Members: payload.Members, Host: payload.Host, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Enabled: enabled, Sort: sortValue})
+	ok, err := service.SaveInsiderRule(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, admin.ErrInvalidInsiderRule) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": strings.TrimPrefix(err.Error(), admin.ErrInvalidInsiderRule.Error()+": ")})

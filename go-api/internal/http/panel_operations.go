@@ -117,6 +117,14 @@ func (p *panelOperations) Validate(ctx context.Context, actor aiops.PanelOperati
 			return aiops.ErrValidation
 		}
 	}
+	if op.Path == "/server/insider/save" {
+		if err := p.preserveAIEntryLinks(ctx, op.Path, params); err != nil {
+			return err
+		}
+		if err := validateAIInsiderSave(op.Path, params); err != nil {
+			return err
+		}
+	}
 	if strings.Contains(op.Path, "{id}") {
 		if _, ok := panelPositiveID(params["id"]); !ok {
 			return aiops.ErrValidation
@@ -156,6 +164,11 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 	op := p.operations[name]
 	params, _ := panelOperationParams(raw)
 	if err := p.preserveAIEntryLinks(ctx, op.Path, params); err != nil {
+		return nil, err
+	}
+	// Recheck the merged current record immediately before dispatch as well as
+	// during proposal validation. A deterministic rejection must stay not-executed.
+	if err := validateAIInsiderSave(op.Path, params); err != nil {
 		return nil, err
 	}
 	includeServerCredential := false

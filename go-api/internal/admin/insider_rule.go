@@ -83,6 +83,13 @@ func (s *DBService) SaveInsiderRule(ctx context.Context, req InsiderRuleSaveRequ
 
 const maxInsiderRuleMatches = 5000
 
+// ValidateInsiderRuleSaveRequest runs the same pure validation as SaveInsiderRule,
+// without initializing schemas or issuing a database write.
+func ValidateInsiderRuleSaveRequest(req InsiderRuleSaveRequest) error {
+	_, err := normalizeInsiderRuleSaveRequest(req)
+	return err
+}
+
 func normalizeInsiderRuleSaveRequest(req InsiderRuleSaveRequest) (InsiderRuleSaveRequest, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Host = strings.TrimSpace(req.Host)

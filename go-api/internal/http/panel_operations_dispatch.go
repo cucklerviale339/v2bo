@@ -19,7 +19,7 @@ func panelDispatchOperations() []aiops.PanelOperation {
 	add("entry_addresses.save", "保存节点地址组及规则，保留未修改的规则和绑定；仅enabled=1参与实际下发", "POST", "/server/address/save", true, poObj(poMerge(poFields("id:i name description enabled:i"), panelSchema{"rules": poArray(poObj(poFields("id:i name host match_user_ids:a match_user_id_ranges:a enabled:i sort:i"), "host"))}), "name", "rules"))
 	add("entry_addresses.delete", "删除节点地址组，可能使节点回退到原host", "POST", "/server/address/drop", true, id)
 	add("insider_rules.list", "读取优先于节点地址组生效的内鬼规则及用户ID/范围", "GET", "/server/insider/fetch", false, empty)
-	add("insider_rules.save", "保存内鬼规则；先读取原配置，确认用户ID范围及目标节点", "POST", "/server/insider/save", true, poObj(poMerge(poFields("id:i name host match_user_ids:a match_user_id_ranges:a enabled:i sort:i"), panelSchema{"members": poArray(poObj(poFields("server_type server_id:i"), "server_type", "server_id"))}), "host"))
+	add("insider_rules.save", "保存内鬼规则；新增必须填写name、host及用户ID或范围。编辑先读取原配置，按id提交要修改的字段，未提交字段保留原值；用户名单和范围数组为整项替换，追加时须包含原成员", "POST", "/server/insider/save", true, poObj(poMerge(poFields("id:i name host match_user_ids:a match_user_id_ranges:a enabled:i sort:i"), panelSchema{"members": poArray(poObj(poFields("server_type server_id:i"), "server_type", "server_id"))})))
 	add("insider_rules.delete", "删除指定内鬼规则，可能使入口回退到节点地址组或节点host", "POST", "/server/insider/drop", true, id)
 	base := "/dns-failover/"
 	add("entry_monitors.list", "读取启用且实际链路会下发的入口，含去重后的ID/范围、来源和探针状态；include_deleted=true时包含已删除入口", "GET", base+"dispatch-entries", false, poObj(panelSchema{"include_deleted": poBool("是否包含已删除入口，默认false")}))

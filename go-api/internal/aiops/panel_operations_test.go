@@ -149,3 +149,21 @@ func TestAIPanelPreflightErrorRequiresTrustedMarkerAndSafeCode(t *testing.T) {
 		}
 	}
 }
+
+func TestAIInsiderPreflightErrorAndActionClassification(t *testing.T) {
+	for _, code := range []string{"insider_name_required", "insider_invalid_arguments"} {
+		trusted := &PanelOperationError{Status: 400, Code: code, Message: "RAW_SECRET_SENTINEL", NotExecuted: true}
+		out := toolErrorContent(safeAIError(trusted))
+		output, message, ok := panelOperationPreflightFailure(safeAIError(trusted))
+		if !ok || !strings.Contains(out, code) || !strings.Contains(message, "未执行保存") || strings.Contains(out+message, "RAW_SECRET") || panelActionRecovery(Action{Kind: "panel_operation", Status: "failed", Output: output}) != panelRecoveryPreflight {
+			t.Fatalf("validation lost diagnosis or execution state: %s / %s", out, message)
+		}
+		trusted.NotExecuted = false
+		if _, _, ok := panelOperationPreflightFailure(safeAIError(trusted)); ok {
+			t.Fatal("HTTP 400 alone treated as unexecuted")
+		}
+	}
+	if _, _, ok := panelOperationPreflightFailure(&PanelOperationError{Status: 400, Code: "insider_UNKNOWN", NotExecuted: true}); ok {
+		t.Fatal("unrecognized code was trusted")
+	}
+}

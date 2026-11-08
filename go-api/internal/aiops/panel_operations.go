@@ -55,6 +55,10 @@ func panelOperationErrorText(e *PanelOperationError) (string, string) {
 			return e.Code, "未能确认所选 DNS 线路，未发送写请求；请用 dns.record_lines 查询该域名实际可用线路，核对套餐等级及线路名称和 ID"
 		case "dns_preflight_failed":
 			return e.Code, "DNS 写入前检查失败，未发送写请求；请查询 DNS 配置、域名和线路现状，排除原因后再提交修正请求"
+		case "insider_name_required":
+			return e.Code, "规则名称不能为空，未执行保存；新增规则请填写 name，编辑已有规则请核对规则 ID"
+		case "insider_invalid_arguments":
+			return e.Code, "内鬼规则参数未通过后台校验，未执行保存；请核对规则名称、入口地址、用户 ID/范围和启用状态"
 		}
 	}
 	switch e.Status {
@@ -70,6 +74,15 @@ func panelOperationErrorText(e *PanelOperationError) (string, string) {
 		return "rate_limited", "后台操作请求过于频繁，请稍后查询现状，不要重复写操作"
 	default:
 		return "backend_error", "后台操作返回异常，请核对服务与业务现状；写操作禁止自动重试"
+	}
+}
+
+func panelOperationNotExecutedCode(code string) bool {
+	switch code {
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "insider_name_required", "insider_invalid_arguments":
+		return true
+	default:
+		return false
 	}
 }
 
