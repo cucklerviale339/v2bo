@@ -498,11 +498,8 @@ func (s *DBService) processDispatchAutoSplit(ctx context.Context, c dispatchSpli
 		// Bind probes before locking pool targets: reporters lock probe then target.
 		// Holding target locks while inserting FK bindings would invert that order.
 		for index, ip := range ips {
-			var id int64
-			if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_monitor(host,check_port,enabled,check_interval_sec,tcp_timeout_ms) SELECT $2,check_port,TRUE,check_interval_sec,tcp_timeout_ms FROM v2_dispatch_monitor WHERE id=$1 AND enabled AND NOT deleted RETURNING id`, c.ID, ip.IP).Scan(&id); e != nil {
-				return e
-			}
-			if _, e := tx.ExecContext(ctx, `INSERT INTO v2_dispatch_monitor_probe(monitor_id,probe_id) SELECT $2,b.probe_id FROM v2_dispatch_monitor_probe b JOIN v2_dns_probe p ON p.id=b.probe_id AND p.enabled=1 WHERE b.monitor_id=$1`, c.ID, id); e != nil {
+			id, e := cloneDispatchPoolMonitor(ctx, tx, c.ID, ip.IP)
+			if e != nil {
 				return e
 			}
 			mid := a + (b-a)/2
@@ -582,7 +579,10 @@ func (s *DBService) dispatchSplitPoolLimit(ctx context.Context, tx *sql.Tx, refs
 	}
 	items := selected
 	if !lock {
-		rows, err := tx.QueryContext(ctx, `SELECT t.id,t.host,t.port,t.check_interval_sec,t.tcp_timeout_ms FROM v2_dispatch_check_target t WHERE t.kind='pool' AND t.enabled AND t.port=$1 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.host=t.host) ORDER BY t.sort,t.id`, port)
+		// Honor operator priority, then prefer an unused entrance over recycling
+		// one that was recently exposed to another group. Old monitors are a
+		// preference, never a permanent reservation of an otherwise healthy IP.
+		rows, err := tx.QueryContext(ctx, `SELECT t.id,t.host,t.port,t.check_interval_sec,t.tcp_timeout_ms FROM v2_dispatch_check_target t WHERE t.kind='pool' AND t.enabled AND t.port=$1 ORDER BY t.sort,EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.host=t.host),t.id`, port)
 		if err != nil {
 			return nil, err
 		}

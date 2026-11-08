@@ -668,13 +668,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	return err
 }
 func investigationCloneMonitor(ctx context.Context, tx *sql.Tx, source int64, host string) (int64, error) {
-	var id int64
-	err := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_monitor(host,check_port,enabled,check_interval_sec,tcp_timeout_ms) SELECT $2,check_port,TRUE,check_interval_sec,tcp_timeout_ms FROM v2_dispatch_monitor WHERE id=$1 AND enabled AND NOT deleted RETURNING id`, source, host).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_monitor_probe(monitor_id,probe_id) SELECT $2,b.probe_id FROM v2_dispatch_monitor_probe b JOIN v2_dns_probe p ON p.id=b.probe_id AND p.enabled=1 WHERE b.monitor_id=$1`, source, id)
-	return id, err
+	return cloneDispatchPoolMonitor(ctx, tx, source, host)
 }
 
 // Used before the old splitter takes ownership, including when the new master
