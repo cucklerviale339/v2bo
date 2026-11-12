@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -92,8 +93,19 @@ func (f *investigationIntegration) group(host string) InvestigationGroup {
 }
 func (f *investigationIntegration) execProcess(id int64) {
 	f.t.Helper()
-	if err := f.s.processInvestigation(f.ctx, id); err != nil {
-		f.t.Fatal(err)
+	// The database-wide advisory lock is also shared by isolated test schemas.
+	// A busy automatic pass is deliberately skipped in production; retry only
+	// that scheduling result here so the simulated pass actually executes.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := f.s.processInvestigationAction(f.ctx, id, 0, false)
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, ErrInvestigationBusy) || time.Now().After(deadline) {
+			f.t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

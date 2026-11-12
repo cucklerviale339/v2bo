@@ -19,6 +19,7 @@ type investigationPartition struct {
 	Host    string  `json:"host"`
 	GroupID int64   `json:"group_id"`
 	MergeID int64   `json:"merged_into,omitempty"`
+	Name    string  `json:"name,omitempty"`
 }
 
 func lockInvestigationAddresses(ctx context.Context, tx *sql.Tx) error {
@@ -36,7 +37,10 @@ func (s *DBService) healthyObservation(ctx context.Context, tx *sql.Tx, g Invest
 		return nil, err
 	}
 	for _, v := range groups {
-		if v.ID == g.ID || v.RootID != g.RootID || v.Kind != "observation" || v.ManualOnly || len(v.UserIDs) < 2 || v.ReadyAt == 0 {
+		if v.ID == g.ID || v.RootID != g.RootID || v.RouteScope != g.RouteScope || v.Policy != "smart" || v.Kind != "observation" || v.ManualOnly || len(v.UserIDs) < 2 || v.ReadyAt == 0 {
+			continue
+		}
+		if v.RosterFrozen || (v.NormalSince > 0 && time.Now().Unix()-v.NormalSince >= stableObserveSeconds) {
 			continue
 		}
 		var otherPort int64
@@ -99,6 +103,9 @@ func (s *DBService) applyInvestigation(ctx context.Context, tx *sql.Tx, g Invest
 		return err
 	}
 	inScope, err := investigationGroupInScope(ctx, tx, settings.Scope, g.RootID)
+	if g.RouteScope == "global" {
+		inScope = true
+	}
 	if err != nil {
 		return err
 	}
@@ -110,7 +117,7 @@ func (s *DBService) applyInvestigation(ctx context.Context, tx *sql.Tx, g Invest
 SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_delivery WHERE group_id=$1 AND generation=$2
 UNION ALL
 SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_delivery_recent WHERE group_id=$1 AND generation=$2
-) d JOIN v2_dispatch_investigation_member m ON m.group_id=d.group_id AND m.user_id=d.user_id WHERE d.delivered_at>=$3 AND d.delivered_at<$4 GROUP BY d.user_id`, g.ID, g.Generation, g.EpochAt, evidence.First)
+) d WHERE d.delivered_at>=$3 AND d.delivered_at<$4 GROUP BY d.user_id`, g.ID, g.Generation, g.EpochAt, evidence.First)
 	if err != nil {
 		return err
 	}
@@ -154,10 +161,64 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			}
 		}
 	}
+	role := g.LifecycleRole
+	if role == "stable" {
+		role = "ordinary"
+	}
+	whole := false
+	if g.Policy == "failover" {
+		whole = true
+		kind = "recovered"
+	}
+	if evidence.ReceiptsIncomplete {
+		whole = true
+		kind = "recovered"
+	}
+	if settings.LifecycleEnabled || g.RouteScope == "global" {
+		outside, e := hasOutsideExposure(ctx, tx, g)
+		if e != nil {
+			return e
+		}
+		outsideNow, e := hasOutsideDispatch(ctx, tx, g, before)
+		if e != nil {
+			return e
+		}
+		outside = outside || outsideNow
+		if outside && g.LifecycleRole != "whitelist" && evidence.Mode != "manual" {
+			whole = true
+			kind = "recovered"
+		}
+		if g.LifecycleRole == "whitelist" && g.Policy == "smart" {
+			var count int64
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM v2_dispatch_whitelist_fault WHERE root_id=$1 AND confirmed_at>$2`, g.RootID, time.Now().Unix()-86400).Scan(&count); err != nil {
+				return err
+			}
+			if evidence.Mode != "manual" && count >= 1 {
+				kind = "whitelist_bisected"
+				whole = false
+				role = "review"
+				mid := (len(all) + 1) / 2
+				parts = []investigationPartition{{IDs: all[:mid], Kind: "candidate"}, {IDs: all[mid:], Kind: "candidate"}}
+			} else {
+				whole = true
+				kind = "whitelist_failed_over"
+			}
+		} else if g.LifecycleRole == "review" && g.Policy == "smart" && !whole {
+			role = "ordinary"
+		}
+	}
+	if whole {
+		parts = []investigationPartition{{IDs: all, Kind: g.Kind}}
+	}
 	for i := range parts {
 		p := &parts[i]
+		p.Name = investigationGroupName(p.Kind)
+		if role == "review" {
+			p.Name = "老实人·复核"
+		}
 		if len(p.IDs) == 1 {
 			p.Kind = "confirmed"
+			p.Name = investigationGroupName(p.Kind)
 			p.Host = g.Host
 			continue
 		}
@@ -170,6 +231,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				p.MergeID = target.ID
 				p.Host = target.Host
 				p.GroupID = target.ID
+				p.Name = target.Name
 			}
 		}
 	}
@@ -186,7 +248,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 	candidate := dispatchSplitCandidate{ID: g.MonitorID}
 	pool := []DispatchPoolSave{}
 	if needed > 0 {
-		pool, err = s.dispatchSplitPoolLimit(ctx, tx, refs, candidate, false, nil, needed)
+		pool, err = s.lifecyclePool(ctx, tx, g, refs, needed)
 		if err != nil {
 			return err
 		}
@@ -217,26 +279,37 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				}
 			}
 			if p.MergeID > 0 {
-				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET generation=generation+1,epoch_at=$2,ready_at=0,revision=revision+1,reason='新成员加入，重新观察' WHERE id=$1`, p.MergeID, now); e != nil {
+				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET generation=generation+1,epoch_at=$2,ready_at=0,revision=revision+1,reason='新成员加入，按个人记录观察' WHERE id=$1`, p.MergeID, now); e != nil {
 					return e
 				}
-			} else if kind == "no_pulls" {
+			} else if kind == "no_pulls" || whole {
 				p.GroupID = g.ID
 				name := g.Name
-				if !strings.Contains(name, "无人拉取") {
+				if g.LifecycleRole == "stable" && role != "stable" {
+					name = investigationGroupName(g.Kind)
+				}
+				if kind == "no_pulls" && !strings.Contains(name, "无人拉取") {
 					name += " · 无人拉取"
 				}
-				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,generation=generation+1,epoch_at=$5,ready_at=0,config_key='',revision=revision+1,no_pull_count=no_pull_count+1,reason='本轮无人拉取，成员不变，已更换入口' WHERE id=$1`, g.ID, name, p.Host, monitor, now); e != nil {
+				p.Name = name
+				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,generation=generation+1,epoch_at=$5,ready_at=0,config_key='',normal_since=0,normal_checkpoints='{}',lifecycle_role=$6,revision=revision+1,no_pull_count=no_pull_count+CASE WHEN $7='no_pulls' THEN 1 ELSE 0 END,reason=CASE WHEN $7='no_pulls' THEN '本轮无人拉取，成员不变，已更换入口' ELSE '整组已切换健康备用入口' END WHERE id=$1`, g.ID, name, p.Host, monitor, now, role, kind); e != nil {
 					return e
 				}
 			} else {
 				name := investigationGroupName(p.Kind)
-				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, len(p.IDs) == 1, now, map[bool]string{true: "自动产生单人组，仅人工操作", false: "等待新入口确认正常"}[len(p.IDs) == 1]).Scan(&p.GroupID); e != nil {
+				if role == "review" && len(p.IDs) > 1 {
+					name = "老实人·复核"
+				}
+				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason,route_scope,lifecycle_role,policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, len(p.IDs) == 1, now, map[bool]string{true: "自动产生单人组，仅人工操作", false: "等待新入口确认正常"}[len(p.IDs) == 1], g.RouteScope, role, g.Policy).Scan(&p.GroupID); e != nil {
 					return e
 				}
 			}
 			raw, _ := json.Marshal(p.IDs)
-			if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_member SET group_id=$2 WHERE group_id=$1 AND user_id IN(SELECT value::bigint FROM jsonb_array_elements_text($3::jsonb))`, g.ID, p.GroupID, string(raw)); e != nil {
+			table := "v2_dispatch_investigation_member"
+			if g.RouteScope == "global" {
+				table = "v2_dispatch_global_member"
+			}
+			if _, e := tx.ExecContext(ctx, `UPDATE `+table+` SET group_id=$2 WHERE group_id=$1 AND user_id IN(SELECT value::bigint FROM jsonb_array_elements_text($3::jsonb))`, g.ID, p.GroupID, string(raw)); e != nil {
 				return e
 			}
 			for _, id := range p.IDs {
@@ -251,9 +324,25 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			if len(selected) != needed {
 				return fmt.Errorf("备用 IP 健康或占用状态发生变化")
 			}
+			if g.RouteScope == "global" {
+				for _, ip := range selected {
+					ok, e := s.globalHostReady(ctx, tx, ip.IP)
+					if e != nil {
+						return e
+					}
+					if !ok {
+						return fmt.Errorf("全站备用入口的必要端口状态发生变化")
+					}
+				}
+			}
 		}
-		if kind != "no_pulls" {
+		if kind != "no_pulls" && !whole {
 			if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET active=FALSE,revision=revision+1,reason='本轮已完成筛选' WHERE id=$1`, g.ID); e != nil {
+				return e
+			}
+		}
+		if settings.LifecycleEnabled && g.LifecycleRole == "whitelist" && evidence.Mode != "manual" {
+			if _, e := tx.ExecContext(ctx, `INSERT INTO v2_dispatch_whitelist_fault(root_id,group_id,generation,first_failure_at,confirmed_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, g.RootID, g.ID, g.Generation, evidence.First, now); e != nil {
 				return e
 			}
 		}
@@ -285,6 +374,9 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			}
 			if latestEvidence.First != evidence.First {
 				return fmt.Errorf("故障起点发生变化，已取消本次处理")
+			}
+			if latestEvidence.ReceiptsIncomplete && !whole && kind != "whitelist_bisected" {
+				return fmt.Errorf("拉取证据发生变化，已取消本次筛选")
 			}
 		}
 		if g.LegacyRootID > 0 {

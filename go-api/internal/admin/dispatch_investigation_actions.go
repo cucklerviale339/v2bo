@@ -131,10 +131,13 @@ func (s *DBService) ConfirmInvestigation(ctx context.Context, v InvestigationAct
 	if g.ID == 0 || g.Revision != v.Revision {
 		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
-	if g.ManualOnly || len(g.UserIDs) <= 1 {
+	if g.ManualOnly || g.Policy == "fixed" || len(g.UserIDs) <= 1 {
 		return splitEditInvalid("此分组仅允许人工编辑")
 	}
 	inScope, err := investigationGroupInScope(ctx, tx, settings.Scope, g.RootID)
+	if g.RouteScope == "global" {
+		inScope = true
+	}
 	if err != nil {
 		return err
 	}
@@ -156,7 +159,7 @@ func (s *DBService) ConfirmInvestigation(ctx context.Context, v InvestigationAct
 	// Evidence timestamps are seconds. Exclude the entire click second to
 	// prevent an earlier result/receipt in that second entering the new round.
 	at := time.Now().Unix() + 1
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,ready_at=$3,generation=generation+1,revision=revision+1,reason='人工确认入口，重新观察' WHERE id=$1`, g.ID, key, at); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,ready_at=$3,normal_since=0,normal_checkpoints='{}',generation=generation+1,revision=revision+1,reason='人工确认入口，重新观察' WHERE id=$1`, g.ID, key, at); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_investigation_confirmation(group_id,generation,confirmed_at) VALUES($1,$2,$3) ON CONFLICT(group_id) DO UPDATE SET generation=EXCLUDED.generation,confirmed_at=EXCLUDED.confirmed_at`, g.ID, g.Generation+1, at); err != nil {

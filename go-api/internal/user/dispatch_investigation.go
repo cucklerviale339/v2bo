@@ -50,7 +50,11 @@ func LoadInvestigationAssignments(ctx context.Context, q DispatchQueryer, userID
 	// A frozen roster can outlive an account. Apply overrides only to accounts
 	// that still exist, matching the roster used by automatic and manual actions.
 	// The underlying configured ID ranges remain independent of account state.
-	rows, err := q.QueryContext(ctx, `SELECT m.group_id,m.root_id,m.user_id,m.origin_host,g.host,g.generation FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id JOIN v2_dispatch_investigation_group g ON g.id=m.group_id WHERE g.active AND ($1::bigint=0 OR m.user_id=$1) ORDER BY m.root_id,m.user_id`, userID)
+	rows, err := q.QueryContext(ctx, `SELECT m.group_id,m.root_id,m.user_id,m.origin_host,g.host,g.generation FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id JOIN v2_dispatch_investigation_group g ON g.id=m.group_id WHERE g.active AND g.route_scope='business' AND ($1::bigint=0 OR m.user_id=$1)
+AND NOT EXISTS(SELECT 1 FROM v2_dispatch_global_member w JOIN v2_dispatch_investigation_group wg ON wg.id=w.group_id AND wg.active WHERE w.user_id=m.user_id)
+UNION ALL
+SELECT g.id,g.root_id,w.user_id,'*',g.host,g.generation FROM v2_dispatch_global_member w JOIN v2_user u ON u.id=w.user_id JOIN v2_dispatch_investigation_group g ON g.id=w.group_id WHERE g.active AND g.route_scope='global' AND ($1::bigint=0 OR w.user_id=$1)
+ORDER BY 2,3`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +73,7 @@ func LoadInvestigationAssignments(ctx context.Context, q DispatchQueryer, userID
 func applyInvestigationAssignment(item map[string]any, assignments []InvestigationAssignment) {
 	host := NormalizeDispatchHost(fmt.Sprint(item["host"]))
 	for _, a := range assignments {
-		if a.OriginHost == host {
+		if a.OriginHost == "*" || a.OriginHost == host {
 			item["host"] = InvestigationHost{Value: a.Host, GroupID: a.GroupID, Generation: a.Generation}
 			return
 		}
@@ -91,6 +95,23 @@ func investigationCatalog(ctx context.Context, q DispatchQueryer, entries []Disp
 	masks := map[string][]dispatchSpan{}
 	members := map[int64]InvestigationMembers{}
 	for _, a := range assignments {
+		if a.OriginHost == "*" {
+			matched := false
+			for _, e := range entries {
+				if DispatchEntryContains(e, a.UserID) {
+					masks[e.Host] = append(masks[e.Host], dispatchSpan{a.UserID, a.UserID})
+					matched = true
+				}
+			}
+			if matched {
+				if members[a.GroupID].IDs == nil {
+					members[a.GroupID] = InvestigationMembers{Host: a.Host, IDs: map[int64]bool{}}
+				}
+				members[a.GroupID].IDs[a.UserID] = true
+				addDispatchOwnership(result, a.Host, []dispatchSpan{{a.UserID, a.UserID}}, fmt.Sprintf("谁是卧底 #%d", a.GroupID))
+			}
+			continue
+		}
 		original, ok := byHost[a.OriginHost]
 		if !ok || !DispatchEntryContains(original, a.UserID) {
 			continue
@@ -160,15 +181,26 @@ func (s *DBService) RecordInvestigationDelivery(ctx context.Context, userID int6
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `WITH eligible AS (
-SELECT DISTINCT g.id,g.generation,$2,$3 FROM jsonb_to_recordset($1::jsonb) e(group_id bigint,generation bigint,host text)
+SELECT DISTINCT g.id,g.generation,$2::bigint,$3::bigint FROM jsonb_to_recordset($1::jsonb) e(group_id bigint,generation bigint,host text)
 JOIN v2_dispatch_investigation_group g ON g.id=e.group_id AND g.generation=e.generation AND g.host=e.host AND g.active
-JOIN v2_dispatch_investigation_member m ON m.group_id=g.id AND m.user_id=$2
 JOIN v2_dispatch_investigation_settings s ON s.id=1 AND s.enabled AND $3>=s.armed_at
-WHERE $3>=g.epoch_at), first_delivery AS (
+WHERE $3>=g.epoch_at AND (EXISTS(SELECT 1 FROM v2_dispatch_investigation_member m WHERE m.group_id=g.id AND m.user_id=$2) OR EXISTS(SELECT 1 FROM v2_dispatch_global_member w WHERE w.group_id=g.id AND w.user_id=$2))), first_delivery AS (
 INSERT INTO v2_dispatch_investigation_delivery(group_id,generation,user_id,delivered_at)
-SELECT * FROM eligible ON CONFLICT(group_id,generation,user_id) DO UPDATE SET delivered_at=LEAST(EXCLUDED.delivered_at,v2_dispatch_investigation_delivery.delivered_at))
+SELECT * FROM eligible ON CONFLICT(group_id,generation,user_id) DO UPDATE SET delivered_at=LEAST(EXCLUDED.delivered_at,v2_dispatch_investigation_delivery.delivered_at)), recent_delivery AS (
 INSERT INTO v2_dispatch_investigation_delivery_recent(group_id,generation,user_id,delivered_at)
-SELECT * FROM eligible ON CONFLICT DO NOTHING`, string(raw), userID, at)
+SELECT * FROM eligible ON CONFLICT DO NOTHING), stability AS (
+INSERT INTO v2_dispatch_stability_receipt(origin_host,user_id,host,first_at,last_at)
+SELECT DISTINCT m.origin_host,$2::bigint,g.host,$3::bigint,$3::bigint FROM eligible e
+JOIN v2_dispatch_investigation_group g ON g.id=e.id
+JOIN v2_dispatch_investigation_member m ON m.group_id=g.id AND m.user_id=$2
+JOIN v2_dispatch_investigation_settings s ON s.id=1 AND s.lifecycle_enabled AND $3>=s.lifecycle_started_at
+ON CONFLICT(origin_host,user_id) DO UPDATE SET host=EXCLUDED.host,
+first_at=CASE WHEN v2_dispatch_stability_receipt.host=EXCLUDED.host THEN LEAST(v2_dispatch_stability_receipt.first_at,EXCLUDED.first_at) ELSE EXCLUDED.first_at END,
+last_at=EXCLUDED.last_at WHERE EXCLUDED.last_at>=v2_dispatch_stability_receipt.last_at)
+INSERT INTO v2_dispatch_host_exposure(host,user_id,first_at,last_at)
+SELECT DISTINCT host,$2::bigint,$3::bigint,$3::bigint FROM jsonb_to_recordset($1::jsonb) e(group_id bigint,generation bigint,host text)
+WHERE e.group_id>0 OR EXISTS(SELECT 1 FROM v2_dispatch_investigation_settings WHERE id=1 AND enabled AND lifecycle_enabled)
+ON CONFLICT(host,user_id) DO UPDATE SET first_at=LEAST(v2_dispatch_host_exposure.first_at,EXCLUDED.first_at),last_at=GREATEST(v2_dispatch_host_exposure.last_at,EXCLUDED.last_at)`, string(raw), userID, at)
 	if err != nil {
 		investigationDeliveryFailure.Store(time.Now().Unix())
 	}

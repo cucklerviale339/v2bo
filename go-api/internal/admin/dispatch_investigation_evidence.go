@@ -17,13 +17,14 @@ type investigationProbe struct {
 	ResolvedIP string
 }
 type investigationEvidence struct {
-	First        int64              `json:"first_failure_at"`
-	Probes       []int64            `json:"probe_ids"`
-	Controls     map[int64][]string `json:"controls"`
-	Mode         string             `json:"mode"`
-	CutoffSource string             `json:"cutoff_source"`
-	WindowFrom   int64              `json:"verification_from,omitempty"`
-	Warnings     []string           `json:"warnings,omitempty"`
+	First              int64              `json:"first_failure_at"`
+	Probes             []int64            `json:"probe_ids"`
+	Controls           map[int64][]string `json:"controls"`
+	Mode               string             `json:"mode"`
+	CutoffSource       string             `json:"cutoff_source"`
+	WindowFrom         int64              `json:"verification_from,omitempty"`
+	Warnings           []string           `json:"warnings,omitempty"`
+	ReceiptsIncomplete bool               `json:"receipts_incomplete,omitempty"`
 }
 
 func investigationSamples(ctx context.Context, q dispatchQueryer, c dispatchSplitCandidate, from int64) ([]DispatchHistorySample, error) {
@@ -183,8 +184,12 @@ func (s *DBService) investigationEvidenceWithDuration(ctx context.Context, tx *s
 	s.dispatchHistoryMu.Lock()
 	historyFailure := s.dispatchHistoryLastFailureAt
 	s.dispatchHistoryMu.Unlock()
-	if failedAt >= g.EpochAt || historyFailure >= g.EpochAt {
+	if historyFailure >= g.EpochAt {
 		return result, "证据写入曾失败，请恢复正常后重新观察", nil
+	}
+	if failedAt >= g.EpochAt {
+		result.ReceiptsIncomplete = true
+		result.Warnings = append(result.Warnings, "拉取证据写入曾失败，本次只允许整组故障转移，不按缺失记录筛人")
 	}
 	for _, p := range probes {
 		if s.dispatchProbeResetBlocked(p.ProbeID) {
@@ -381,7 +386,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 			g = v
 		}
 	}
-	if g.ID == 0 || g.ManualOnly || len(g.UserIDs) <= 1 {
+	if g.ID == 0 || g.ManualOnly || g.Policy == "fixed" || len(g.UserIDs) <= 1 {
 		if immediate {
 			return splitEditInvalid("分组不存在或仅允许人工编辑")
 		}
@@ -402,7 +407,13 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		}
 		return tx.Commit()
 	}
+	if !immediate && g.LifecycleRole != "ordinary" && !settings.LifecycleEnabled {
+		return finish("老实人自动处理已关闭")
+	}
 	inScope, err := investigationGroupInScope(ctx, tx, settings.Scope, g.RootID)
+	if g.RouteScope == "global" {
+		inScope = true
+	}
 	if err != nil {
 		return err
 	}
@@ -439,7 +450,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 				}
 				g.ConfigKey = key
 			} else {
-				if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
+				if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET config_key=$2,epoch_at=$3,generation=generation+1,ready_at=0,normal_since=0,normal_checkpoints='{}',revision=revision+1,reason='监控配置或会话变更，重新观察' WHERE id=$1`, id, key, now); err != nil {
 					return err
 				}
 				return tx.Commit()
@@ -485,6 +496,9 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		failedAt = max(failedAt, s.dispatchHistoryLastFailureAt)
 		s.dispatchHistoryMu.Unlock()
 		if failedAt >= g.EpochAt {
+			if err = clearNormalObservation(ctx, tx, g.ID); err != nil {
+				return err
+			}
 			if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET ready_at=0,epoch_at=$2,generation=generation+1,revision=revision+1 WHERE id=$1`, id, now+1); err != nil {
 				return err
 			}
@@ -495,7 +509,20 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 				return err
 			}
 		}
-		return finish("正常观察中")
+		if err = s.advanceNormalObservation(ctx, tx, &g, settings, probes); err != nil {
+			return err
+		}
+		if !settings.LifecycleEnabled || g.Policy != "smart" {
+			return finish("正常观察中")
+		}
+		required := stableObserveSeconds
+		if g.LifecycleRole == "stable" {
+			required = whitelistObserveSeconds
+		}
+		if g.LifecycleRole != "whitelist" && g.NormalSince > 0 && g.NormalObservedAt-g.NormalSince >= required {
+			return s.promoteInvestigation(ctx, tx, g, entries, finish)
+		}
+		return finish(lifecycleNormalReason(g, now))
 	}
 	if !immediate && g.ReadyAt == 0 {
 		return finish("新入口尚未确认正常，不按本轮失败筛选")
@@ -521,10 +548,13 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if !immediate && evidence.First < max(g.ReadyAt, settings.ArmedAt) {
 		return finish("故障起点早于有效观察期")
 	}
+	if err = clearNormalObservation(ctx, tx, g.ID); err != nil {
+		return err
+	}
 	// Share limits across the whole immutable family and the previous splitter.
 	if !immediate {
 		var last, count int64
-		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls')`, g.RootID).Scan(&last); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls','recovered','whitelist_failed_over','whitelist_bisected')`, g.RootID).Scan(&last); err != nil {
 			return err
 		}
 		if g.LegacyRootID > 0 {
@@ -537,7 +567,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		if last > 0 && now-last < settings.EntryWindowMinutes*60 {
 			return finish("同一原始组及其后代处于频率限制窗口")
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls','recovered','whitelist_failed_over','whitelist_bisected') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
 			return err
 		}
 		if count >= settings.GlobalMax {

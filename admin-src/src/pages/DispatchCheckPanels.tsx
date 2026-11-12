@@ -12,7 +12,7 @@ const stamp = (v?: number | null) => v ? new Date(v * 1000).toLocaleString() : '
 type Scope = { host: string; user_ids?: string[]; user_id_ranges?: string[]; sources?: string[] };
 export const dispatchScopeText = (s?: Scope) => [...(s?.user_id_ranges || []).map(v => v === '1-9223372036854775807' ? '全部 ID' : v.replace(/-9223372036854775807$/, ' 及以上')), ...(s?.user_ids || [])].join('、') || '当前无下发 ID';
 type State = { probe_id: number; probe_name: string; online: boolean; stale: boolean; success: boolean | null; latency_ms: number | null; error: string; resolved_ip: string; reported_at: number | null; consecutive_success: number };
-type Pool = { id: number; name: string; ip: string; port: number; enabled: boolean; check_interval_sec: number; tcp_timeout_ms: number; sort: number; status: string; available: boolean; used: boolean; references: string[]; ownership: Scope; states: State[] };
+type Pool = { global_compatible: boolean; id: number; name: string; ip: string; port: number; enabled: boolean; check_interval_sec: number; tcp_timeout_ms: number; sort: number; status: string; available: boolean; used: boolean; references: string[]; ownership: Scope; states: State[] };
 type Run = { id: number; status: string; created_at: number; deadline_at: number; completed_at: number | null; expected: number; received: number; failed: number };
 type Result = State & { target_id: number; name: string; port: number; ownership: Scope };
 const statusLabels: Record<string, string> = { available: '可用', in_use: '有配置引用', disabled: '已停用', no_probe: '暂无启用探针', probe_offline: '探针全部离线', unhealthy: '故障', checking: '检测中' };
@@ -79,7 +79,7 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
    else if (first.startsWith('[') && first.endsWith(']')) ip = first.slice(1, -1);
    if (rest.length && /^\d+$/.test(rest[0])) port = Number(rest.shift());
    if (port < 1 || port > 65535) { message.error(`第 ${i + 1} 行端口无效`); return; }
-   parsed.push({ ip, port, name: rest.join(' ') || ip, enabled: true, check_interval_sec: values.check_interval_sec, tcp_timeout_ms: values.tcp_timeout_ms, sort: 0 });
+   parsed.push({ global_compatible: !!values.global_compatible, ip, port, name: rest.join(' ') || ip, enabled: true, check_interval_sec: values.check_interval_sec, tcp_timeout_ms: values.tcp_timeout_ms, sort: 0 });
   }
   await action(async () => { await apiJsonPost(POOL, { items: parsed }); setBatch(false); batchForm.resetFields(); }, `已添加 ${parsed.length} 个备用资源，等待探针测活`);
  };
@@ -87,7 +87,7 @@ export function DispatchPoolPanel({ active }: { active: boolean }) {
   let values: any; try { values = await form.validateFields(); } catch { return; }
   if (!editing) return;
   const { id, ip, port } = editing;
-  await action(async () => { await apiJsonPost(POOL, { items: [{ id, ip, port, ...values }] }); setEditing(null); }, '已保存，等待重新测活');
+  await action(async () => { await apiJsonPost(POOL, { items: [{ id, ip, port, global_compatible: editing.global_compatible, ...values }] }); setEditing(null); }, '已保存，等待重新测活');
  };
  const copyAvailable = async () => {
   const ips = [...new Set(items.filter(p => p.available).map(p => p.ip))];

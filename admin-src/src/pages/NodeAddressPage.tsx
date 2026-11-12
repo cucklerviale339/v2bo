@@ -85,7 +85,7 @@ function mergeUserLookupOptions(current: UserLookupOption[], rows: any): UserLoo
   return Array.from(next.values());
 }
 
-export function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (value: string[]) => void }) {
+export function UserEmailSelect({ value, onChange, id }: { value?: any; onChange?: (value: string[]) => void; id?: string }) {
   const selectedIDs = splitList(value);
   const selectedKey = selectedIDs.join(',');
   const [options, setOptions] = useState<UserLookupOption[]>([]);
@@ -95,15 +95,24 @@ export function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (
   const [searchFailed, setSearchFailed] = useState(false);
   const searchTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const searchSequence = useRef(0);
+  const hydratedIDs = useRef(new Set<string>());
 
   useEffect(() => {
     if (!selectedKey) return;
     let active = true;
-    apiGet('/user/lookup', { ids: selectedKey })
-      .then((res) => {
-        if (active) setOptions((current) => mergeUserLookupOptions(current, res?.data));
-      })
-      .catch(() => undefined);
+    // The lookup API accepts at most 100 IDs; keep large fixed rosters within that limit.
+    const missing = selectedIDs.filter(item => !hydratedIDs.current.has(item));
+    void (async () => {
+      for (let start = 0; active && start < missing.length; start += 100) {
+        const batch = missing.slice(start, start + 100);
+        try {
+          const res = await apiGet('/user/lookup', { ids: batch.join(',') });
+          if (!active) return;
+          batch.forEach(item => hydratedIDs.current.add(item));
+          setOptions((current) => mergeUserLookupOptions(current, res?.data));
+        } catch { return; }
+      }
+    })();
     return () => { active = false; };
   }, [selectedKey]);
 
@@ -152,6 +161,7 @@ export function UserEmailSelect({ value, onChange }: { value?: any; onChange?: (
   };
 
   return <Select
+    id={id}
     mode="tags"
     allowClear
     showSearch

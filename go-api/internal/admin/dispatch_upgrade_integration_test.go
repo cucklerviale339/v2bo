@@ -138,7 +138,7 @@ INSERT INTO v2_runtime_kv(k,v,expire_at,created_at,updated_at) VALUES('legacy-co
 		t.Fatal(err)
 	}
 	var newTables int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE 'v2_dispatch_%'`).Scan(&newTables); err != nil || newTables != 16 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE 'v2_dispatch_%'`).Scan(&newTables); err != nil || newTables != 20 {
 		t.Fatalf("auxiliary tables: %d %v", newTables, err)
 	}
 	if _, err := upgraded.ListDispatchMonitors(ctx); err != nil {

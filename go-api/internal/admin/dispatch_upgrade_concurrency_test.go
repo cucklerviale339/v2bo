@@ -17,7 +17,8 @@ import (
 // first admin/user/background readers really race on a b23bd18-era database.
 func TestPostgresDispatchUpgradeConcurrentFirstReaders(t *testing.T) {
 	f := newSplitIntegration(t)
-	f.exec(`DROP TABLE v2_dispatch_investigation_incident,v2_dispatch_investigation_member,
+	f.exec(`DROP TABLE v2_dispatch_stability_receipt,v2_dispatch_global_member,v2_dispatch_host_exposure,v2_dispatch_whitelist_fault,
+v2_dispatch_investigation_incident,v2_dispatch_investigation_member,
 v2_dispatch_investigation_confirmation,
 v2_dispatch_investigation_delivery_recent,v2_dispatch_investigation_delivery,
 v2_dispatch_investigation_event,v2_dispatch_investigation_health,
@@ -57,6 +58,9 @@ v2_dispatch_investigation_settings,v2_dispatch_investigation_group`)
 	var enabled bool
 	if err := f.db.QueryRow(`SELECT enabled FROM v2_dispatch_investigation_settings WHERE id=1`).Scan(&enabled); err != nil || enabled {
 		t.Fatal("upgrade enabled automation", enabled, err)
+	}
+	if err := f.db.QueryRow(`SELECT lifecycle_enabled FROM v2_dispatch_investigation_settings WHERE id=1`).Scan(&enabled); err != nil || enabled {
+		t.Fatal("upgrade enabled lifecycle", enabled, err)
 	}
 }
 

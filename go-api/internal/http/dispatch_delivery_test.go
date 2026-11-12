@@ -113,6 +113,7 @@ type fakeInvestigation struct {
 	calls      int
 	settings   admin.InvestigationSettings
 	triggerErr error
+	edit       admin.InvestigationEdit
 }
 
 func (s *fakeInvestigation) GetInvestigation(context.Context, int64) (admin.InvestigationView, error) {
@@ -123,9 +124,29 @@ func (s *fakeInvestigation) SaveInvestigation(_ context.Context, v admin.Investi
 	s.settings = v
 	return nil
 }
-func (s *fakeInvestigation) EditInvestigation(context.Context, admin.InvestigationEdit) error {
+func (s *fakeInvestigation) EditInvestigation(_ context.Context, v admin.InvestigationEdit) error {
 	s.calls++
+	s.edit = v
 	return nil
+}
+
+func TestInvestigationEditExplicitMemberListAndLegacyRequest(t *testing.T) {
+	s := &fakeInvestigation{fakeDNSAdminService: &fakeDNSAdminService{}}
+	router := NewRouter(config.Config{AdminPath: "control"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}), WithAdminService(s))
+	path := "/api/v1/control/dns-failover/dispatch-investigation/groups"
+	r := dnsFailoverRequest(router, "PUT", path, `{"id":3,"revision":2,"name":"稳定组","host":"192.0.2.10","user_ids":["11","12"]}`)
+	if r.Code != 200 || s.calls != 1 || s.edit.UserIDs == nil || len(*s.edit.UserIDs) != 2 || (*s.edit.UserIDs)[1] != "12" {
+		t.Fatal(r.Code, r.Body.String(), s.edit)
+	}
+	for _, body := range []string{`{"id":3,"revision":2,"user_ids":[11,12]}`, `{"id":3,"revision":2,"user_ids":"11,12"}`, `{"id":3,"revision":2,"unknown":true}`} {
+		if r := dnsFailoverRequest(router, "PUT", path, body); r.Code != 400 || s.calls != 1 {
+			t.Fatal(r.Code, r.Body.String(), s.calls)
+		}
+	}
+	r = dnsFailoverRequest(router, "PUT", path, `{"id":3,"revision":2,"name":"仅改名","host":"192.0.2.10"}`)
+	if r.Code != 200 || s.edit.UserIDs != nil {
+		t.Fatal("legacy edit changed membership", r.Code, s.edit)
+	}
 }
 func (s *fakeInvestigation) ConfirmInvestigation(context.Context, admin.InvestigationAction) error {
 	s.calls++

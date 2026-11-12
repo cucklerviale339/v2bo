@@ -35,6 +35,7 @@ var dispatchCheckSchema = []string{
  scope JSONB NOT NULL DEFAULT '{}', created_at BIGINT NOT NULL,
  CHECK((kind='pool' AND run_id IS NULL) OR (kind='run' AND run_id IS NOT NULL)))`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_pool_address ON v2_dispatch_check_target(host,port) WHERE kind='pool'`,
+	`ALTER TABLE v2_dispatch_check_target ADD COLUMN IF NOT EXISTS global_compatible BOOLEAN NOT NULL DEFAULT FALSE`,
 	`CREATE INDEX IF NOT EXISTS idx_dispatch_check_run_target ON v2_dispatch_check_target(run_id,id)`,
 	`CREATE INDEX IF NOT EXISTS idx_dispatch_check_run_created ON v2_dispatch_check_run(created_at DESC,id DESC)`,
 	// Probe identity is a snapshot: deleting a probe must not erase history.
@@ -57,6 +58,7 @@ type DispatchPoolSave struct {
 	CheckIntervalSec int64  `json:"check_interval_sec"`
 	TCPTimeoutMS     int64  `json:"tcp_timeout_ms"`
 	Sort             int64  `json:"sort"`
+	GlobalCompatible bool   `json:"global_compatible"`
 }
 type DispatchCheckState struct {
 	DispatchMonitorState
@@ -195,7 +197,7 @@ func (s *DBService) ListDispatchPool(ctx context.Context) ([]DispatchPoolItem, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,enabled,check_interval_sec,tcp_timeout_ms,sort FROM v2_dispatch_check_target WHERE kind='pool' ORDER BY sort,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,enabled,check_interval_sec,tcp_timeout_ms,sort,global_compatible FROM v2_dispatch_check_target WHERE kind='pool' ORDER BY sort,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +205,7 @@ func (s *DBService) ListDispatchPool(ctx context.Context) ([]DispatchPoolItem, e
 	byID := map[int64]int{}
 	for rows.Next() {
 		var x DispatchPoolItem
-		if err = rows.Scan(&x.ID, &x.Name, &x.IP, &x.Port, &x.Enabled, &x.CheckIntervalSec, &x.TCPTimeoutMS, &x.Sort); err != nil {
+		if err = rows.Scan(&x.ID, &x.Name, &x.IP, &x.Port, &x.Enabled, &x.CheckIntervalSec, &x.TCPTimeoutMS, &x.Sort, &x.GlobalCompatible); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -329,11 +331,11 @@ func (s *DBService) SaveDispatchPool(ctx context.Context, items []DispatchPoolSa
 	for _, x := range items {
 		var id int64
 		if x.ID == 0 {
-			err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_check_target(kind,host,port,name,enabled,check_interval_sec,tcp_timeout_ms,sort,created_at)
-   VALUES('pool',$1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, x.IP, x.Port, x.Name, x.Enabled, x.CheckIntervalSec, x.TCPTimeoutMS, x.Sort, time.Now().Unix()).Scan(&id)
+			err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_check_target(kind,host,port,name,enabled,check_interval_sec,tcp_timeout_ms,sort,created_at,global_compatible)
+   VALUES('pool',$1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, x.IP, x.Port, x.Name, x.Enabled, x.CheckIntervalSec, x.TCPTimeoutMS, x.Sort, time.Now().Unix(), x.GlobalCompatible).Scan(&id)
 		} else {
-			err = tx.QueryRowContext(ctx, `UPDATE v2_dispatch_check_target SET name=$2,enabled=$3,check_interval_sec=$4,tcp_timeout_ms=$5,sort=$6,port=$8,version=version+1
-   WHERE id=$1 AND kind='pool' AND host=$7 RETURNING id`, x.ID, x.Name, x.Enabled, x.CheckIntervalSec, x.TCPTimeoutMS, x.Sort, x.IP, x.Port).Scan(&id)
+			err = tx.QueryRowContext(ctx, `UPDATE v2_dispatch_check_target SET name=$2,enabled=$3,check_interval_sec=$4,tcp_timeout_ms=$5,sort=$6,port=$8,version=version+1,global_compatible=$9
+   WHERE id=$1 AND kind='pool' AND host=$7 RETURNING id`, x.ID, x.Name, x.Enabled, x.CheckIntervalSec, x.TCPTimeoutMS, x.Sort, x.IP, x.Port, x.GlobalCompatible).Scan(&id)
 			if err == nil {
 				_, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_check_binding SET session=session+1,sequence=0,success=NULL,latency_ms=NULL,error='',resolved_ip='',streak=0,reported_at=NULL WHERE target_id=$1`, id)
 			}

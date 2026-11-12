@@ -21,7 +21,7 @@ type investigationService interface {
 
 func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.Service, path string) {
 	edit := path == "dispatch-investigation/groups"
-	action := path == "dispatch-investigation/confirm" || path == "dispatch-investigation/trigger"
+	action := path == "dispatch-investigation/confirm" || path == "dispatch-investigation/trigger" || path == "dispatch-investigation/release"
 	if (action && r.Method != http.MethodPost) || (edit && r.Method != http.MethodPut) || (!action && !edit && r.Method != http.MethodPut && r.Method != http.MethodGet) {
 		if action {
 			w.Header().Set("Allow", "POST")
@@ -41,7 +41,20 @@ func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.S
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var err error
-	if action {
+	if path == "dispatch-investigation/release" {
+		var req admin.InvestigationRelease
+		if !decodeStrictDNSFailoverJSON(w, r, &req) {
+			return
+		}
+		releaser, ok := service.(interface {
+			ReleaseInvestigation(context.Context, admin.InvestigationRelease) error
+		})
+		if !ok {
+			writeJSON(w, 503, map[string]any{"message": "全站入口管理暂不可用"})
+			return
+		}
+		err = releaser.ReleaseInvestigation(ctx, req)
+	} else if action {
 		var req admin.InvestigationAction
 		if !decodeStrictDNSFailoverJSON(w, r, &req) {
 			return

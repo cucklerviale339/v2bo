@@ -56,7 +56,7 @@ func TestPostgresInvestigationDeletedAccountsDoNotBlockActions(t *testing.T) {
 			case "edit":
 				err = f.s.EditInvestigation(f.ctx, InvestigationEdit{ID: g.ID, Revision: g.Revision, Name: "edited", Host: "192.0.2.249"})
 			default:
-				err = f.s.processInvestigation(f.ctx, g.ID)
+				f.execProcess(g.ID)
 			}
 			if err != nil {
 				t.Fatal(err)

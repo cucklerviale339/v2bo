@@ -59,6 +59,7 @@ func trackDispatchDelivery(w http.ResponseWriter, r *http.Request, service users
 	}
 	entries := []usersvc.InvestigationDelivery{}
 	seen := map[int64]bool{}
+	seenOrdinary := map[string]bool{}
 	for _, server := range servers {
 		if subscribelink.IsExtra(server) {
 			continue
@@ -66,6 +67,12 @@ func trackDispatchDelivery(w http.ResponseWriter, r *http.Request, service users
 		if h, ok := server["host"].(usersvc.InvestigationHost); ok && !seen[h.GroupID] {
 			seen[h.GroupID] = true
 			entries = append(entries, usersvc.InvestigationDelivery{GroupID: h.GroupID, Generation: h.Generation, Host: h.Value})
+		} else if !ok {
+			host := usersvc.NormalizeDispatchHost(fmt.Sprint(server["host"]))
+			if host != "" && host != "<nil>" && !seenOrdinary[host] {
+				seenOrdinary[host] = true
+				entries = append(entries, usersvc.InvestigationDelivery{Host: host})
+			}
 		}
 	}
 	if len(entries) == 0 {

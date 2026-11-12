@@ -18,6 +18,8 @@ import (
 
 type InvestigationSettings struct {
 	Enabled             bool   `json:"enabled"`
+	LifecycleEnabled    bool   `json:"lifecycle_enabled"`
+	LifecycleStartedAt  int64  `json:"lifecycle_started_at"`
 	Scope               string `json:"scope"`
 	Revision            int64  `json:"revision"`
 	ArmedAt             int64  `json:"armed_at"`
@@ -26,26 +28,35 @@ type InvestigationSettings struct {
 	GlobalMax           int64  `json:"global_max"`
 }
 type InvestigationGroup struct {
-	ID              int64    `json:"id"`
-	RootID          int64    `json:"root_id"`
-	ParentID        int64    `json:"parent_id"`
-	LegacyRootID    int64    `json:"legacy_root_id"`
-	Name            string   `json:"name"`
-	Kind            string   `json:"kind"`
-	Host            string   `json:"host"`
-	MonitorID       int64    `json:"monitor_id"`
-	Active          bool     `json:"active"`
-	ManualOnly      bool     `json:"manual_only"`
-	Revision        int64    `json:"revision"`
-	Generation      int64    `json:"generation"`
-	EpochAt         int64    `json:"epoch_at"`
-	ReadyAt         int64    `json:"ready_at"`
-	ConfirmedAt     int64    `json:"confirmed_at"`
-	ConfigKey       string   `json:"-"`
-	Reason          string   `json:"reason"`
-	NoPullCount     int64    `json:"no_pull_count"`
-	UserIDs         []string `json:"user_ids"`
-	ExcludedUserIDs []string `json:"excluded_user_ids,omitempty"`
+	ID                int64           `json:"id"`
+	RootID            int64           `json:"root_id"`
+	ParentID          int64           `json:"parent_id"`
+	LegacyRootID      int64           `json:"legacy_root_id"`
+	Name              string          `json:"name"`
+	Kind              string          `json:"kind"`
+	Host              string          `json:"host"`
+	MonitorID         int64           `json:"monitor_id"`
+	Active            bool            `json:"active"`
+	ManualOnly        bool            `json:"manual_only"`
+	Revision          int64           `json:"revision"`
+	Generation        int64           `json:"generation"`
+	EpochAt           int64           `json:"epoch_at"`
+	ReadyAt           int64           `json:"ready_at"`
+	ConfirmedAt       int64           `json:"confirmed_at"`
+	ConfigKey         string          `json:"-"`
+	Reason            string          `json:"reason"`
+	NoPullCount       int64           `json:"no_pull_count"`
+	UserIDs           []string        `json:"user_ids"`
+	ExcludedUserIDs   []string        `json:"excluded_user_ids,omitempty"`
+	RouteScope        string          `json:"route_scope"`
+	LifecycleRole     string          `json:"lifecycle_role"`
+	Policy            string          `json:"policy"`
+	NormalSince       int64           `json:"normal_since"`
+	NormalObservedAt  int64           `json:"normal_observed_at"`
+	PulledCount       int64           `json:"pulled_count"`
+	PulledUserIDs     []string        `json:"-"`
+	RosterFrozen      bool            `json:"roster_frozen"`
+	NormalCheckpoints json.RawMessage `json:"-"`
 }
 type InvestigationEvent struct {
 	ID             int64           `json:"id"`
@@ -141,11 +152,11 @@ func readInvestigationSettings(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, lock bool) (InvestigationSettings, error) {
 	var v InvestigationSettings
-	query := `SELECT enabled,scope,revision,armed_at,entry_window_minutes,global_window_minutes,global_max FROM v2_dispatch_investigation_settings WHERE id=1`
+	query := `SELECT enabled,scope,revision,armed_at,entry_window_minutes,global_window_minutes,global_max,lifecycle_enabled,lifecycle_started_at FROM v2_dispatch_investigation_settings WHERE id=1`
 	if lock {
 		query += ` FOR UPDATE`
 	}
-	err := q.QueryRowContext(ctx, query).Scan(&v.Enabled, &v.Scope, &v.Revision, &v.ArmedAt, &v.EntryWindowMinutes, &v.GlobalWindowMinutes, &v.GlobalMax)
+	err := q.QueryRowContext(ctx, query).Scan(&v.Enabled, &v.Scope, &v.Revision, &v.ArmedAt, &v.EntryWindowMinutes, &v.GlobalWindowMinutes, &v.GlobalMax, &v.LifecycleEnabled, &v.LifecycleStartedAt)
 	return v, err
 }
 func readInvestigationGroups(ctx context.Context, q dispatchQueryer, active bool) ([]InvestigationGroup, error) {
@@ -157,8 +168,10 @@ func readInvestigationGroups(ctx context.Context, q dispatchQueryer, active bool
 func readInvestigationGroupsWhere(ctx context.Context, q dispatchQueryer, predicate string, args ...any) ([]InvestigationGroup, error) {
 	rows, err := q.QueryContext(ctx, `WITH selected AS MATERIALIZED (SELECT g.* FROM v2_dispatch_investigation_group g WHERE `+predicate+`), roster AS (
 SELECT m.group_id,jsonb_agg(m.user_id::text ORDER BY m.user_id) AS ids
-FROM selected g JOIN v2_dispatch_investigation_member m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
-SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb)
+FROM selected g JOIN (SELECT m.group_id,m.user_id FROM v2_dispatch_investigation_member m JOIN selected sg ON sg.id=m.group_id AND sg.route_scope='business'
+UNION SELECT w.group_id,w.user_id FROM v2_dispatch_global_member w) m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
+SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb),g.route_scope,g.lifecycle_role,g.policy,g.normal_since,g.normal_checkpoints,
+(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen
 FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_investigation_confirmation c ON c.group_id=g.id AND c.generation=g.generation ORDER BY g.id`, args...)
 	if err != nil {
 		return nil, err
@@ -168,11 +181,25 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 	for rows.Next() {
 		var g InvestigationGroup
 		var ids []byte
-		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids); err != nil {
+		var pulls []byte
+		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(ids, &g.UserIDs); err != nil {
 			return nil, err
+		}
+		if err = json.Unmarshal(pulls, &g.PulledUserIDs); err != nil {
+			return nil, err
+		}
+		g.PulledCount = int64(len(g.PulledUserIDs))
+		checkpoints := map[int64]normalCheckpoint{}
+		if err = json.Unmarshal(g.NormalCheckpoints, &checkpoints); err != nil {
+			return nil, err
+		}
+		for _, cp := range checkpoints {
+			if g.NormalObservedAt == 0 || cp.ReportedAt < g.NormalObservedAt {
+				g.NormalObservedAt = cp.ReportedAt
+			}
 		}
 		out = append(out, g)
 	}
@@ -240,6 +267,16 @@ func currentInvestigationGroups(groups []InvestigationGroup, members map[int64]u
 			}
 		}
 		g.UserIDs, g.ExcludedUserIDs = ids, excluded
+		pulled := map[string]bool{}
+		for _, id := range g.PulledUserIDs {
+			pulled[id] = true
+		}
+		g.PulledCount = 0
+		for _, id := range ids {
+			if pulled[id] {
+				g.PulledCount++
+			}
+		}
 		if len(ids) > 0 {
 			visible = append(visible, g)
 		}
@@ -278,11 +315,21 @@ func (s *DBService) SaveInvestigation(ctx context.Context, v InvestigationSettin
 		v.Scope = current.Scope
 	}
 	now := time.Now().Unix()
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_settings SET enabled=$1,entry_window_minutes=$2,global_window_minutes=$3,global_max=$4,armed_at=$5,scope=$6,revision=revision+1 WHERE id=1`, v.Enabled, v.EntryWindowMinutes, v.GlobalWindowMinutes, v.GlobalMax, now, v.Scope); err != nil {
+	armed := current.ArmedAt
+	if current.Enabled != v.Enabled || current.Scope != v.Scope {
+		armed = now
+	}
+	lifecycleStarted := current.LifecycleStartedAt
+	if v.LifecycleEnabled && (!current.LifecycleEnabled || !current.Enabled && v.Enabled) {
+		lifecycleStarted = now
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_settings SET enabled=$1,entry_window_minutes=$2,global_window_minutes=$3,global_max=$4,armed_at=$5,scope=$6,revision=revision+1,lifecycle_enabled=$7,lifecycle_started_at=$8 WHERE id=1`, v.Enabled, v.EntryWindowMinutes, v.GlobalWindowMinutes, v.GlobalMax, armed, v.Scope, v.LifecycleEnabled, lifecycleStarted); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET epoch_at=$1,ready_at=0,config_key='',generation=generation+1,revision=revision+1,reason=CASE WHEN manual_only THEN reason ELSE '等待入口恢复正常后重新观察' END WHERE active`, now); err != nil {
-		return err
+	if current.Enabled != v.Enabled || current.Scope != v.Scope {
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET epoch_at=$1,ready_at=0,config_key='',normal_since=0,normal_checkpoints='{}',generation=generation+1,revision=revision+1,reason=CASE WHEN manual_only THEN reason ELSE '等待入口恢复正常后重新观察' END WHERE active`, now); err != nil {
+			return err
+		}
 	}
 	if err = investigationAudit(ctx, tx, 0, 0, "settings", 0, map[string]any{"before": current, "after": v}); err != nil {
 		return err
@@ -451,7 +498,7 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(originals) == 0 {
+	if len(originals) == 0 && !settings.LifecycleEnabled {
 		return nil
 	}
 	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
@@ -509,6 +556,11 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 			return err
 		}
 	}
+	if settings.LifecycleEnabled {
+		if err = s.admitInvestigationMembers(ctx, tx, now, settings.Scope); err != nil {
+			return err
+		}
+	}
 	if err = tx.Commit(); err == nil {
 		s.invalidateDispatchCatalog()
 	}
@@ -557,11 +609,13 @@ func investigationGroupInScope(ctx context.Context, tx *sql.Tx, scope string, ro
 }
 
 type InvestigationEdit struct {
-	ID         int64  `json:"id"`
-	Revision   int64  `json:"revision"`
-	Name       string `json:"name"`
-	Host       string `json:"host"`
-	ManualOnly bool   `json:"manual_only"`
+	ID         int64     `json:"id"`
+	Revision   int64     `json:"revision"`
+	Name       string    `json:"name"`
+	Host       string    `json:"host"`
+	ManualOnly bool      `json:"manual_only"`
+	Policy     string    `json:"policy"`
+	UserIDs    *[]string `json:"user_ids,omitempty"`
 }
 
 func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) error {
@@ -597,7 +651,13 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	if g.ID == 0 || g.Revision != v.Revision {
 		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
-	if len(g.UserIDs) <= 1 && !v.ManualOnly {
+	if v.Policy == "" {
+		v.Policy = g.Policy
+	}
+	if v.Policy != "smart" && v.Policy != "failover" && v.Policy != "fixed" {
+		return splitEditInvalid("自动策略无效")
+	}
+	if v.UserIDs == nil && len(g.UserIDs) <= 1 && !v.ManualOnly {
 		return splitEditInvalid("单人组只能人工操作")
 	}
 	if err = lockInvestigationAddresses(ctx, tx); err != nil {
@@ -612,7 +672,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 		return splitEditInvalid("分组已不参与当前下发")
 	}
 	g = current[0]
-	if len(g.UserIDs) <= 1 && !v.ManualOnly {
+	if v.UserIDs == nil && len(g.UserIDs) <= 1 && !v.ManualOnly {
 		return splitEditInvalid("单人组只能人工操作")
 	}
 	now := time.Now().Unix()
@@ -622,13 +682,6 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 			if entry.Host == v.Host {
 				return splitEditInvalid("新地址已经参与其他实际下发")
 			}
-		}
-		var exists bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_monitor WHERE host=$1)`, v.Host).Scan(&exists); err != nil {
-			return err
-		}
-		if exists {
-			return splitEditInvalid("新地址已存在监控配置，请使用独立入口")
 		}
 		refs, e := dispatchPoolReferences(ctx, tx)
 		if e != nil {
@@ -642,10 +695,22 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,manual_only=$5,revision=revision+1,generation=generation+1,epoch_at=$6,ready_at=0,config_key='',reason='人工编辑后重新观察' WHERE id=$1`, g.ID, v.Name, v.Host, monitor, v.ManualOnly, now); err != nil {
+	memberEdit, err := editInvestigationMembers(ctx, tx, g, &v)
+	if err != nil {
 		return err
 	}
-	if err = investigationAudit(ctx, tx, g.RootID, g.ID, "edited", 0, map[string]any{"before": g, "after": v}); err != nil {
+	if v.Host != g.Host {
+		// A -> B -> A without a B receipt must not reuse A's old clock.
+		if _, err = tx.ExecContext(ctx, `DELETE FROM v2_dispatch_stability_receipt d USING v2_dispatch_investigation_member m WHERE m.group_id=$1 AND d.origin_host=m.origin_host AND d.user_id=m.user_id`, g.ID); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,manual_only=$5,policy=$7,revision=revision+1,
+generation=generation+CASE WHEN host<>$3 OR $8 THEN 1 ELSE 0 END,epoch_at=CASE WHEN host<>$3 OR $8 THEN $6 ELSE epoch_at END,ready_at=CASE WHEN host<>$3 OR $8 THEN 0 ELSE ready_at END,config_key=CASE WHEN host<>$3 THEN '' ELSE config_key END,
+normal_since=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN 0 ELSE normal_since END,normal_checkpoints=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN '{}'::jsonb ELSE normal_checkpoints END,reason=CASE WHEN host<>$3 OR $8 THEN '人工编辑后重新观察' ELSE reason END WHERE id=$1`, g.ID, v.Name, v.Host, monitor, v.ManualOnly, now, v.Policy, memberEdit.Changed); err != nil {
+		return err
+	}
+	if err = investigationAudit(ctx, tx, g.RootID, g.ID, "edited", 0, map[string]any{"before": g, "after": v, "added_ids": memberEdit.Added, "removed_ids": memberEdit.Removed}); err != nil {
 		return err
 	}
 	after, err := usersvc.DispatchEntriesFrom(ctx, tx)
@@ -656,7 +721,12 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	for _, id := range investigationGroupIDs(g) {
 		moves[id] = v.Host
 	}
-	if err = verifyInvestigationMove(before, after, g.Host, moves); err != nil {
+	if memberEdit.ExpectedHosts != nil {
+		err = verifyInvestigationMemberEdit(before, after, memberEdit.ExpectedHosts)
+	} else {
+		err = verifyInvestigationMove(before, after, g.Host, moves)
+	}
+	if err != nil {
 		return splitEditInvalid(err.Error())
 	}
 	if err = checkDispatchCapacity(ctx, tx); err != nil {
