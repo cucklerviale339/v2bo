@@ -37,7 +37,7 @@ func (s *DBService) healthyObservation(ctx context.Context, tx *sql.Tx, g Invest
 		return nil, err
 	}
 	for _, v := range groups {
-		if v.ID == g.ID || v.RootID != g.RootID || v.RouteScope != g.RouteScope || v.Policy != "smart" || v.Kind != "observation" || v.ManualOnly || len(v.UserIDs) < 2 || v.ReadyAt == 0 {
+		if v.ID == g.ID || v.RootID != g.RootID || v.RouteScope != g.RouteScope || v.LifecycleRole != g.LifecycleRole || v.Policy != "smart" || v.Kind != "observation" || v.ManualOnly || len(v.UserIDs) == 0 || v.ReadyAt == 0 || v.ObservationRepairPending {
 			continue
 		}
 		if v.RosterFrozen || (v.NormalSince > 0 && time.Now().Unix()-v.NormalSince >= stableObserveSeconds) {
@@ -146,6 +146,14 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 	case len(yes) == 0:
 		kind = "no_pulls"
 		parts = append(parts, investigationPartition{IDs: all, Kind: g.Kind})
+	case len(all) == 1:
+		// A previous non-recipient is eligible for screening in a later round.
+		// There is one recipient to isolate, not two halves (one empty).
+		groupKind := "candidate"
+		if len(recentIDs) > 0 {
+			groupKind = "recent"
+		}
+		parts = append(parts, investigationPartition{IDs: all, Kind: groupKind})
 	case len(no) == 0 && (len(recentIDs) == 0 || len(olderIDs) == 0):
 		kind = "bisected"
 		mid := (len(all) + 1) / 2
@@ -207,6 +215,10 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			role = "ordinary"
 		}
 	}
+	if evidence.Mode == "observation_repair" {
+		whole = true
+		kind = "observation_repaired"
+	}
 	if whole {
 		parts = []investigationPartition{{IDs: all, Kind: g.Kind}}
 	}
@@ -216,13 +228,13 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		if role == "review" {
 			p.Name = "老实人·复核"
 		}
-		if len(p.IDs) == 1 {
+		if len(p.IDs) == 1 && p.Kind != "observation" {
 			p.Kind = "confirmed"
 			p.Name = investigationGroupName(p.Kind)
 			p.Host = g.Host
 			continue
 		}
-		if p.Kind == "observation" && kind == "filtered" {
+		if p.Kind == "observation" && (kind == "filtered" || kind == "recovered" || kind == "observation_repaired" || (kind == "no_pulls" && len(all) == 1)) && g.RouteScope == "business" && role == "ordinary" && g.Policy == "smart" {
 			target, e := s.healthyObservation(ctx, tx, g, groups)
 			if e != nil {
 				return e
@@ -292,7 +304,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 					name += " · 无人拉取"
 				}
 				p.Name = name
-				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,generation=generation+1,epoch_at=$5,ready_at=0,config_key='',normal_since=0,normal_checkpoints='{}',lifecycle_role=$6,revision=revision+1,no_pull_count=no_pull_count+CASE WHEN $7='no_pulls' THEN 1 ELSE 0 END,reason=CASE WHEN $7='no_pulls' THEN '本轮无人拉取，成员不变，已更换入口' ELSE '整组已切换健康备用入口' END WHERE id=$1`, g.ID, name, p.Host, monitor, now, role, kind); e != nil {
+				if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,generation=generation+1,epoch_at=$5,ready_at=0,config_key='',normal_since=0,normal_checkpoints='{}',lifecycle_role=$6,revision=revision+1,observation_repair_pending=FALSE,no_pull_count=no_pull_count+CASE WHEN $7='no_pulls' THEN 1 ELSE 0 END,reason=CASE WHEN $7='no_pulls' THEN '本轮无人拉取，成员不变，已更换入口' ELSE '整组已切换健康备用入口' END WHERE id=$1`, g.ID, name, p.Host, monitor, now, role, kind); e != nil {
 					return e
 				}
 			} else {
@@ -300,7 +312,8 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				if role == "review" && len(p.IDs) > 1 {
 					name = "老实人·复核"
 				}
-				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason,route_scope,lifecycle_role,policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, len(p.IDs) == 1, now, map[bool]string{true: "自动产生单人组，仅人工操作", false: "等待新入口确认正常"}[len(p.IDs) == 1], g.RouteScope, role, g.Policy).Scan(&p.GroupID); e != nil {
+				manual := len(p.IDs) == 1 && p.Kind != "observation"
+				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason,route_scope,lifecycle_role,policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, manual, now, map[bool]string{true: "自动产生单人组，仅人工操作", false: "等待新入口确认正常"}[manual], g.RouteScope, role, g.Policy).Scan(&p.GroupID); e != nil {
 					return e
 				}
 			}
@@ -336,8 +349,8 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				}
 			}
 		}
-		if kind != "no_pulls" && !whole {
-			if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET active=FALSE,revision=revision+1,reason='本轮已完成筛选' WHERE id=$1`, g.ID); e != nil {
+		if (kind != "no_pulls" && !whole) || parts[0].MergeID > 0 {
+			if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET active=FALSE,observation_repair_pending=FALSE,revision=revision+1,reason='本轮已完成筛选' WHERE id=$1`, g.ID); e != nil {
 				return e
 			}
 		}
@@ -364,7 +377,18 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		if key != g.ConfigKey || (evidence.Mode != "manual" && !fresh) {
 			return fmt.Errorf("监控配置或新鲜证据发生变化")
 		}
-		if evidence.Mode != "manual" {
+		for _, p := range parts {
+			if p.MergeID > 0 {
+				target, e := s.healthyObservation(ctx, tx, g, groups)
+				if e != nil {
+					return e
+				}
+				if target == nil || target.ID != p.MergeID {
+					return fmt.Errorf("目标观察入口健康状态发生变化")
+				}
+			}
+		}
+		if evidence.Mode != "manual" && evidence.Mode != "observation_repair" {
 			latestEvidence, reason, e := s.investigationEvidenceWithDuration(ctx, tx, g, states, before, duration)
 			if e != nil {
 				return e
@@ -384,7 +408,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				return e
 			}
 		}
-		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "reason": map[string]string{"filtered": "按首次失败前120分钟及本轮实际拉取记录筛选", "bisected": "全部拉取过且属于同一时间类别，按实际人数二分", "no_pulls": "无人拉取，成员不变"}[kind]})
+		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "reason": map[string]string{"filtered": "按首次失败前120分钟及本轮实际拉取记录筛选", "bisected": "全部拉取过且属于同一时间类别，按实际人数二分", "no_pulls": "无人拉取，成员不变", "recovered": "保留成员并切换健康观察入口", "observation_repaired": "补完历史未拉取单人组的健康观察入口分配"}[kind]})
 	}
 	if err = attempt(); err != nil {
 		if _, e := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT investigation_apply`); e != nil {

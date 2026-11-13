@@ -386,7 +386,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 			g = v
 		}
 	}
-	if g.ID == 0 || g.ManualOnly || g.Policy == "fixed" || len(g.UserIDs) <= 1 {
+	if g.ID == 0 || g.ManualOnly || g.Policy == "fixed" || investigationSingleManual(g) {
 		if immediate {
 			return splitEditInvalid("分组不存在或仅允许人工编辑")
 		}
@@ -463,7 +463,8 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	for _, p := range probes {
 		allSuccess = allSuccess && p.Success
 	}
-	if !immediate && allSuccess {
+	repair := g.ObservationRepairPending && g.Kind == "observation" && g.LifecycleRole == "ordinary" && g.RouteScope == "business"
+	if !immediate && allSuccess && !repair {
 		stage = "更新正常入口观察状态"
 		for _, p := range probes {
 			// A real latest success supersedes every earlier incident. Only this
@@ -516,7 +517,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		if g.LifecycleRole == "stable" {
 			required = whitelistObserveSeconds
 		}
-		if g.LifecycleRole != "whitelist" && g.NormalSince > 0 && g.NormalObservedAt-g.NormalSince >= required {
+		if len(g.UserIDs) > 1 && g.LifecycleRole != "whitelist" && g.NormalSince > 0 && g.NormalObservedAt-g.NormalSince >= required {
 			return s.promoteInvestigation(ctx, tx, g, entries, finish)
 		}
 		return finish(lifecycleNormalReason(g, now))
@@ -524,7 +525,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if !immediate && g.LifecycleRole != "ordinary" && !settings.LifecycleEnabled {
 		return finish("老实人自动处理已关闭")
 	}
-	if !immediate && g.ReadyAt == 0 {
+	if !immediate && !repair && g.ReadyAt == 0 {
 		return finish("新入口尚未确认正常，不按本轮失败筛选")
 	}
 	duration := int64(600)
@@ -534,7 +535,11 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	var evidence investigationEvidence
 	var reason string
 	stage = "读取故障与拉取证据"
-	if immediate {
+	if repair && !immediate {
+		// Complete a proven historical non-recipient partition, not a new
+		// failure diagnosis. Never fabricate a successful baseline or a cutoff.
+		evidence = investigationEvidence{Mode: "observation_repair", CutoffSource: "original_unpulled_partition", Controls: map[int64][]string{}, Warnings: []string{"补完历史未拉取观察分支的健康入口分配，不按当前拉取记录重新筛人"}}
+	} else if immediate {
 		evidence, err = s.manualInvestigationEvidence(ctx, tx, g, probes)
 	} else {
 		evidence, reason, err = s.investigationEvidenceWithDuration(ctx, tx, g, probes, entries, duration)
@@ -545,7 +550,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if reason != "" {
 		return finish(reason)
 	}
-	if !immediate && evidence.First < max(g.ReadyAt, settings.ArmedAt) {
+	if !immediate && !repair && evidence.First < max(g.ReadyAt, settings.ArmedAt) {
 		return finish("故障起点早于有效观察期")
 	}
 	if err = clearNormalObservation(ctx, tx, g.ID); err != nil {
@@ -554,7 +559,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	// Share limits across the whole immutable family and the previous splitter.
 	if !immediate {
 		var last, count int64
-		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls','recovered','whitelist_failed_over','whitelist_bisected')`, g.RootID).Scan(&last); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(created_at),0) FROM v2_dispatch_investigation_event WHERE root_id=$1 AND kind IN('filtered','bisected','no_pulls','recovered','observation_repaired','whitelist_failed_over','whitelist_bisected')`, g.RootID).Scan(&last); err != nil {
 			return err
 		}
 		if g.LegacyRootID > 0 {
@@ -567,7 +572,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		if last > 0 && now-last < settings.EntryWindowMinutes*60 {
 			return finish("同一原始组及其后代处于频率限制窗口")
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls','recovered','whitelist_failed_over','whitelist_bisected') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls','recovered','observation_repaired','whitelist_failed_over','whitelist_bisected') AND created_at>$1)+(SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
 			return err
 		}
 		if count >= settings.GlobalMax {

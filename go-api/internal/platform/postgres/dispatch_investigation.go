@@ -46,4 +46,28 @@ var DispatchInvestigationSchema = []string{
 	// Import each existing round once. Resets must not resurrect evidence from
 	// before a confirmed fault, host edit, or manual confirmation.
 	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS normal_history_imported BOOLEAN NOT NULL DEFAULT FALSE`,
+	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS observation_repair_pending BOOLEAN NOT NULL DEFAULT FALSE`,
+	// Repair only untouched system-created singleton non-recipients. The birth
+	// audit is authoritative; never infer innocence from a current missing log,
+	// rewrite past audits, or override a later administrator's decision.
+	`DO $$ BEGIN IF to_regclass('v2_dispatch_monitor') IS NOT NULL THEN WITH corrected AS (
+UPDATE v2_dispatch_investigation_group g SET kind='observation',name='观察',manual_only=FALSE,
+observation_repair_pending=TRUE,revision=revision+1,reason='历史未拉取单人组分类已纠正，等待分配健康观察入口'
+WHERE g.active AND g.kind='confirmed' AND g.name='实锤内鬼' AND g.manual_only AND g.revision=1 AND g.generation=1
+AND g.route_scope='business' AND g.lifecycle_role='ordinary' AND g.policy='smart'
+AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_event x WHERE x.group_id=g.id AND x.kind IN('edited','confirmed_entry','members_moved','members_admitted'))
+AND EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.id=g.monitor_id AND NOT COALESCE((to_jsonb(m)->>'deleted')::boolean,FALSE))
+AND EXISTS(SELECT 1 FROM v2_dispatch_investigation_event e CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'partitions','[]'::jsonb)) p
+WHERE e.group_id=g.parent_id AND e.root_id=g.root_id AND e.kind='filtered' AND e.created_at BETWEEN g.created_at-1 AND g.created_at+1
+AND p->>'group_id'=g.id::text AND p->>'host'=g.host AND p->>'kind'='confirmed'
+AND jsonb_array_length(COALESCE(p->'user_ids','[]'::jsonb))=1
+AND e.payload->'before'->>'host'=g.host
+AND COALESCE(e.payload->'unpulled_ids','[]'::jsonb) @> (p->'user_ids')
+AND NOT (COALESCE(e.payload->'pulled_ids','[]'::jsonb) @> (p->'user_ids'))
+AND EXISTS(SELECT 1 FROM v2_dispatch_investigation_member a JOIN v2_user u ON u.id=a.user_id WHERE a.group_id=g.id AND a.user_id::text=p->'user_ids'->>0)
+AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_member a WHERE a.group_id=g.id AND a.user_id::text<>p->'user_ids'->>0))
+RETURNING g.id,g.root_id,g.parent_id,g.host)
+INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload)
+SELECT root_id,id,'observation_corrected',EXTRACT(EPOCH FROM clock_timestamp())::bigint,
+jsonb_build_object('host',host,'parent_group_id',parent_id,'reason','原筛选未拉取分支被单人规则误标，恢复观察并补发健康入口') FROM corrected; END IF; END $$`,
 }

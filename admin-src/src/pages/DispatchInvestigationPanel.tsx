@@ -6,7 +6,7 @@ import { UserEmailSelect } from './NodeAddressPage';
 import '../styles/investigation.css';
 
 type Settings = { enabled: boolean; lifecycle_enabled: boolean; scope: 'all' | 'multi_range'; revision: number; entry_window_minutes: number; global_window_minutes: number; global_max: number };
-type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number; route_scope: 'business' | 'global'; lifecycle_role: 'ordinary' | 'stable' | 'whitelist' | 'review'; normal_since: number; normal_observed_at: number; pulled_count: number; policy: 'smart' | 'failover' | 'fixed' };
+type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number; route_scope: 'business' | 'global'; lifecycle_role: 'ordinary' | 'stable' | 'whitelist' | 'review'; normal_since: number; normal_observed_at: number; pulled_count: number; policy: 'smart' | 'failover' | 'fixed'; observation_repair_pending?: boolean };
 type GroupEdit = Group & { member_ids: string[] };
 const canEditMembers = (g?: Group) => g?.route_scope === 'business' && (g.lifecycle_role === 'stable' || g.lifecycle_role === 'whitelist');
 const parseMemberIDs = (value: string[] = []) => [...new Set(value.map(id => id.trim()).filter(Boolean))];
@@ -15,7 +15,7 @@ type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
 const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑', confirmed_entry: '人工确认入口', manual_trigger: '人工立即触发' };
-Object.assign(kindName, { observation_imported: '承接历史观察', recovered: '整组故障转移', stable_promoted: '进入稳定组', whitelist_promoted: '加入老实人', whitelist_failed_over: '老实人故障转移', whitelist_bisected: '老实人二次故障 · 已二分', whitelist_returned: '复核通过', global_released: '退出全站管理', members_admitted: '接收新增用户', members_moved: '人工移出成员' });
+Object.assign(kindName, { observation_corrected: '纠正观察组误标', observation_repaired: '观察组补发入口', observation_imported: '承接历史观察', recovered: '整组故障转移', stable_promoted: '进入稳定组', whitelist_promoted: '加入老实人', whitelist_failed_over: '老实人故障转移', whitelist_bisected: '老实人二次故障 · 已二分', whitelist_returned: '复核通过', global_released: '退出全站管理', members_admitted: '接收新增用户', members_moved: '人工移出成员' });
 const policyNames = { smart: '智能筛选', failover: '仅故障转移', fixed: '固定下发' };
 function memberRanges(ids: string[]) {
  const sorted = [...new Set(ids.filter(id => /^[1-9]\d*$/.test(id)))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
@@ -63,11 +63,15 @@ const processStates: Record<string, [string, string]> = {
  '入口仍向组外用户下发，暂停独立稳定观察': ['待名单隔离', 'paused'],
  '稳定，等待全站白名单复核完成': ['稳定', 'active'],
 };
+function singletonManual(g: Group, count = g.user_ids.length) {
+ return count <= 1 && !(count === 1 && g.kind === 'observation' && g.lifecycle_role === 'ordinary' && g.route_scope === 'business');
+}
 function processState(g: Group, enabled?: boolean) {
- if (g.manual_only || g.user_ids.length <= 1) return { label: '仅人工', tone: 'paused', detail: '仅人工操作，不参与自动筛选或入口分配' };
+ if (g.manual_only || singletonManual(g)) return { label: '仅人工', tone: 'paused', detail: '仅人工操作，不参与自动筛选或入口分配' };
  if (g.policy === 'fixed') return { label: '固定下发', tone: 'paused', detail: '仅监控，不自动更换入口或分组' };
  if (enabled === undefined) return { label: '—', tone: 'paused', detail: '等待设置加载' };
  if (!enabled) return { label: '已关闭', tone: 'paused', detail: '总开关已关闭，暂停自动处理' };
+ if (g.observation_repair_pending) return { label: '待补入口', tone: 'waiting', detail: g.reason || '未拉取观察组等待补发健康入口' };
  if (g.reason.startsWith('正常观察中')) return { label: '观察中', tone: 'active', detail: g.reason };
  if (g.reason.startsWith('老实人，')) return { label: '持续监控', tone: 'active', detail: g.reason };
  if (g.reason.startsWith('稳定组')) return { label: '稳定', tone: 'active', detail: g.reason };
@@ -85,11 +89,11 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  const [filter, setFilter] = useState('all'), [releasing, setReleasing] = useState<Group>(), [releaseIDs, setReleaseIDs] = useState('');
  const [section, setSection] = useState('ordinary'), [searches, setSearches] = useState<Record<string, string>>({});
  const editingMemberCount = canEditMembers(editing) ? parseMemberIDs(editingMemberIDs ?? editing?.user_ids).length : editing?.user_ids.length || 0;
- useEffect(() => { if (editing && editingMemberCount === 1) editForm.setFieldValue('manual_only', true); }, [editing, editingMemberCount]);
+ useEffect(() => { if (editing && singletonManual(editing, editingMemberCount)) editForm.setFieldValue('manual_only', true); }, [editing, editingMemberCount]);
  const stageGroups = (role: string) => groups.filter(g => g.lifecycle_role === role);
  const ordinaryGroups = groups.filter(g => g.lifecycle_role !== 'stable' && g.lifecycle_role !== 'whitelist');
- const visibleGroups = ordinaryGroups.filter(g => filter === 'all' || (filter === 'manual' ? g.manual_only || g.user_ids.length <= 1 : g.user_ids.length > 1 && !g.manual_only));
- const openEditor = (g: Group) => { editForm.resetFields(); setEditing(g); editForm.setFieldsValue({ ...g, member_ids: [...g.user_ids], manual_only: g.manual_only || g.user_ids.length <= 1 }); };
+ const visibleGroups = ordinaryGroups.filter(g => filter === 'all' || (filter === 'manual' ? g.manual_only || singletonManual(g) : !singletonManual(g) && !g.manual_only));
+ const openEditor = (g: Group) => { editForm.resetFields(); setEditing(g); editForm.setFieldsValue({ ...g, member_ids: [...g.user_ids], manual_only: g.manual_only || singletonManual(g) }); };
  const generation = useRef(0), initialized = useRef(false), revision = useRef(0);
  const load = async () => {
   const seq = ++generation.current;
@@ -112,7 +116,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  };
  const saveEdit = async () => {
   if (!editing) return;
-  try { const values = await editForm.validateFields(); setSaving(true); generation.current++; await apiPut(endpoint + '/groups', { id: editing.id, revision: editing.revision, name: values.name, host: values.host, manual_only: editingMemberCount <= 1 || values.manual_only, policy: values.policy, ...(canEditMembers(editing) ? { user_ids: parseMemberIDs(values.member_ids) } : {}) }); setEditing(undefined); message.success('分组已保存'); await load(); }
+  try { const values = await editForm.validateFields(); setSaving(true); generation.current++; await apiPut(endpoint + '/groups', { id: editing.id, revision: editing.revision, name: values.name, host: values.host, manual_only: singletonManual(editing, editingMemberCount) || values.manual_only, policy: values.policy, ...(canEditMembers(editing) ? { user_ids: parseMemberIDs(values.member_ids) } : {}) }); setEditing(undefined); message.success('分组已保存'); await load(); }
   catch (e: any) { if (!e.errorFields) message.error(e.message || '保存失败'); } finally { setSaving(false); }
  };
  const release = async () => {
@@ -140,7 +144,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    { title: '下发入口', width: 164, render: (_, g) => <Typography.Text className="investigation-host" copyable>{g.host}</Typography.Text> },
    { title: '监控状态', width: 140, render: (_, g) => { if (error) return <Tag>状态读取失败</Tag>; const m = monitors.find(m => m.id === g.monitor_id && m.host === g.host); return m ? <DispatchMonitorStatus entry={m} /> : <Tag>状态待刷新</Tag>; } },
    { title: '自动处理', width: 110, render: (_, g) => { const state = processState(g, settings?.enabled); return <div className="investigation-process"><Tooltip title={state.detail}><span tabIndex={0} className={`investigation-process-state tone-${state.tone}`}>{state.label}</span></Tooltip>{g.no_pull_count > 0 && <span className="investigation-caption">未拉取 ×{g.no_pull_count}</span>}</div>; } },
-   { title: '操作', width: 200, fixed: 'right', className: 'investigation-actions', render: (_, g) => <Space size={0}><Button type="link" disabled={saving || actionBusy} onClick={() => openEditor(g)}>编辑</Button>{!g.manual_only && g.policy !== 'fixed' && g.user_ids.length > 1 && <><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'confirm' }); }}>确认入口</Button><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'trigger' }); }}>立即触发</Button></>}</Space> },
+   { title: '操作', width: 200, fixed: 'right', className: 'investigation-actions', render: (_, g) => <Space size={0}><Button type="link" disabled={saving || actionBusy} onClick={() => openEditor(g)}>编辑</Button>{!g.manual_only && g.policy !== 'fixed' && !singletonManual(g) && <><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'confirm' }); }}>确认入口</Button><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'trigger' }); }}>立即触发</Button></>}</Space> },
   ]} expandable={{ columnWidth: 32, expandedRowRender: g => <div className="investigation-details"><div className="investigation-detail-meta"><span>类型：{g.lifecycle_role === 'stable' ? '稳定组' : g.lifecycle_role === 'whitelist' ? '老实人' : g.lifecycle_role === 'review' ? '老实人复核' : g.parent_id === 0 && g.kind === 'candidate' ? '初始入口' : kindName[g.kind]}</span><span>{g.route_scope === 'global' ? '全站下发' : '业务范围下发'}</span><span>策略：{policyNames[g.policy] || '智能筛选'}</span><span>原始组：#{g.root_id}</span>{g.parent_id > 0 && <span>父组：#{g.parent_id}</span>}</div>{g.normal_since > 0 && settings?.lifecycle_enabled && <div className="investigation-detail-reason">入口有效观察 {Math.max(0, ((g.normal_observed_at || g.normal_since) - g.normal_since) / 86400).toFixed(1)} 天 · {g.lifecycle_role === 'stable' ? '每人拉取A后再观察7天' : g.lifecycle_role === 'whitelist' ? '持续监控' : '每人成功拉取后观察3天'}</div>}{g.route_scope === 'global' && <Button size="small" style={{ marginBottom: 12 }} onClick={() => { setReleasing(g); setReleaseIDs(g.user_ids.join(', ')); }}>退出全站管理</Button>}{g.reason && <div className="investigation-detail-reason">处理说明：{g.reason}</div>}<div className="investigation-members"><span className="investigation-caption">成员 ID</span><Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text></div></div> }} locale={{ emptyText }} />
  );
  const renderMaintenance = (role: 'stable' | 'whitelist') => {
@@ -178,14 +182,14 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    { title: '结果', render: (_, e) => <Tag>{kindName[e.kind] || e.kind}</Tag> }, { title: '筛选截止', render: (_, e) => stamp(e.first_failure_at) },
    { title: '拉取 / 未拉取', render: (_, e) => e.payload.pulled_ids ? `${e.payload.pulled_ids.length} / ${e.payload.unpulled_ids?.length || 0}` : '—' },
    { title: '处理后入口', render: (_, e) => e.payload.partitions?.map((p, i) => <div key={i}>#{p.group_id} · {p.name || kindName[p.kind]} · {p.user_ids.length} 人 → {p.host}{p.merged_into ? '（归并）' : ''}</div>) || e.payload.host || '—' },
-  ]} expandable={{ expandedRowRender: e => <div>{e.payload.evidence?.mode && <div>执行方式：{e.payload.evidence.mode === 'manual' ? '人工立即触发' : '自动触发'} · 截止依据：{({ established_incident: '已记录故障起点', first_observed_failure: '首次观察失败', manual_snapshot: '人工操作时点' } as Record<string, string>)[e.payload.evidence.cutoff_source || ''] || '—'}</div>}{e.payload.evidence?.warnings?.map((warning, i) => <div key={i}>{warning}</div>)}{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.user_ids && <div>相关用户 ID：{e.payload.user_ids.join(', ')}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
+  ]} expandable={{ expandedRowRender: e => <div>{e.payload.evidence?.mode && <div>执行方式：{e.payload.evidence.mode === 'manual' ? '人工立即触发' : e.payload.evidence.mode === 'observation_repair' ? '历史观察组补发' : '自动触发'} · 截止依据：{({ established_incident: '已记录故障起点', first_observed_failure: '首次观察失败', manual_snapshot: '人工操作时点', original_unpulled_partition: '原筛选未拉取分支' } as Record<string, string>)[e.payload.evidence.cutoff_source || ''] || '—'}</div>}{e.payload.evidence?.warnings?.map((warning, i) => <div key={i}>{warning}</div>)}{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.user_ids && <div>相关用户 ID：{e.payload.user_ids.join(', ')}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
   <Modal open={!!editing} title={editing?.lifecycle_role === 'stable' ? '编辑稳定组' : editing?.lifecycle_role === 'whitelist' ? '编辑老实人组' : '编辑分组'} width={canEditMembers(editing) ? 960 : 520} onCancel={() => setEditing(undefined)} onOk={saveEdit} confirmLoading={saving} okText="保存" destroyOnClose>
    <Form form={editForm} layout="vertical" className={canEditMembers(editing) ? 'investigation-maintenance-form' : undefined}>
     <div className="investigation-edit-fields">
      <Form.Item name="name" label="组名" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item>
      <Form.Item name="host" label="下发地址" rules={[{ required: true }]}><Input /></Form.Item>
      <Form.Item name="policy" label="自动策略" rules={[{ required: true }]}><Select options={Object.entries(policyNames).map(([value, label]) => ({ value, label }))} /></Form.Item>
-     <Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={editingMemberCount <= 1} /></Form.Item>
+     <Form.Item name="manual_only" label="仅人工操作" valuePropName="checked"><Switch disabled={!!editing && singletonManual(editing, editingMemberCount)} /></Form.Item>
     </div>
     {canEditMembers(editing) ? <div className="investigation-edit-members">
      <Form.Item name="member_ids" label={`用户成员（${editingMemberCount} 人）`} tooltip="按具体用户保存。移出后恢复原业务下发；新增成员从成功拉取新入口后重新计时。" rules={[{ validator: (_, value) => { const ids = parseMemberIDs(value); return ids.length > 0 && ids.length <= 20000 && ids.every(id => /^[1-9]\d*$/.test(id)) ? Promise.resolve() : Promise.reject(new Error('请选择1至20000个具体用户，不支持ID范围')); } }]}><UserEmailSelect key={editing?.id} /></Form.Item>

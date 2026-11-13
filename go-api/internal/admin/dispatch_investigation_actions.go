@@ -131,7 +131,7 @@ func (s *DBService) ConfirmInvestigation(ctx context.Context, v InvestigationAct
 	if g.ID == 0 || g.Revision != v.Revision {
 		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
-	if g.ManualOnly || g.Policy == "fixed" || len(g.UserIDs) <= 1 {
+	if g.ManualOnly || g.Policy == "fixed" || investigationSingleManual(g) {
 		return splitEditInvalid("此分组仅允许人工编辑")
 	}
 	inScope, err := investigationGroupInScope(ctx, tx, settings.Scope, g.RootID)

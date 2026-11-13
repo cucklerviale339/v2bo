@@ -465,7 +465,7 @@ func (s *DBService) processDispatchAutoSplit(ctx context.Context, c dispatchSpli
 		return finish()
 	}
 	var count, last int64
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)+(SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls') AND created_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM v2_dispatch_auto_split_operation WHERE status='succeeded' AND updated_at>$1)+(SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls','recovered','observation_repaired','whitelist_failed_over','whitelist_bisected') AND created_at>$1)`, now-settings.GlobalWindowMinutes*60).Scan(&count); err != nil {
 		return false, err
 	}
 	if count >= settings.GlobalMax {

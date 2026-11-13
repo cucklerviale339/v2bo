@@ -28,37 +28,45 @@ type InvestigationSettings struct {
 	GlobalMax           int64  `json:"global_max"`
 }
 type InvestigationGroup struct {
-	ID                    int64           `json:"id"`
-	RootID                int64           `json:"root_id"`
-	ParentID              int64           `json:"parent_id"`
-	LegacyRootID          int64           `json:"legacy_root_id"`
-	Name                  string          `json:"name"`
-	Kind                  string          `json:"kind"`
-	Host                  string          `json:"host"`
-	MonitorID             int64           `json:"monitor_id"`
-	Active                bool            `json:"active"`
-	ManualOnly            bool            `json:"manual_only"`
-	Revision              int64           `json:"revision"`
-	Generation            int64           `json:"generation"`
-	EpochAt               int64           `json:"epoch_at"`
-	ReadyAt               int64           `json:"ready_at"`
-	ConfirmedAt           int64           `json:"confirmed_at"`
-	ConfigKey             string          `json:"-"`
-	Reason                string          `json:"reason"`
-	NoPullCount           int64           `json:"no_pull_count"`
-	UserIDs               []string        `json:"user_ids"`
-	ExcludedUserIDs       []string        `json:"excluded_user_ids,omitempty"`
-	RouteScope            string          `json:"route_scope"`
-	LifecycleRole         string          `json:"lifecycle_role"`
-	Policy                string          `json:"policy"`
-	NormalSince           int64           `json:"normal_since"`
-	NormalObservedAt      int64           `json:"normal_observed_at"`
-	PulledCount           int64           `json:"pulled_count"`
-	PulledUserIDs         []string        `json:"-"`
-	RosterFrozen          bool            `json:"roster_frozen"`
-	NormalCheckpoints     json.RawMessage `json:"-"`
-	NormalHistoryImported bool            `json:"-"`
+	ID                       int64           `json:"id"`
+	RootID                   int64           `json:"root_id"`
+	ParentID                 int64           `json:"parent_id"`
+	LegacyRootID             int64           `json:"legacy_root_id"`
+	Name                     string          `json:"name"`
+	Kind                     string          `json:"kind"`
+	Host                     string          `json:"host"`
+	MonitorID                int64           `json:"monitor_id"`
+	Active                   bool            `json:"active"`
+	ManualOnly               bool            `json:"manual_only"`
+	Revision                 int64           `json:"revision"`
+	Generation               int64           `json:"generation"`
+	EpochAt                  int64           `json:"epoch_at"`
+	ReadyAt                  int64           `json:"ready_at"`
+	ConfirmedAt              int64           `json:"confirmed_at"`
+	ConfigKey                string          `json:"-"`
+	Reason                   string          `json:"reason"`
+	NoPullCount              int64           `json:"no_pull_count"`
+	UserIDs                  []string        `json:"user_ids"`
+	ExcludedUserIDs          []string        `json:"excluded_user_ids,omitempty"`
+	RouteScope               string          `json:"route_scope"`
+	LifecycleRole            string          `json:"lifecycle_role"`
+	Policy                   string          `json:"policy"`
+	NormalSince              int64           `json:"normal_since"`
+	NormalObservedAt         int64           `json:"normal_observed_at"`
+	PulledCount              int64           `json:"pulled_count"`
+	PulledUserIDs            []string        `json:"-"`
+	RosterFrozen             bool            `json:"roster_frozen"`
+	NormalCheckpoints        json.RawMessage `json:"-"`
+	NormalHistoryImported    bool            `json:"-"`
+	ObservationRepairPending bool            `json:"observation_repair_pending"`
 }
+
+// A non-recipient is an observer even when alone. Only this ordinary business
+// group is exempt from singleton manual handling; candidates/stages are not.
+func investigationSingleManual(g InvestigationGroup) bool {
+	return len(g.UserIDs) <= 1 && !(len(g.UserIDs) == 1 && g.Kind == "observation" && g.LifecycleRole == "ordinary" && g.RouteScope == "business")
+}
+
 type InvestigationEvent struct {
 	ID             int64           `json:"id"`
 	RootID         int64           `json:"root_id"`
@@ -172,7 +180,7 @@ SELECT m.group_id,jsonb_agg(m.user_id::text ORDER BY m.user_id) AS ids
 FROM selected g JOIN (SELECT m.group_id,m.user_id FROM v2_dispatch_investigation_member m JOIN selected sg ON sg.id=m.group_id AND sg.route_scope='business'
 UNION SELECT w.group_id,w.user_id FROM v2_dispatch_global_member w) m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
 SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb),g.route_scope,g.lifecycle_role,g.policy,g.normal_since,g.normal_checkpoints,
-(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen,g.normal_history_imported
+(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen,g.normal_history_imported,g.observation_repair_pending
 FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_investigation_confirmation c ON c.group_id=g.id AND c.generation=g.generation ORDER BY g.id`, args...)
 	if err != nil {
 		return nil, err
@@ -183,7 +191,7 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 		var g InvestigationGroup
 		var ids []byte
 		var pulls []byte
-		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen, &g.NormalHistoryImported); err != nil {
+		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen, &g.NormalHistoryImported, &g.ObservationRepairPending); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(ids, &g.UserIDs); err != nil {
@@ -658,7 +666,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	if v.Policy != "smart" && v.Policy != "failover" && v.Policy != "fixed" {
 		return splitEditInvalid("自动策略无效")
 	}
-	if v.UserIDs == nil && len(g.UserIDs) <= 1 && !v.ManualOnly {
+	if v.UserIDs == nil && investigationSingleManual(g) && !v.ManualOnly {
 		return splitEditInvalid("单人组只能人工操作")
 	}
 	if err = lockInvestigationAddresses(ctx, tx); err != nil {
@@ -673,7 +681,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 		return splitEditInvalid("分组已不参与当前下发")
 	}
 	g = current[0]
-	if v.UserIDs == nil && len(g.UserIDs) <= 1 && !v.ManualOnly {
+	if v.UserIDs == nil && investigationSingleManual(g) && !v.ManualOnly {
 		return splitEditInvalid("单人组只能人工操作")
 	}
 	now := time.Now().Unix()
@@ -708,7 +716,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET name=$2,host=$3,monitor_id=$4,manual_only=$5,policy=$7,revision=revision+1,
 generation=generation+CASE WHEN host<>$3 OR $8 THEN 1 ELSE 0 END,epoch_at=CASE WHEN host<>$3 OR $8 THEN $6 ELSE epoch_at END,ready_at=CASE WHEN host<>$3 OR $8 THEN 0 ELSE ready_at END,config_key=CASE WHEN host<>$3 THEN '' ELSE config_key END,
-normal_since=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN 0 ELSE normal_since END,normal_checkpoints=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN '{}'::jsonb ELSE normal_checkpoints END,reason=CASE WHEN host<>$3 OR $8 THEN '人工编辑后重新观察' ELSE reason END WHERE id=$1`, g.ID, v.Name, v.Host, monitor, v.ManualOnly, now, v.Policy, memberEdit.Changed); err != nil {
+normal_since=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN 0 ELSE normal_since END,normal_checkpoints=CASE WHEN host<>$3 OR manual_only<>$5 OR policy<>$7 THEN '{}'::jsonb ELSE normal_checkpoints END,observation_repair_pending=CASE WHEN host<>$3 THEN FALSE ELSE observation_repair_pending END,reason=CASE WHEN host<>$3 OR $8 THEN '人工编辑后重新观察' ELSE reason END WHERE id=$1`, g.ID, v.Name, v.Host, monitor, v.ManualOnly, now, v.Policy, memberEdit.Changed); err != nil {
 		return err
 	}
 	if err = investigationAudit(ctx, tx, g.RootID, g.ID, "edited", 0, map[string]any{"before": g, "after": v, "added_ids": memberEdit.Added, "removed_ids": memberEdit.Removed}); err != nil {
