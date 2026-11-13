@@ -107,8 +107,14 @@ func mergeObservationPauses(spans []observationPause) []observationPause {
 }
 
 func (s *DBService) advanceNormalObservation(ctx context.Context, tx *sql.Tx, g *InvestigationGroup, settings InvestigationSettings, probes []investigationProbe) error {
-	if !settings.LifecycleEnabled || g.Policy != "smart" {
+	if g.Policy != "smart" {
 		return nil
+	}
+	if !g.NormalHistoryImported {
+		ready, err := s.importNormalHistory(ctx, tx, g, settings, probes)
+		if err != nil || !ready {
+			return err
+		}
 	}
 	previous := map[int64]normalCheckpoint{}
 	_ = json.Unmarshal(g.NormalCheckpoints, &previous)
@@ -132,7 +138,7 @@ func (s *DBService) advanceNormalObservation(ctx context.Context, tx *sql.Tx, g 
 		checkpoints[p.ProbeID] = normalCheckpoint{p.Version, p.RunID, p.Sequence, p.Reported}
 	}
 	if g.NormalSince == 0 || reset > 0 || len(previous) != len(probes) {
-		g.NormalSince = max(latest, max(g.EpochAt, settings.LifecycleStartedAt))
+		g.NormalSince = max(latest, g.EpochAt)
 	} else {
 		for _, gap := range mergeObservationPauses(pauses) {
 			g.NormalSince += max(int64(0), gap.To-max(gap.From, g.NormalSince))
@@ -144,7 +150,6 @@ func (s *DBService) advanceNormalObservation(ctx context.Context, tx *sql.Tx, g 
 			}
 		}
 	}
-	g.NormalSince = max(g.NormalSince, settings.LifecycleStartedAt)
 	raw, _ := json.Marshal(checkpoints)
 	g.NormalCheckpoints = raw
 	g.NormalObservedAt = observed
@@ -399,20 +404,16 @@ func (s *DBService) promoteInvestigation(ctx context.Context, tx *sql.Tx, g Inve
 	if len(actual) != 1 || !reflect.DeepEqual(actual[0].UserIDs, g.UserIDs) {
 		return finish("分组实际成员发生变化，等待重新确认")
 	}
-	settings, err := readInvestigationSettings(ctx, tx, false)
-	if err != nil {
-		return err
-	}
 	role, name, required := "stable", "稳定组", stableObserveSeconds
 	if g.LifecycleRole == "stable" {
 		role, name, required = "whitelist", "老实人", whitelistObserveSeconds
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.user_id FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id
 JOIN v2_dispatch_stability_receipt d ON d.origin_host=m.origin_host AND d.user_id=m.user_id AND d.host=$2
-WHERE m.group_id=$1 AND GREATEST(d.first_at,$3::bigint,$4::bigint)<=$5::bigint-$6::bigint
+WHERE m.group_id=$1 AND GREATEST(d.first_at,$3::bigint)<=$4::bigint-$5::bigint
 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_member other JOIN v2_dispatch_investigation_group x ON x.id=other.group_id AND x.active
 WHERE other.user_id=m.user_id AND x.id<>$1 AND (x.manual_only OR x.policy<>'smart' OR EXISTS(SELECT 1 FROM v2_dispatch_monitor_state st WHERE st.monitor_id=x.monitor_id AND NOT st.success)))
-ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, settings.LifecycleStartedAt, min(time.Now().Unix(), g.NormalObservedAt), required)
+ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.NormalObservedAt), required)
 	if err != nil {
 		return err
 	}

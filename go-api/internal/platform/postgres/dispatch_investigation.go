@@ -28,7 +28,8 @@ var DispatchInvestigationSchema = []string{
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_investigation_health(id INTEGER PRIMARY KEY CHECK(id=1),delivery_failure_at BIGINT NOT NULL DEFAULT 0)`,
 	`INSERT INTO v2_dispatch_investigation_health(id) VALUES(1) ON CONFLICT DO NOTHING`,
 	// Opt-in lifecycle: existing installations keep their current dispatch until
-	// the administrator enables it. No historical stability is inferred.
+	// the administrator enables it. Retained evidence is imported by the worker,
+	// never by inferring health from an old group creation date.
 	`ALTER TABLE v2_dispatch_investigation_settings ADD COLUMN IF NOT EXISTS lifecycle_enabled BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN IF NOT EXISTS lifecycle_started_at BIGINT NOT NULL DEFAULT 0`,
 	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS route_scope TEXT NOT NULL DEFAULT 'business' CHECK(route_scope IN('business','global')), ADD COLUMN IF NOT EXISTS lifecycle_role TEXT NOT NULL DEFAULT 'ordinary' CHECK(lifecycle_role IN('ordinary','whitelist','review')), ADD COLUMN IF NOT EXISTS normal_since BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS normal_checkpoints JSONB NOT NULL DEFAULT '{}', ADD COLUMN IF NOT EXISTS policy TEXT NOT NULL DEFAULT 'smart' CHECK(policy IN('smart','failover','fixed'))`,
 	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS roster_frozen BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -42,4 +43,7 @@ var DispatchInvestigationSchema = []string{
 	// An origin is the existing business selector, never an all-node override.
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_stability_receipt(origin_host TEXT NOT NULL,user_id BIGINT NOT NULL,host TEXT NOT NULL,first_at BIGINT NOT NULL,last_at BIGINT NOT NULL,PRIMARY KEY(origin_host,user_id))`,
 	`CREATE INDEX IF NOT EXISTS idx_dispatch_stability_host ON v2_dispatch_stability_receipt(host,user_id)`,
+	// Import each existing round once. Resets must not resurrect evidence from
+	// before a confirmed fault, host edit, or manual confirmation.
+	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS normal_history_imported BOOLEAN NOT NULL DEFAULT FALSE`,
 }

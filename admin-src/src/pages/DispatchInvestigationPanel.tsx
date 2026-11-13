@@ -15,7 +15,7 @@ type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
 const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑', confirmed_entry: '人工确认入口', manual_trigger: '人工立即触发' };
-Object.assign(kindName, { recovered: '整组故障转移', stable_promoted: '进入稳定组', whitelist_promoted: '加入老实人', whitelist_failed_over: '老实人故障转移', whitelist_bisected: '老实人二次故障 · 已二分', whitelist_returned: '复核通过', global_released: '退出全站管理', members_admitted: '接收新增用户', members_moved: '人工移出成员' });
+Object.assign(kindName, { observation_imported: '承接历史观察', recovered: '整组故障转移', stable_promoted: '进入稳定组', whitelist_promoted: '加入老实人', whitelist_failed_over: '老实人故障转移', whitelist_bisected: '老实人二次故障 · 已二分', whitelist_returned: '复核通过', global_released: '退出全站管理', members_admitted: '接收新增用户', members_moved: '人工移出成员' });
 const policyNames = { smart: '智能筛选', failover: '仅故障转移', fixed: '固定下发' };
 function memberRanges(ids: string[]) {
  const sorted = [...new Set(ids.filter(id => /^[1-9]\d*$/.test(id)))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);

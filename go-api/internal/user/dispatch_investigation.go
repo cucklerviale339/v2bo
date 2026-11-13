@@ -193,7 +193,6 @@ INSERT INTO v2_dispatch_stability_receipt(origin_host,user_id,host,first_at,last
 SELECT DISTINCT m.origin_host,$2::bigint,g.host,$3::bigint,$3::bigint FROM eligible e
 JOIN v2_dispatch_investigation_group g ON g.id=e.id
 JOIN v2_dispatch_investigation_member m ON m.group_id=g.id AND m.user_id=$2
-JOIN v2_dispatch_investigation_settings s ON s.id=1 AND s.lifecycle_enabled AND $3>=s.lifecycle_started_at
 ON CONFLICT(origin_host,user_id) DO UPDATE SET host=EXCLUDED.host,
 first_at=CASE WHEN v2_dispatch_stability_receipt.host=EXCLUDED.host THEN LEAST(v2_dispatch_stability_receipt.first_at,EXCLUDED.first_at) ELSE EXCLUDED.first_at END,
 last_at=EXCLUDED.last_at WHERE EXCLUDED.last_at>=v2_dispatch_stability_receipt.last_at)

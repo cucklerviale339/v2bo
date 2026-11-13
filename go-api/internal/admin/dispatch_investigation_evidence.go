@@ -407,9 +407,6 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		}
 		return tx.Commit()
 	}
-	if !immediate && g.LifecycleRole != "ordinary" && !settings.LifecycleEnabled {
-		return finish("老实人自动处理已关闭")
-	}
 	inScope, err := investigationGroupInScope(ctx, tx, settings.Scope, g.RootID)
 	if g.RouteScope == "global" {
 		inScope = true
@@ -523,6 +520,9 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 			return s.promoteInvestigation(ctx, tx, g, entries, finish)
 		}
 		return finish(lifecycleNormalReason(g, now))
+	}
+	if !immediate && g.LifecycleRole != "ordinary" && !settings.LifecycleEnabled {
+		return finish("老实人自动处理已关闭")
 	}
 	if !immediate && g.ReadyAt == 0 {
 		return finish("新入口尚未确认正常，不按本轮失败筛选")

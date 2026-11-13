@@ -28,35 +28,36 @@ type InvestigationSettings struct {
 	GlobalMax           int64  `json:"global_max"`
 }
 type InvestigationGroup struct {
-	ID                int64           `json:"id"`
-	RootID            int64           `json:"root_id"`
-	ParentID          int64           `json:"parent_id"`
-	LegacyRootID      int64           `json:"legacy_root_id"`
-	Name              string          `json:"name"`
-	Kind              string          `json:"kind"`
-	Host              string          `json:"host"`
-	MonitorID         int64           `json:"monitor_id"`
-	Active            bool            `json:"active"`
-	ManualOnly        bool            `json:"manual_only"`
-	Revision          int64           `json:"revision"`
-	Generation        int64           `json:"generation"`
-	EpochAt           int64           `json:"epoch_at"`
-	ReadyAt           int64           `json:"ready_at"`
-	ConfirmedAt       int64           `json:"confirmed_at"`
-	ConfigKey         string          `json:"-"`
-	Reason            string          `json:"reason"`
-	NoPullCount       int64           `json:"no_pull_count"`
-	UserIDs           []string        `json:"user_ids"`
-	ExcludedUserIDs   []string        `json:"excluded_user_ids,omitempty"`
-	RouteScope        string          `json:"route_scope"`
-	LifecycleRole     string          `json:"lifecycle_role"`
-	Policy            string          `json:"policy"`
-	NormalSince       int64           `json:"normal_since"`
-	NormalObservedAt  int64           `json:"normal_observed_at"`
-	PulledCount       int64           `json:"pulled_count"`
-	PulledUserIDs     []string        `json:"-"`
-	RosterFrozen      bool            `json:"roster_frozen"`
-	NormalCheckpoints json.RawMessage `json:"-"`
+	ID                    int64           `json:"id"`
+	RootID                int64           `json:"root_id"`
+	ParentID              int64           `json:"parent_id"`
+	LegacyRootID          int64           `json:"legacy_root_id"`
+	Name                  string          `json:"name"`
+	Kind                  string          `json:"kind"`
+	Host                  string          `json:"host"`
+	MonitorID             int64           `json:"monitor_id"`
+	Active                bool            `json:"active"`
+	ManualOnly            bool            `json:"manual_only"`
+	Revision              int64           `json:"revision"`
+	Generation            int64           `json:"generation"`
+	EpochAt               int64           `json:"epoch_at"`
+	ReadyAt               int64           `json:"ready_at"`
+	ConfirmedAt           int64           `json:"confirmed_at"`
+	ConfigKey             string          `json:"-"`
+	Reason                string          `json:"reason"`
+	NoPullCount           int64           `json:"no_pull_count"`
+	UserIDs               []string        `json:"user_ids"`
+	ExcludedUserIDs       []string        `json:"excluded_user_ids,omitempty"`
+	RouteScope            string          `json:"route_scope"`
+	LifecycleRole         string          `json:"lifecycle_role"`
+	Policy                string          `json:"policy"`
+	NormalSince           int64           `json:"normal_since"`
+	NormalObservedAt      int64           `json:"normal_observed_at"`
+	PulledCount           int64           `json:"pulled_count"`
+	PulledUserIDs         []string        `json:"-"`
+	RosterFrozen          bool            `json:"roster_frozen"`
+	NormalCheckpoints     json.RawMessage `json:"-"`
+	NormalHistoryImported bool            `json:"-"`
 }
 type InvestigationEvent struct {
 	ID             int64           `json:"id"`
@@ -171,7 +172,7 @@ SELECT m.group_id,jsonb_agg(m.user_id::text ORDER BY m.user_id) AS ids
 FROM selected g JOIN (SELECT m.group_id,m.user_id FROM v2_dispatch_investigation_member m JOIN selected sg ON sg.id=m.group_id AND sg.route_scope='business'
 UNION SELECT w.group_id,w.user_id FROM v2_dispatch_global_member w) m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
 SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb),g.route_scope,g.lifecycle_role,g.policy,g.normal_since,g.normal_checkpoints,
-(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen
+(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen,g.normal_history_imported
 FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_investigation_confirmation c ON c.group_id=g.id AND c.generation=g.generation ORDER BY g.id`, args...)
 	if err != nil {
 		return nil, err
@@ -182,7 +183,7 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 		var g InvestigationGroup
 		var ids []byte
 		var pulls []byte
-		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen); err != nil {
+		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen, &g.NormalHistoryImported); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(ids, &g.UserIDs); err != nil {
