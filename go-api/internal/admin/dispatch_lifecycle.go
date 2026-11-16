@@ -505,6 +505,10 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 	if target.ID == 0 && len(ids) < 2 {
 		return finish("等待至少两名合格用户建立阶段分组")
 	}
+	move, err := planInvestigationBusinessMove(ctx, tx, g.ID, ids)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `SAVEPOINT lifecycle_promote`); err != nil {
 		return err
 	}
@@ -533,6 +537,7 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 			if e = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,epoch_at,created_at,route_scope,lifecycle_role,roster_frozen,reason) VALUES($1,$2,$3,$4,'observation',$5,$6,$7,$7,'business',$8,TRUE,'等待实际拉取新入口后开始观察') RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, sharedHost, sharedMonitor, now, role).Scan(&target.ID); e != nil {
 				return e
 			}
+			target.Generation = 1
 		} else {
 			if _, e = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET revision=revision+1 WHERE id=$1`, target.ID); e != nil {
 				return e
@@ -558,11 +563,8 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 		if e != nil {
 			return e
 		}
-		moves := map[int64]string{}
-		for _, id := range ids {
-			moves[id] = sharedHost
-		}
-		if e = verifyInvestigationMove(before, after, g.Host, moves); e != nil {
+		target.Host = sharedHost
+		if e = move.verify(ctx, tx, before, after, target); e != nil {
 			return e
 		}
 		if e = checkDispatchCapacity(ctx, tx); e != nil {

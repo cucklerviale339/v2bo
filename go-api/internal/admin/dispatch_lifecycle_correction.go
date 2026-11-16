@@ -71,6 +71,10 @@ func (s *DBService) correctInvestigationStage(ctx context.Context, tx *sql.Tx, g
 	if !reflect.DeepEqual(before, actual) || len(current) != 1 || !reflect.DeepEqual(current[0].UserIDs, g.UserIDs) {
 		return true, finish("阶段纠正前下发关系发生变化，等待重新核对")
 	}
+	move, err := planInvestigationBusinessMove(ctx, tx, g.ID, ids)
+	if err != nil {
+		return true, err
+	}
 	refs, err := dispatchPoolReferences(ctx, tx)
 	if err != nil {
 		return true, err
@@ -120,11 +124,7 @@ VALUES($1,$2,$3,'待复核','observation',$4,$5,$6,$6,'历史晋级成员独立�
 		if err != nil {
 			return err
 		}
-		moves := map[int64]string{}
-		for _, id := range ids {
-			moves[id] = host
-		}
-		if err := verifyInvestigationMove(before, after, g.Host, moves); err != nil {
+		if err := move.verify(ctx, tx, before, after, InvestigationGroup{ID: target, Host: host, Generation: 1}); err != nil {
 			return err
 		}
 		if err := checkDispatchCapacity(ctx, tx); err != nil {
