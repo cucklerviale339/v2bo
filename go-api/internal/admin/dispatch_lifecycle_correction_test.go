@@ -41,7 +41,8 @@ func TestPostgresLifecycleCorrectionMovesOnlyAutomaticRiskAndPreservesProgress(t
 			f := newInvestigationIntegration(t)
 			f.exec(`INSERT INTO v2_server_vmess(id,group_id,name,host,port,server_port,rate,network,"show",created_at,updated_at) VALUES(8,'[1]','other scope','other.example','8443',8443,'1','tcp',1,1,1)`)
 			_, stage := f.stageWithHistoricalRisk(role)
-			f.pool("192.0.2.213")
+			f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
+			f.poolAtPort(23135, "192.0.2.213")
 			// User 12 was explicitly removed/re-added by an administrator after
 			// the automatic admission. This latest manual decision takes priority.
 			f.exec(`INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload) VALUES($1,$2,'edited',$3,'{"added_ids":[12]}')`, stage.RootID, stage.ID, time.Now().Unix())
@@ -60,7 +61,8 @@ func TestPostgresLifecycleCorrectionMovesOnlyAutomaticRiskAndPreservesProgress(t
 			if target.ID == 0 || target.Kind != "observation" || target.ManualOnly || target.Host == stage.Host || target.ReadyAt != 0 {
 				t.Fatal("risk was not moved to independent observation", f.groups())
 			}
-			f.assertCheckPort(target.Host, 18443)
+			f.assertCheckPort(target.Host, 23135)
+			f.assertCheckPort(stage.Host, 18443)
 			f.assertUserHosts(11, target.Host, "other.example")
 			for _, id := range []int64{12, 13, 14} {
 				f.assertUserHosts(id, stage.Host, "other.example")
@@ -96,7 +98,7 @@ func TestPostgresLifecycleCorrectionPoolWaitAndRollback(t *testing.T) {
 	if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member", "v2_dispatch_stability_receipt", "v2_dispatch_monitor")) {
 		t.Fatal("correction without pool changed routing or receipts")
 	}
-	f.pool("192.0.2.213")
+	f.poolAtPort(23135, "192.0.2.213")
 	f.exec(`ALTER TABLE v2_dispatch_investigation_event ADD CONSTRAINT reject_correction_test CHECK(kind<>'stage_corrected')`)
 	f.execProcess(stage.ID)
 	if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member", "v2_dispatch_stability_receipt", "v2_dispatch_monitor")) {
@@ -180,7 +182,7 @@ func TestPostgresLifecycleCorrectionLeavesOverriddenMembersAndHonorsSwitch(t *te
 	}
 }
 
-func TestPostgresLifecycleCorrectionLargeRosterAndWrongPort(t *testing.T) {
+func TestPostgresLifecycleCorrectionLargeRosterAcrossPorts(t *testing.T) {
 	f := newInvestigationIntegration(t)
 	_, stage := f.stageWithHistoricalRisk("stable")
 	f.exec(`INSERT INTO v2_user(id,email,password,uuid,token,group_id,plan_id,transfer_enable,created_at,updated_at) SELECT id,'large-'||id||'@example.test','hash','00000000-0000-0000-0000-'||lpad(id::text,12,'0'),lpad(id::text,32,'0'),1,1,1000000,1,1 FROM generate_series(1001,2400) id`)
@@ -193,13 +195,8 @@ SELECT $1,$1,'stable_promoted',1,jsonb_build_object('target_group_id',$2::bigint
 	f.exec(`INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload) VALUES($1,$2,'edited',2,'{"added_ids":[1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015,1016,1017,1018,1019,1020,1021]}')`, stage.RootID, stage.ID)
 	f.exec(`WITH e AS(INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload) SELECT $1,$1,'filtered',1,jsonb_build_object('pulled_ids',jsonb_agg(id)) FROM generate_series(1001,2400) id RETURNING id),c AS(INSERT INTO v2_dispatch_risk_case(event_id,created_at) SELECT id,1 FROM e RETURNING event_id)
 INSERT INTO v2_dispatch_risk_member(event_id,user_id) SELECT event_id,id FROM c CROSS JOIN generate_series(1001,2400) id`, stage.RootID)
-	f.exec(`UPDATE v2_dispatch_check_target SET port=18444 WHERE kind='pool'`)
-	before := f.snapshot("v2_dispatch_investigation_member")
-	f.execProcess(stage.ID)
-	if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member")) {
-		t.Fatal("used a pool IP tested on the wrong port")
-	}
-	f.exec(`UPDATE v2_dispatch_check_target SET port=18443 WHERE kind='pool'`)
+	f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
+	f.poolAtPort(23130, "192.0.2.213")
 	f.execProcess(stage.ID)
 	remaining := f.group(stage.Host)
 	if len(remaining.UserIDs) != 23 { // 21 explicit manual + clean users 13,14.
@@ -209,6 +206,8 @@ INSERT INTO v2_dispatch_risk_member(event_id,user_id) SELECT event_id,id FROM c 
 	if err := f.db.QueryRow(`SELECT jsonb_array_length(payload->'user_ids') FROM v2_dispatch_investigation_event WHERE kind='stage_corrected'`).Scan(&moved); err != nil || moved != 1381 {
 		t.Fatal("large correction did not commit the full roster", moved, err)
 	}
+	f.assertCheckPort("192.0.2.213", 23130)
+	f.assertCheckPort(stage.Host, 18443)
 }
 
 func TestPostgresLifecycleCorrectionHoldSurvivesHealthyDaysAndRestarts(t *testing.T) {

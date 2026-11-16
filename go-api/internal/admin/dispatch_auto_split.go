@@ -577,12 +577,18 @@ func (s *DBService) dispatchSplitPoolLimit(ctx context.Context, tx *sql.Tx, refs
 	if err := tx.QueryRowContext(ctx, `SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, c.ID).Scan(&port); err != nil {
 		return nil, err
 	}
+	return s.dispatchPoolLimitAtPort(ctx, tx, refs, port, lock, selected, limit)
+}
+
+// A zero port is reserved for stage promotion/correction. Fault splitting and
+// failover enter through dispatchSplitPoolLimit and always pass a concrete port.
+func (s *DBService) dispatchPoolLimitAtPort(ctx context.Context, tx *sql.Tx, refs map[string][]string, port int64, lock bool, selected []DispatchPoolSave, limit int) ([]DispatchPoolSave, error) {
 	items := selected
 	if !lock {
 		// Honor operator priority, then prefer an unused entrance over recycling
 		// one that was recently exposed to another group. Old monitors are a
 		// preference, never a permanent reservation of an otherwise healthy IP.
-		rows, err := tx.QueryContext(ctx, `SELECT t.id,t.host,t.port,t.check_interval_sec,t.tcp_timeout_ms FROM v2_dispatch_check_target t WHERE t.kind='pool' AND t.enabled AND t.port=$1 ORDER BY t.sort,EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.host=t.host),t.id`, port)
+		rows, err := tx.QueryContext(ctx, `SELECT t.id,t.host,t.port,t.check_interval_sec,t.tcp_timeout_ms FROM v2_dispatch_check_target t WHERE t.kind='pool' AND t.enabled AND ($1::bigint=0 OR t.port=$1) ORDER BY t.sort,EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.host=t.host),t.id`, port)
 		if err != nil {
 			return nil, err
 		}
@@ -613,6 +619,7 @@ func (s *DBService) dispatchSplitPoolLimit(ctx context.Context, tx *sql.Tx, refs
 		if lock {
 			var enabled bool
 			var ip string
+			selectedPort := item.Port
 			err := tx.QueryRowContext(ctx, `SELECT host,port,enabled,check_interval_sec,tcp_timeout_ms FROM v2_dispatch_check_target WHERE id=$1 AND kind='pool' FOR UPDATE`, item.ID).Scan(&ip, &item.Port, &enabled, &item.CheckIntervalSec, &item.TCPTimeoutMS)
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
@@ -620,7 +627,7 @@ func (s *DBService) dispatchSplitPoolLimit(ctx context.Context, tx *sql.Tx, refs
 			if err != nil {
 				return nil, err
 			}
-			if !enabled || ip != item.IP || item.Port != port {
+			if !enabled || ip != item.IP || item.Port != selectedPort || (port != 0 && item.Port != port) {
 				continue
 			}
 		}

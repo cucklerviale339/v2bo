@@ -299,6 +299,12 @@ func (s *DBService) lifecyclePool(ctx context.Context, tx *sql.Tx, g Investigati
 	return out, nil
 }
 
+// Only promotions and historical stage corrections may choose another
+// detection port. Keep ordinary fault handling on lifecyclePool instead.
+func (s *DBService) lifecycleStagePool(ctx context.Context, tx *sql.Tx, refs map[string][]string, lock bool, selected []DispatchPoolSave) ([]DispatchPoolSave, error) {
+	return s.dispatchPoolLimitAtPort(ctx, tx, refs, 0, lock, selected, 1)
+}
+
 func hasOutsideExposure(ctx context.Context, tx *sql.Tx, g InvestigationGroup) (bool, error) {
 	raw, _ := json.Marshal(investigationGroupIDs(g))
 	var outside bool
@@ -509,15 +515,15 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 			return e
 		}
 		if sharedHost == "" {
-			selected, e = s.lifecyclePool(ctx, tx, g, refs, 1)
+			selected, e = s.lifecycleStagePool(ctx, tx, refs, false, nil)
 			if e != nil {
 				return e
 			}
 			if len(selected) != 1 {
-				return fmt.Errorf("等待同检测端口的健康未占用备用 IP")
+				return fmt.Errorf("等待健康未占用备用 IP")
 			}
 			sharedHost = selected[0].IP
-			sharedMonitor, e = investigationCloneMonitor(ctx, tx, g.MonitorID, sharedHost)
+			sharedMonitor, e = cloneDispatchPoolMonitorAtPort(ctx, tx, g.MonitorID, sharedHost, selected[0].Port)
 			if e != nil {
 				return e
 			}
@@ -537,7 +543,7 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 			return e
 		}
 		if len(selected) > 0 {
-			locked, e := s.dispatchSplitPoolLimit(ctx, tx, refs, dispatchSplitCandidate{ID: g.MonitorID}, true, selected, 1)
+			locked, e := s.lifecycleStagePool(ctx, tx, refs, true, selected)
 			if e != nil {
 				return e
 			}

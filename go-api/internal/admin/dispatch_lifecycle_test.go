@@ -293,6 +293,106 @@ func TestPostgresLifecycleCrossPortUnhealthyStageStillBlocksAdmission(t *testing
 	}
 }
 
+func TestPostgresLifecycleNewStagesAdoptPoolDetectionPort(t *testing.T) {
+	for _, role := range []string{"stable", "whitelist"} {
+		t.Run(role, func(t *testing.T) {
+			f := newInvestigationIntegration(t)
+			f.enableLifecycle()
+			f.pool("192.0.2.211")
+			source := f.readyToPromote(f.group("range.example"), []int64{11, 12})
+			if role == "whitelist" {
+				f.execProcess(source.ID)
+				source = f.readyToPromote(f.stageGroup("stable"), []int64{11, 12})
+			}
+			f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
+			f.poolAtPort(23135, "192.0.2.212")
+			f.execProcess(source.ID)
+			target := f.stageGroup(role)
+			if target.Host != "192.0.2.212" || !reflect.DeepEqual(target.UserIDs, []string{"11", "12"}) {
+				t.Fatal("cross-port stage allocation failed", f.groups())
+			}
+			var sourcePort int64
+			if err := f.db.QueryRow(`SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, source.MonitorID).Scan(&sourcePort); err != nil || sourcePort != 18443 {
+				t.Fatal("source detection port changed", sourcePort, err)
+			}
+			f.assertCheckPort(target.Host, 23135)
+			f.assertUserHosts(11, target.Host)
+			servers, err := usersvc.NewDBService(f.s.cfg, f.db).Servers(f.ctx, 11, "")
+			if err != nil || len(servers) != 1 || fmt.Sprint(servers[0]["port"]) != "443" {
+				t.Fatal("stage allocation changed business port", servers, err)
+			}
+		})
+	}
+}
+
+func TestPostgresLifecycleFaultSplittingStillRequiresSamePort(t *testing.T) {
+	for _, policy := range []string{"smart", "failover"} {
+		t.Run(policy, func(t *testing.T) {
+			f := newInvestigationIntegration(t)
+			f.enableLifecycle()
+			g := f.group("range.example")
+			f.exec(`UPDATE v2_dispatch_investigation_group SET policy=$2 WHERE id=$1`, g.ID, policy)
+			f.poolAtPort(23135, "192.0.2.211", "192.0.2.212")
+			f.outage(g, []int64{11, 12})
+			before := f.snapshot("v2_dispatch_investigation_member")
+			f.execProcess(g.ID)
+			if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member")) || f.successfulEvents() != 0 {
+				t.Fatal("fault handling used another port", f.groups())
+			}
+			f.poolAtPort(18443, "192.0.2.213", "192.0.2.214")
+			f.execProcess(g.ID)
+			var completed int
+			if err := f.db.QueryRow(`SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind IN('filtered','bisected','no_pulls','recovered')`).Scan(&completed); err != nil || completed != 1 {
+				t.Fatal("same-port refill did not complete fault handling", f.groups())
+			}
+			for _, child := range f.groups() {
+				if child.Host == "192.0.2.211" || child.Host == "192.0.2.212" {
+					t.Fatal("wrong-port IP was allocated", child)
+				}
+				if child.ParentID == g.ID || child.ID == g.ID {
+					f.assertCheckPort(child.Host, 18443)
+				}
+			}
+		})
+	}
+}
+
+func TestPostgresLifecycleStagePoolRechecksSelectedPortAndHealth(t *testing.T) {
+	for _, change := range []string{"port", "health", "disabled", "referenced"} {
+		t.Run(change, func(t *testing.T) {
+			f := newInvestigationIntegration(t)
+			f.poolAtPort(23135, "192.0.2.211")
+			tx, err := f.db.BeginTx(f.ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			refs := map[string][]string{}
+			selected, err := f.s.lifecycleStagePool(f.ctx, tx, refs, false, nil)
+			if err != nil || len(selected) != 1 {
+				t.Fatal(selected, err)
+			}
+			switch change {
+			case "port":
+				_, err = tx.Exec(`UPDATE v2_dispatch_check_target SET port=23130 WHERE id=$1`, selected[0].ID)
+			case "health":
+				_, err = tx.Exec(`UPDATE v2_dispatch_check_binding SET success=FALSE,streak=0 WHERE target_id=$1`, selected[0].ID)
+			case "disabled":
+				_, err = tx.Exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE id=$1`, selected[0].ID)
+			case "referenced":
+				refs[selected[0].IP] = []string{"new owner"}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			locked, err := f.s.lifecycleStagePool(f.ctx, tx, refs, true, selected)
+			if err != nil || len(locked) != 0 {
+				t.Fatal("changed allocation was not rejected", locked, err)
+			}
+		})
+	}
+}
+
 func TestPostgresLifecycleSingleFixedAndDisabledNeverPromote(t *testing.T) {
 	for _, mode := range []string{"fixed", "single", "disabled"} {
 		t.Run(mode, func(t *testing.T) {

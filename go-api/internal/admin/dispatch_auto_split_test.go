@@ -82,10 +82,14 @@ func (f *splitIntegration) enable() {
 	f.exec(`UPDATE v2_dispatch_auto_split_settings SET armed_at=$1`, time.Now().Unix()-720)
 }
 func (f *splitIntegration) pool(ips ...string) {
+	f.poolAtPort(18443, ips...)
+}
+
+func (f *splitIntegration) poolAtPort(port int64, ips ...string) {
 	f.t.Helper()
 	items := []DispatchPoolSave{}
 	for _, ip := range ips {
-		items = append(items, DispatchPoolSave{IP: ip, Port: 18443, Enabled: true, CheckIntervalSec: 30, TCPTimeoutMS: 500})
+		items = append(items, DispatchPoolSave{IP: ip, Port: port, Enabled: true, CheckIntervalSec: 30, TCPTimeoutMS: 500})
 	}
 	if _, err := f.s.SaveDispatchPool(f.ctx, items); err != nil {
 		f.t.Fatal(err)

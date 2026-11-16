@@ -12,6 +12,15 @@ import (
 // references reserve an IP even when an investigation currently masks it: the
 // original rule can still become a fallback. A monitor alone is not a lease.
 func cloneDispatchPoolMonitor(ctx context.Context, tx *sql.Tx, source int64, host string) (int64, error) {
+	return cloneDispatchPoolMonitorAtPort(ctx, tx, source, host, 0)
+}
+
+// Stage transitions may use the selected pool endpoint's detection port.
+// Ordinary failover/splitting keeps passing zero to inherit the source port.
+func cloneDispatchPoolMonitorAtPort(ctx context.Context, tx *sql.Tx, source int64, host string, selectedPort int64) (int64, error) {
+	if selectedPort < 0 || selectedPort > 65535 {
+		return 0, splitEditInvalid("检测端口无效")
+	}
 	refs, err := dispatchPoolReferences(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -45,6 +54,9 @@ func cloneDispatchPoolMonitor(ctx context.Context, tx *sql.Tx, source int64, hos
 	}
 	if host == sourceHost {
 		return 0, splitEditInvalid("不能将原入口重新分配为备用入口")
+	}
+	if selectedPort > 0 {
+		port = selectedPort
 	}
 	var oldID int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM v2_dispatch_monitor WHERE host=$1 FOR UPDATE`, host).Scan(&oldID)

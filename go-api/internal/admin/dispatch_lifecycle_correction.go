@@ -75,19 +75,19 @@ func (s *DBService) correctInvestigationStage(ctx context.Context, tx *sql.Tx, g
 	if err != nil {
 		return true, err
 	}
-	pool, err := s.lifecyclePool(ctx, tx, g, refs, 1)
+	pool, err := s.lifecycleStagePool(ctx, tx, refs, false, nil)
 	if err != nil {
 		return true, err
 	}
 	if len(pool) != 1 {
-		return true, finish(fmt.Sprintf("待纠正 %d 名历史晋级成员：等待同检测端口的健康未占用备用 IP", len(ids)))
+		return true, finish(fmt.Sprintf("待纠正 %d 名历史晋级成员：等待健康未占用备用 IP", len(ids)))
 	}
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT lifecycle_correct`); err != nil {
 		return true, err
 	}
 	attempt := func() error {
 		host := pool[0].IP
-		monitor, err := investigationCloneMonitor(ctx, tx, g.MonitorID, host)
+		monitor, err := cloneDispatchPoolMonitorAtPort(ctx, tx, g.MonitorID, host, pool[0].Port)
 		if err != nil {
 			return err
 		}
@@ -109,7 +109,7 @@ VALUES($1,$2,$3,'待复核','observation',$4,$5,$6,$6,'历史晋级成员独立�
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET revision=revision+1,active=EXISTS(SELECT 1 FROM v2_dispatch_investigation_member WHERE group_id=$1),reason='已将历史错误晋级成员移回观察，其余成员进度保留' WHERE id=$1`, g.ID); err != nil {
 			return err
 		}
-		locked, err := s.dispatchSplitPoolLimit(ctx, tx, refs, dispatchSplitCandidate{ID: g.MonitorID}, true, pool, 1)
+		locked, err := s.lifecycleStagePool(ctx, tx, refs, true, pool)
 		if err != nil {
 			return err
 		}
