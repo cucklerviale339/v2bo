@@ -143,19 +143,35 @@ func TestPostgresInvestigationPartialOwnershipContinuesWithoutMovingOverride(t *
 	}
 }
 
-func TestPostgresInvestigationEffectiveSingletonAndNoMembersCannotAutomate(t *testing.T) {
+func TestPostgresInvestigationEffectiveSingletonObservesAndEmptyGroupCannotAutomate(t *testing.T) {
 	for _, remaining := range []int{0, 1} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			f := newInvestigationIntegration(t)
 			g := f.group("range.example")
 			f.outage(g, nil)
 			f.overrideMembers(g.UserIDs[remaining:])
+			if remaining == 1 {
+				f.pool("192.0.2.211")
+			}
 			before := f.snapshot("v2_dispatch_investigation_group", "v2_dispatch_investigation_member", "v2_dispatch_investigation_event", "v2_dispatch_monitor")
 			shown, ok := f.visibleGroup(g.ID)
 			if ok != (remaining > 0) || (ok && len(shown.UserIDs) != 1) {
 				t.Fatal(shown, ok)
 			}
 			f.execProcess(g.ID)
+			if remaining == 1 {
+				after := f.group("192.0.2.211")
+				if after.Kind == "confirmed" || after.ManualOnly || len(after.UserIDs) != 8 {
+					// Stored membership retains overridden users; only the single
+					// effective non-recipient is allowed to change its route.
+					t.Fatal("single non-recipient was accused or disabled", after)
+				}
+				shown, ok := f.visibleGroup(after.ID)
+				if !ok || len(shown.UserIDs) != 1 || shown.Host != after.Host {
+					t.Fatal("overridden users moved", shown)
+				}
+				return
+			}
 			g = f.group(g.Host)
 			a := InvestigationAction{ID: g.ID, Revision: g.Revision}
 			if f.s.ConfirmInvestigation(f.ctx, a) == nil || f.s.TriggerInvestigation(f.ctx, a) == nil {

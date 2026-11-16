@@ -6,17 +6,19 @@ import { UserEmailSelect } from './NodeAddressPage';
 import '../styles/investigation.css';
 
 type Settings = { enabled: boolean; lifecycle_enabled: boolean; scope: 'all' | 'multi_range'; revision: number; entry_window_minutes: number; global_window_minutes: number; global_max: number };
-type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number; route_scope: 'business' | 'global'; lifecycle_role: 'ordinary' | 'stable' | 'whitelist' | 'review'; normal_since: number; normal_observed_at: number; pulled_count: number; policy: 'smart' | 'failover' | 'fixed'; observation_repair_pending?: boolean };
+type Group = { id: number; root_id: number; parent_id: number; name: string; kind: string; host: string; monitor_id: number; manual_only: boolean; revision: number; reason: string; user_ids: string[]; no_pull_count: number; confirmed_at?: number; route_scope: 'business' | 'global'; lifecycle_role: 'ordinary' | 'stable' | 'whitelist' | 'review'; normal_since: number; normal_observed_at: number; pulled_count: number; policy: 'smart' | 'failover' | 'fixed'; observation_repair_pending?: boolean; promotion_blocked_count?: number; promotion_hold_count?: number; confirmation_proof?: { version?: number; user_id?: number; first_failure_at?: number } };
 type GroupEdit = Group & { member_ids: string[] };
 const canEditMembers = (g?: Group) => g?.route_scope === 'business' && (g.lifecycle_role === 'stable' || g.lifecycle_role === 'whitelist');
 const parseMemberIDs = (value: string[] = []) => [...new Set(value.map(id => id.trim()).filter(Boolean))];
-type Event = { id: number; root_id: number; group_id: number; kind: string; first_failure_at: number; created_at: number; payload: { before?: Group; pulled_ids?: number[]; unpulled_ids?: number[]; recent_ids?: number[]; older_ids?: number[]; recent_window_minutes?: number; partitions?: { name?: string; group_id: number; user_ids: number[]; kind: string; host: string; merged_into?: number }[]; evidence?: { controls?: Record<string, string[]>; mode?: string; cutoff_source?: string; warnings?: string[] }; reason?: string; host?: string; user_ids?: number[]; after?: any } };
+type Event = { id: number; root_id: number; group_id: number; kind: string; first_failure_at: number; created_at: number; payload: { before?: Group; pulled_ids?: number[]; unpulled_ids?: number[]; recent_ids?: number[]; older_ids?: number[]; recent_window_minutes?: number; partitions?: { name?: string; group_id: number; user_ids: number[]; kind: string; host: string; merged_into?: number }[]; confirmation?: { version: number; user_id: number }; evidence?: { controls?: Record<string, string[]>; mode?: string; cutoff_source?: string; warnings?: string[] }; reason?: string; host?: string; user_ids?: number[]; after?: any } };
 type Monitor = DispatchMonitorStatusEntry & { id: number; host: string };
 const endpoint = '/dns-failover/dispatch-investigation';
 const stamp = (v: number) => v ? new Date(v * 1000).toLocaleString() : '—';
-const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑', confirmed_entry: '人工确认入口', manual_trigger: '人工立即触发' };
+const kindName: Record<string, string> = { candidate: '卧底', recent: '120分钟', observation: '观察', confirmed: '实锤内鬼', filtered: '已筛选', branch_fault: '故障已确认 · 待补入口', bisected: '全部拉取 · 已二分', no_pulls: '无人拉取 · 已换入口', started: '开始观察', settings: '设置变更', edited: '人工编辑', confirmed_entry: '人工确认入口', manual_trigger: '人工立即触发' };
 Object.assign(kindName, { observation_corrected: '纠正观察组误标', observation_repaired: '观察组补发入口', observation_imported: '承接历史观察', recovered: '整组故障转移', stable_promoted: '进入稳定组', whitelist_promoted: '加入老实人', whitelist_failed_over: '老实人故障转移', whitelist_bisected: '老实人二次故障 · 已二分', whitelist_returned: '复核通过', global_released: '退出全站管理', members_admitted: '接收新增用户', members_moved: '人工移出成员' });
 const policyNames = { smart: '智能筛选', failover: '仅故障转移', fixed: '固定下发' };
+kindName.confirmation_corrected = '撤销历史实锤误标';
+kindName.stage_corrected = '纠正历史晋级';
 function memberRanges(ids: string[]) {
  const sorted = [...new Set(ids.filter(id => /^[1-9]\d*$/.test(id)))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
  const ranges: string[] = [];
@@ -62,16 +64,25 @@ const processStates: Record<string, [string, string]> = {
  '全站复核完成': ['复核通过', 'active'],
  '入口仍向组外用户下发，暂停独立稳定观察': ['待名单隔离', 'paused'],
  '稳定，等待全站白名单复核完成': ['稳定', 'active'],
+ '历史筛选事件尚未定位实锤，暂停相关成员晋级；继续监控和故障处理': ['观察中·限晋级', 'active'],
+ '候选分支追查中，暂停个人晋级计时；继续监控和故障处理': ['暂停计时', 'paused'],
+ '独立复核中，确认故障并完成细分前不参与晋级': ['待复核·不晋级', 'paused'],
+ '历史晋级成员独立复核，确认故障并完成细分前禁止晋级': ['待复核·不晋级', 'paused'],
+ '历史错误晋级已纠正，等待新入口正常后继续筛选': ['待入口确认', 'waiting'],
+ '已将历史错误晋级成员移回观察，其余成员进度保留': ['已纠正晋级', 'active'],
 };
 function singletonManual(g: Group, count = g.user_ids.length) {
- return count <= 1 && !(count === 1 && g.kind === 'observation' && g.lifecycle_role === 'ordinary' && g.route_scope === 'business');
+ return count === 0 || g.kind === 'confirmed';
 }
 function processState(g: Group, enabled?: boolean) {
  if (g.manual_only || singletonManual(g)) return { label: '仅人工', tone: 'paused', detail: '仅人工操作，不参与自动筛选或入口分配' };
  if (g.policy === 'fixed') return { label: '固定下发', tone: 'paused', detail: '仅监控，不自动更换入口或分组' };
  if (enabled === undefined) return { label: '—', tone: 'paused', detail: '等待设置加载' };
  if (!enabled) return { label: '已关闭', tone: 'paused', detail: '总开关已关闭，暂停自动处理' };
- if (g.observation_repair_pending) return { label: '待补入口', tone: 'waiting', detail: g.reason || '未拉取观察组等待补发健康入口' };
+ if ((g.promotion_hold_count || 0) > 0) return { label: '待复核·不晋级', tone: 'paused', detail: '本组确认故障并完成细分前不参与晋级，监控与故障处理继续执行' };
+ if (g.observation_repair_pending) return { label: '待补入口', tone: 'waiting', detail: g.reason || '历史误标组等待补发健康观察入口' };
+ if (g.reason.startsWith('待纠正 ')) return { label: '待纠正·缺 IP', tone: 'waiting', detail: g.reason };
+ if (g.reason.startsWith('阶段纠正')) return { label: '纠正待重试', tone: 'error', detail: g.reason };
  if (g.reason.startsWith('正常观察中')) return { label: '观察中', tone: 'active', detail: g.reason };
  if (g.reason.startsWith('老实人，')) return { label: '持续监控', tone: 'active', detail: g.reason };
  if (g.reason.startsWith('稳定组')) return { label: '稳定', tone: 'active', detail: g.reason };
@@ -88,6 +99,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  const [action, setAction] = useState<{ group: Group; kind: 'confirm' | 'trigger' }>(), [actionBusy, setActionBusy] = useState(false), [actionError, setActionError] = useState('');
  const [filter, setFilter] = useState('all'), [releasing, setReleasing] = useState<Group>(), [releaseIDs, setReleaseIDs] = useState('');
  const [section, setSection] = useState('ordinary'), [searches, setSearches] = useState<Record<string, string>>({});
+ const [historyCategory, setHistoryCategory] = useState('screening');
  const editingMemberCount = canEditMembers(editing) ? parseMemberIDs(editingMemberIDs ?? editing?.user_ids).length : editing?.user_ids.length || 0;
  useEffect(() => { if (editing && singletonManual(editing, editingMemberCount)) editForm.setFieldValue('manual_only', true); }, [editing, editingMemberCount]);
  const stageGroups = (role: string) => groups.filter(g => g.lifecycle_role === role);
@@ -98,7 +110,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  const load = async () => {
   const seq = ++generation.current;
   try {
-   const [res, monitorRes] = await Promise.all([apiGet(endpoint, { page }), apiGet('/dns-failover/dispatch-entries', { include_deleted: true })]);
+   const [res, monitorRes] = await Promise.all([apiGet(endpoint, { page, category: historyCategory }), apiGet('/dns-failover/dispatch-entries', { include_deleted: true })]);
    if (seq !== generation.current) return;
    const data = unwrapData(res), nextMonitors = unwrapList(monitorRes) as Monitor[];
    // Reject a stale group if ownership changed between the two responses.
@@ -109,7 +121,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    if (!initialized.current) { form.setFieldsValue(data.settings); revision.current = data.settings.revision; initialized.current = true; }
   } catch (e: any) { if (seq === generation.current) setError(e.message || '读取失败'); }
  };
- useEffect(() => { if (!active) return; void load(); const timer = window.setInterval(() => void load(), 15000); return () => { generation.current++; clearInterval(timer); }; }, [active, page]);
+ useEffect(() => { if (!active) return; void load(); const timer = window.setInterval(() => void load(), 15000); return () => { generation.current++; clearInterval(timer); }; }, [active, page, historyCategory]);
  const save = async () => {
   try { const values = await form.validateFields(); setSaving(true); generation.current++; const data = unwrapData(await apiPut(endpoint, { ...values, revision: revision.current })); revision.current = data.settings.revision; setSettings(data.settings); form.setFieldsValue(data.settings); message.success('设置已保存'); await load(); }
   catch (e: any) { if (!e.errorFields) message.error(e.message || '保存失败'); } finally { setSaving(false); }
@@ -145,7 +157,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    { title: '监控状态', width: 140, render: (_, g) => { if (error) return <Tag>状态读取失败</Tag>; const m = monitors.find(m => m.id === g.monitor_id && m.host === g.host); return m ? <DispatchMonitorStatus entry={m} /> : <Tag>状态待刷新</Tag>; } },
    { title: '自动处理', width: 110, render: (_, g) => { const state = processState(g, settings?.enabled); return <div className="investigation-process"><Tooltip title={state.detail}><span tabIndex={0} className={`investigation-process-state tone-${state.tone}`}>{state.label}</span></Tooltip>{g.no_pull_count > 0 && <span className="investigation-caption">未拉取 ×{g.no_pull_count}</span>}</div>; } },
    { title: '操作', width: 200, fixed: 'right', className: 'investigation-actions', render: (_, g) => <Space size={0}><Button type="link" disabled={saving || actionBusy} onClick={() => openEditor(g)}>编辑</Button>{!g.manual_only && g.policy !== 'fixed' && !singletonManual(g) && <><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'confirm' }); }}>确认入口</Button><Button type="link" disabled={!settings?.enabled || saving || actionBusy} onClick={() => { setActionError(''); setAction({ group: g, kind: 'trigger' }); }}>立即触发</Button></>}</Space> },
-  ]} expandable={{ columnWidth: 32, expandedRowRender: g => <div className="investigation-details"><div className="investigation-detail-meta"><span>类型：{g.lifecycle_role === 'stable' ? '稳定组' : g.lifecycle_role === 'whitelist' ? '老实人' : g.lifecycle_role === 'review' ? '老实人复核' : g.parent_id === 0 && g.kind === 'candidate' ? '初始入口' : kindName[g.kind]}</span><span>{g.route_scope === 'global' ? '全站下发' : '业务范围下发'}</span><span>策略：{policyNames[g.policy] || '智能筛选'}</span><span>原始组：#{g.root_id}</span>{g.parent_id > 0 && <span>父组：#{g.parent_id}</span>}</div>{g.normal_since > 0 && settings?.lifecycle_enabled && <div className="investigation-detail-reason">入口有效观察 {Math.max(0, ((g.normal_observed_at || g.normal_since) - g.normal_since) / 86400).toFixed(1)} 天 · {g.lifecycle_role === 'stable' ? '每人拉取A后再观察7天' : g.lifecycle_role === 'whitelist' ? '持续监控' : '每人成功拉取后观察3天'}</div>}{g.route_scope === 'global' && <Button size="small" style={{ marginBottom: 12 }} onClick={() => { setReleasing(g); setReleaseIDs(g.user_ids.join(', ')); }}>退出全站管理</Button>}{g.reason && <div className="investigation-detail-reason">处理说明：{g.reason}</div>}<div className="investigation-members"><span className="investigation-caption">成员 ID</span><Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text></div></div> }} locale={{ emptyText }} />
+  ]} expandable={{ columnWidth: 32, expandedRowRender: g => <div className="investigation-details"><div className="investigation-detail-meta"><span>类型：{g.lifecycle_role === 'stable' ? '稳定组' : g.lifecycle_role === 'whitelist' ? '老实人' : g.lifecycle_role === 'review' ? '老实人复核' : g.parent_id === 0 && g.kind === 'candidate' ? '初始入口' : kindName[g.kind]}</span><span>{g.route_scope === 'global' ? '全站下发' : '业务范围下发'}</span><span>策略：{policyNames[g.policy] || '智能筛选'}</span><span>原始组：#{g.root_id}</span>{g.parent_id > 0 && <span>父组：#{g.parent_id}</span>}</div>{g.normal_since > 0 && settings?.lifecycle_enabled && <div className="investigation-detail-reason">入口健康观察 {Math.max(0, ((g.normal_observed_at || g.normal_since) - g.normal_since) / 86400).toFixed(1)} 天（不等于个人晋级计时） · {g.lifecycle_role === 'stable' ? '每人拉取A后再观察7天' : g.lifecycle_role === 'whitelist' ? '持续监控' : '每人成功拉取后观察3天'}</div>}{g.route_scope === 'global' && <Button size="small" style={{ marginBottom: 12 }} onClick={() => { setReleasing(g); setReleaseIDs(g.user_ids.join(', ')); }}>退出全站管理</Button>}{(g.promotion_blocked_count || 0) > 0 && <div className="investigation-detail-reason">{(g.promotion_hold_count || 0) > 0 ? `独立复核：${g.promotion_hold_count} 人，本组确认故障并完成细分前不参与晋级，正常时长不会自动解除。` : `暂停计时：${g.promotion_blocked_count} 人仍在候选追查中或已确认实锤。另一分支确认故障且本分支正常后，才从解除暂停时开始计时；未拉取者按健康入口的实际拉取时间观察。`}</div>}{g.confirmation_proof?.version === 1 && <div className="investigation-detail-reason">实锤依据：入口先确认健康，本轮首次失败前仅用户 {g.confirmation_proof.user_id} 成功拉取，随后连续故障已确认。</div>}{g.reason && <div className="investigation-detail-reason">处理说明：{g.reason}</div>}<div className="investigation-members"><span className="investigation-caption">成员 ID</span><Typography.Text copyable>{g.user_ids.join(', ')}</Typography.Text></div></div> }} locale={{ emptyText }} />
  );
  const renderMaintenance = (role: 'stable' | 'whitelist') => {
   const all = stageGroups(role), keyword = (searches[role] || '').trim().toLowerCase();
@@ -172,16 +184,16 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    <Space className="investigation-settings-actions"><Button type="primary" disabled={!settings} loading={saving} onClick={save}>保存</Button><Button onClick={() => { initialized.current = false; void load(); }}>刷新</Button></Space>
   </Form>
   <Tabs activeKey={section} onChange={setSection} className="investigation-maintenance-tabs" items={[
-   { key: 'ordinary', label: `入口分组 (${ordinaryGroups.length})`, children: <Card className="block-card" styles={{ body: { padding: 0 } }}><div className="investigation-maintenance-toolbar"><Space><Select aria-label="分组分类" value={filter} onChange={setFilter} style={{ width: 140 }} options={[{ value: 'all', label: '全部分组' }, { value: 'ordinary', label: '多人自动组' }, { value: 'manual', label: '仅人工' }]} /><Typography.Text type="secondary">{visibleGroups.length} 个分组</Typography.Text></Space></div>{renderGroupTable(visibleGroups)}</Card> },
+   { key: 'ordinary', label: `入口分组 (${ordinaryGroups.length})`, children: <Card className="block-card" styles={{ body: { padding: 0 } }}><div className="investigation-maintenance-toolbar"><Space><Select aria-label="分组分类" value={filter} onChange={setFilter} style={{ width: 140 }} options={[{ value: 'all', label: '全部分组' }, { value: 'ordinary', label: '自动组' }, { value: 'manual', label: '仅人工' }]} /><Typography.Text type="secondary">{visibleGroups.length} 个分组</Typography.Text></Space></div>{renderGroupTable(visibleGroups)}</Card> },
    { key: 'stable', label: `稳定组 (${stageGroups('stable').length})`, children: renderMaintenance('stable') },
    { key: 'whitelist', label: `老实人组 (${stageGroups('whitelist').length})`, children: renderMaintenance('whitelist') },
   ]} />
-  <div className="investigation-history-heading"><Typography.Text strong>筛选历史</Typography.Text><span className="investigation-caption">{total} 条记录</span></div>
+  <div className="investigation-history-heading"><Space><Typography.Text strong>历史记录</Typography.Text><Select aria-label="历史分类" value={historyCategory} style={{ width: 160 }} onChange={value => { generation.current++; setEvents([]); setTotal(0); setPage(1); setHistoryCategory(value); }} options={[{ value: 'screening', label: '故障与筛选' }, { value: 'lifecycle', label: '稳定与老实人' }, { value: 'management', label: '管理操作' }]} /></Space><span className="investigation-caption">{total} 条记录</span></div>
   <Table<Event> rowKey="id" size="small" dataSource={events} pagination={{ current: page, pageSize: 20, total, onChange: setPage, showSizeChanger: false }} scroll={{ x: 1100 }} columns={[
    { title: '时间', render: (_, e) => stamp(e.created_at) }, { title: '原始组 / 来源组', render: (_, e) => e.root_id ? `#${e.root_id} / #${e.group_id}` : '—' },
    { title: '结果', render: (_, e) => <Tag>{kindName[e.kind] || e.kind}</Tag> }, { title: '筛选截止', render: (_, e) => stamp(e.first_failure_at) },
    { title: '拉取 / 未拉取', render: (_, e) => e.payload.pulled_ids ? `${e.payload.pulled_ids.length} / ${e.payload.unpulled_ids?.length || 0}` : '—' },
-   { title: '处理后入口', render: (_, e) => e.payload.partitions?.map((p, i) => <div key={i}>#{p.group_id} · {p.name || kindName[p.kind]} · {p.user_ids.length} 人 → {p.host}{p.merged_into ? '（归并）' : ''}</div>) || e.payload.host || '—' },
+   { title: '处理后入口', render: (_, e) => e.payload.partitions?.map((p, i) => <div key={i}>#{p.group_id} · {p.kind === 'confirmed' && !(e.payload.confirmation?.version === 1 && p.user_ids.length === 1 && p.user_ids[0] === e.payload.confirmation.user_id) ? '单人待复核' : p.name || kindName[p.kind]} · {p.user_ids.length} 人 → {p.host}{p.merged_into ? '（归并）' : ''}</div>) || e.payload.host || '—' },
   ]} expandable={{ expandedRowRender: e => <div>{e.payload.evidence?.mode && <div>执行方式：{e.payload.evidence.mode === 'manual' ? '人工立即触发' : e.payload.evidence.mode === 'observation_repair' ? '历史观察组补发' : '自动触发'} · 截止依据：{({ established_incident: '已记录故障起点', first_observed_failure: '首次观察失败', manual_snapshot: '人工操作时点', original_unpulled_partition: '原筛选未拉取分支' } as Record<string, string>)[e.payload.evidence.cutoff_source || ''] || '—'}</div>}{e.payload.evidence?.warnings?.map((warning, i) => <div key={i}>{warning}</div>)}{e.payload.before && <div>原入口：{e.payload.before.host}</div>}{e.payload.user_ids && <div>相关用户 ID：{e.payload.user_ids.join(', ')}</div>}{e.payload.pulled_ids && <><div>已拉取 ID：{e.payload.pulled_ids.join(', ') || '无'}</div><div>未拉取 ID：{e.payload.unpulled_ids?.join(', ') || '无'}</div>{e.payload.recent_ids && <><div>120分钟内拉取 ID：{e.payload.recent_ids.join(', ') || '无'}</div><div>更早拉取 ID：{e.payload.older_ids?.join(', ') || '无'}</div></>}</>}{e.payload.evidence?.controls && Object.entries(e.payload.evidence.controls).map(([probe, hosts]) => <div key={probe}>探针 #{probe} · 正常对照：{hosts.join(', ')}</div>)}{e.payload.reason && <div>{e.payload.reason}</div>}</div> }} locale={{ emptyText: '暂无记录' }} />
   <Modal open={!!editing} title={editing?.lifecycle_role === 'stable' ? '编辑稳定组' : editing?.lifecycle_role === 'whitelist' ? '编辑老实人组' : '编辑分组'} width={canEditMembers(editing) ? 960 : 520} onCancel={() => setEditing(undefined)} onOk={saveEdit} confirmLoading={saving} okText="保存" destroyOnClose>
    <Form form={editForm} layout="vertical" className={canEditMembers(editing) ? 'investigation-maintenance-form' : undefined}>
@@ -203,7 +215,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   </Modal>
   <Modal open={!!action} title={action?.kind === 'confirm' ? '确认入口' : '立即触发'} onCancel={() => { if (!actionBusy) setAction(undefined); }} onOk={runAction} confirmLoading={actionBusy} cancelButtonProps={{ disabled: actionBusy }} closable={!actionBusy} maskClosable={!actionBusy} keyboard={!actionBusy} okText={action?.kind === 'confirm' ? '确认并开始观察' : '立即触发'} destroyOnClose>
    <Typography.Paragraph><strong>{action?.group.name}</strong> · #{action?.group.id}<br />入口：{action?.group.host}<br />成员：{action?.group.user_ids.length} 人</Typography.Paragraph>
-   <Typography.Paragraph>{action?.kind === 'confirm' ? '确认当前入口进入新一轮观察，从本次确认后重新记录拉取与检测结果。成员和下发地址不变，不立即换 IP。此前记录不参与本轮筛选。' : action?.group.lifecycle_role === 'whitelist' ? '按白名单策略整组切换到健康入口。人工操作不累计独立故障次数，不伪造24小时第二次故障。' : '立即按当前轮次的拉取记录执行筛选、二分或换 IP。使用已记录的首次失败作为截止时间；没有失败记录时，以本次操作时点为截止时间。不等待自动故障确认、正常对照或自动限频。需要足够的健康备用 IP，处理成功后会改变相关用户的实际下发入口。'}</Typography.Paragraph>
+   <Typography.Paragraph>{action?.kind === 'confirm' ? '确认当前入口进入新一轮观察，从本次确认后重新记录拉取与检测结果。成员和下发地址不变，不立即换 IP。此前记录不参与本轮筛选。' : action?.group.lifecycle_role === 'whitelist' ? '按白名单策略整组切换到健康入口。人工操作不累计独立故障次数，不伪造24小时第二次故障。' : '立即按当前轮次的拉取记录执行筛选、二分或换 IP。使用已记录的首次失败作为截止时间；没有失败记录时，以本次操作时点为截止时间。不等待自动故障确认、正常对照或自动限频。需要足够的健康备用 IP，处理成功后会改变相关用户的实际下发入口。人工触发不会跳过实锤所需的健康基线、唯一拉取者和连续故障确认。'}</Typography.Paragraph>
    {actionError && <Alert type="error" showIcon message={actionError} />}
   </Modal>
  </div>;

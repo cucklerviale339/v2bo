@@ -208,6 +208,9 @@ PRIMARY KEY (id)
 			return fmt.Errorf("ensure entry investigation schema: %w", err)
 		}
 	}
+	if err := RefreshDispatchRisk(ctx, tx); err != nil {
+		return fmt.Errorf("rebuild dispatch branch risk: %w", err)
+	}
 	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
 		if err := ensureNodeAddressEnabledColumn(ctx, tx, tableName); err != nil {
 			return err

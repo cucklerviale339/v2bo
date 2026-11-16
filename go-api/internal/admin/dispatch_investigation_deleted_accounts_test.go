@@ -155,7 +155,7 @@ func TestPostgresInvestigationDeletedAccountsDoNotBlockActions(t *testing.T) {
 	}
 }
 
-func TestPostgresInvestigationDeletedAccountsCannotAutomateSingleton(t *testing.T) {
+func TestPostgresInvestigationDeletedAccountsDoNotImplicateNonRecipients(t *testing.T) {
 	for _, remaining := range []int{0, 1} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			f := newInvestigationIntegration(t)
@@ -178,6 +178,30 @@ func TestPostgresInvestigationDeletedAccountsCannotAutomateSingleton(t *testing.
 				t.Fatal("incorrect remaining roster", shown, ok)
 			}
 			f.execProcess(g.ID)
+			if remaining == 1 {
+				for _, x := range f.groups() {
+					if x.Kind == "confirmed" {
+						t.Fatal("lack of normal controls fabricated proof", x)
+					}
+				}
+				// There is only one valid control after deleting these users;
+				// the still-bound unused monitor prevents treating it as the
+				// sole configured control. Automatic proof must remain blocked.
+				if f.successfulEvents() != 0 {
+					t.Fatal("deleted roster bypassed evidence controls")
+				}
+				current := f.group(g.Host)
+				if err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: current.ID, Revision: current.Revision}); err != nil {
+					t.Fatal("unproven singleton could not be manually recovered", err)
+				}
+				for _, x := range f.groups() {
+					if x.Kind == "confirmed" {
+						t.Fatal("manual action without normal controls fabricated proof", x)
+					}
+				}
+				f.assertUserHosts(11, "192.0.2.201")
+				return
+			}
 			if err := f.s.TriggerInvestigation(f.ctx, InvestigationAction{ID: g.ID, Revision: g.Revision}); err == nil {
 				t.Fatal("deleted accounts allowed automatic allocation for singleton/empty group")
 			}

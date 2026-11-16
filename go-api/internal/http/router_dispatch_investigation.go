@@ -105,7 +105,19 @@ func handleInvestigation(w http.ResponseWriter, r *http.Request, service admin.S
 			return
 		}
 	}
-	view, err := s.GetInvestigation(ctx, page)
+	category := r.URL.Query().Get("category")
+	if category != "" && category != "all" && category != "screening" && category != "lifecycle" && category != "management" {
+		writeJSON(w, 400, map[string]any{"message": "历史分类无效"})
+		return
+	}
+	var view admin.InvestigationView
+	if categorized, ok := s.(interface {
+		GetInvestigationCategory(context.Context, int64, string) (admin.InvestigationView, error)
+	}); ok && category != "" {
+		view, err = categorized.GetInvestigationCategory(ctx, page, category)
+	} else {
+		view, err = s.GetInvestigation(ctx, page)
+	}
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"message": "入口筛选数据读取失败"})
 		return

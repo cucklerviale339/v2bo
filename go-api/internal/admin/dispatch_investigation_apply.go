@@ -32,6 +32,10 @@ func lockInvestigationAddresses(ctx context.Context, tx *sql.Tx) error {
 }
 
 func (s *DBService) healthyObservation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup) (*InvestigationGroup, error) {
+	held, err := investigationPromotionHeld(ctx, tx, g.ID)
+	if err != nil || held {
+		return nil, err
+	}
 	var port int64
 	if err := tx.QueryRowContext(ctx, `SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, g.MonitorID).Scan(&port); err != nil {
 		return nil, err
@@ -41,6 +45,13 @@ func (s *DBService) healthyObservation(ctx context.Context, tx *sql.Tx, g Invest
 			continue
 		}
 		if v.RosterFrozen || (v.NormalSince > 0 && time.Now().Unix()-v.NormalSince >= stableObserveSeconds) {
+			continue
+		}
+		held, err := investigationPromotionHeld(ctx, tx, v.ID)
+		if err != nil {
+			return nil, err
+		}
+		if held {
 			continue
 		}
 		var otherPort int64
@@ -140,6 +151,10 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 	all := investigationGroupIDs(g)
 	yes, no := investigationPullPartition(all, pulled)
 	recentIDs, olderIDs := investigationPullPartition(yes, recent)
+	proof, err := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled)
+	if err != nil {
+		return err
+	}
 	kind := "filtered"
 	parts := []investigationPartition{}
 	switch {
@@ -201,7 +216,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM v2_dispatch_whitelist_fault WHERE root_id=$1 AND confirmed_at>$2`, g.RootID, time.Now().Unix()-86400).Scan(&count); err != nil {
 				return err
 			}
-			if evidence.Mode != "manual" && count >= 1 {
+			if evidence.Mode != "manual" && count >= 1 && len(all) > 1 {
 				kind = "whitelist_bisected"
 				whole = false
 				role = "review"
@@ -222,14 +237,24 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 	if whole {
 		parts = []investigationPartition{{IDs: all, Kind: g.Kind}}
 	}
+	if proof != nil {
+		// Sole recipient is established for the entire source round, not for
+		// each recent/older partition. Non-recipients always get a healthy route.
+		whole = false
+		kind = "filtered"
+		role = "ordinary"
+		parts = []investigationPartition{{IDs: []int64{proof.UserID}, Kind: "confirmed", Host: g.Host}}
+		if len(no) > 0 {
+			parts = append(parts, investigationPartition{IDs: no, Kind: "observation"})
+		}
+	}
 	for i := range parts {
 		p := &parts[i]
 		p.Name = investigationGroupName(p.Kind)
 		if role == "review" {
 			p.Name = "老实人·复核"
 		}
-		if len(p.IDs) == 1 && p.Kind != "observation" {
-			p.Kind = "confirmed"
+		if p.Kind == "confirmed" && proof != nil {
 			p.Name = investigationGroupName(p.Kind)
 			p.Host = g.Host
 			continue
@@ -246,6 +271,10 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				p.Name = target.Name
 			}
 		}
+	}
+	narrowing, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence)
+	if err != nil {
+		return err
 	}
 	needed := 0
 	for _, p := range parts {
@@ -265,6 +294,19 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			return err
 		}
 		if len(pool) < needed {
+			// Confirmation is independent of spare capacity. Healthy siblings
+			// start their clock now even while this branch waits for new IPs.
+			if narrowing.Confirmed && len(yes) > 0 {
+				var recorded bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_investigation_event WHERE group_id=$1 AND kind='branch_fault' AND payload->>'generation'=$2::bigint::text AND first_failure_at=$3)`, g.ID, g.Generation, evidence.First).Scan(&recorded); err != nil {
+					return err
+				}
+				if !recorded {
+					if err := investigationAudit(ctx, tx, g.RootID, g.ID, "branch_fault", evidence.First, map[string]any{"before": g, "generation": g.Generation, "pulled_ids": yes, "unpulled_ids": no, "evidence": evidence, "risk_narrowing": narrowing}); err != nil {
+						return err
+					}
+				}
+			}
 			return finish(fmt.Sprintf("等待 %d 个同检测端口的健康未占用备用 IP", needed))
 		}
 		pool = pool[:needed]
@@ -312,9 +354,15 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				if role == "review" && len(p.IDs) > 1 {
 					name = "老实人·复核"
 				}
-				manual := len(p.IDs) == 1 && p.Kind != "observation"
-				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason,route_scope,lifecycle_role,policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, manual, now, map[bool]string{true: "自动产生单人组，仅人工操作", false: "等待新入口确认正常"}[manual], g.RouteScope, role, g.Policy).Scan(&p.GroupID); e != nil {
+				manual := p.Kind == "confirmed" && proof != nil
+				if e := tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(root_id,parent_id,legacy_root_id,name,kind,host,monitor_id,manual_only,epoch_at,created_at,reason,route_scope,lifecycle_role,policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) RETURNING id`, g.RootID, g.ID, g.LegacyRootID, name, p.Kind, p.Host, monitor, manual, now, map[bool]string{true: "入口健康后仅此用户在首次失败前成功拉取，已确认故障；仅人工操作", false: "等待新入口确认正常"}[manual], g.RouteScope, role, g.Policy).Scan(&p.GroupID); e != nil {
 					return e
+				}
+				if manual {
+					raw, _ := json.Marshal(proof)
+					if _, e := tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET confirmation_proof=$2 WHERE id=$1`, p.GroupID, string(raw)); e != nil {
+						return e
+					}
 				}
 			}
 			raw, _ := json.Marshal(p.IDs)
@@ -408,7 +456,31 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				return e
 			}
 		}
-		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "reason": map[string]string{"filtered": "按首次失败前120分钟及本轮实际拉取记录筛选", "bisected": "全部拉取过且属于同一时间类别，按实际人数二分", "no_pulls": "无人拉取，成员不变", "recovered": "保留成员并切换健康观察入口", "observation_repaired": "补完历史未拉取单人组的健康观察入口分配"}[kind]})
+		if proof != nil {
+			latest, e := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled)
+			if e != nil {
+				return e
+			}
+			if latest == nil {
+				return fmt.Errorf("实锤证据发生变化，本轮未修改")
+			}
+		}
+		if narrowing.Confirmed {
+			latest, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(latest, narrowing) {
+				if evidence.Mode != "manual" {
+					return fmt.Errorf("分支故障或正常对照发生变化，本轮未修改")
+				}
+				// Keep the administrator's fixed receipt cutoff. Changed probe
+				// evidence cancels sibling release, not the manual partition.
+				narrowing.Confirmed = false
+				narrowing.HealthyGroups = []int64{}
+			}
+		}
+		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "risk_narrowing": narrowing, "confirmation": proof, "reason": map[string]string{"filtered": "按首次失败前120分钟及本轮实际拉取记录筛选；实锤另核验入口本轮唯一拉取证据", "bisected": "全部拉取过且属于同一时间类别，按实际人数二分", "no_pulls": "无人拉取，成员不变", "recovered": "保留成员并切换健康观察入口", "observation_repaired": "补完历史误标单人组的健康观察入口分配"}[kind]})
 	}
 	if err = attempt(); err != nil {
 		if _, e := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT investigation_apply`); e != nil {

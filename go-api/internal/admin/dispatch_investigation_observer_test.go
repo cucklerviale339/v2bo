@@ -288,8 +288,18 @@ func TestPostgresInvestigationObserverUpgradeRespectsEditsAndEvidence(t *testing
 				t.Fatal(err)
 			}
 			for _, x := range f.groups() {
-				if x.ID == g.ID && (x.Kind != "confirmed" || x.ObservationRepairPending) {
-					t.Fatal("overrode a changed or unproven group", x)
+				if x.ID != g.ID {
+					continue
+				}
+				if x.Kind == "confirmed" {
+					t.Fatal("unsupported historical label survived", x)
+				}
+				if mode == "recipient" {
+					if x.ManualOnly || !x.ObservationRepairPending {
+						t.Fatal("untouched recipient singleton cannot resume observation", x)
+					}
+				} else if !x.ManualOnly || x.ObservationRepairPending {
+					t.Fatal("changed/deleted group was automatically resumed", x)
 				}
 			}
 		})

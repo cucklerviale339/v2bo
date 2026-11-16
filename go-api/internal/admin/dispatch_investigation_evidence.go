@@ -417,6 +417,12 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if !inScope {
 		return finish("不在当前生效范围，保留分组和地址，暂停自动处理")
 	}
+	if !immediate && settings.LifecycleEnabled {
+		stage = "纠正历史阶段晋级"
+		if handled, e := s.correctInvestigationStage(ctx, tx, g, entries, finish); handled || e != nil {
+			return e
+		}
+	}
 	key, probes, fresh, err := investigationProbeConfig(ctx, tx, g.MonitorID)
 	if err != nil {
 		return err
@@ -436,6 +442,9 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 				return err
 			}
 			g.ConfigKey = key
+			// Receipt ownership is preserved for manual partitioning, but the
+			// old configuration's healthy baseline cannot confirm this one.
+			g.ReadyAt = 0
 		} else {
 			resumable, e := investigationRestartMatches(ctx, tx, g, key)
 			if e != nil {
@@ -463,7 +472,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	for _, p := range probes {
 		allSuccess = allSuccess && p.Success
 	}
-	repair := g.ObservationRepairPending && g.Kind == "observation" && g.LifecycleRole == "ordinary" && g.RouteScope == "business"
+	repair := g.ObservationRepairPending && g.Policy == "smart" && g.LifecycleRole == "ordinary" && g.RouteScope == "business"
 	if !immediate && allSuccess && !repair {
 		stage = "更新正常入口观察状态"
 		for _, p := range probes {

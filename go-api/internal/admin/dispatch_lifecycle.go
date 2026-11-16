@@ -116,6 +116,14 @@ func (s *DBService) advanceNormalObservation(ctx context.Context, tx *sql.Tx, g 
 			return err
 		}
 	}
+	// Clamp the personal clock before subtracting report gaps. A later
+	// sibling release cannot borrow paused time, and its post-release gaps
+	// must be charged even if a later pull lowered the raw first receipt.
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_dispatch_stability_receipt d SET first_at=GREATEST(d.first_at,`+investigationRiskReleasedAt+`)
+FROM v2_dispatch_investigation_member m WHERE m.group_id=$1 AND d.origin_host=m.origin_host AND d.user_id=m.user_id AND d.host=$2
+AND d.first_at<`+investigationRiskReleasedAt+``, g.ID, g.Host); err != nil {
+		return err
+	}
 	previous := map[int64]normalCheckpoint{}
 	_ = json.Unmarshal(g.NormalCheckpoints, &previous)
 	checkpoints := map[int64]normalCheckpoint{}
@@ -410,7 +418,8 @@ func (s *DBService) promoteInvestigation(ctx context.Context, tx *sql.Tx, g Inve
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.user_id FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id
 JOIN v2_dispatch_stability_receipt d ON d.origin_host=m.origin_host AND d.user_id=m.user_id AND d.host=$2
-WHERE m.group_id=$1 AND GREATEST(d.first_at,$3::bigint)<=$4::bigint-$5::bigint
+WHERE m.group_id=$1 AND GREATEST(d.first_at,$3::bigint,`+investigationRiskReleasedAt+`)<=$4::bigint-$5::bigint
+AND NOT `+investigationRiskBlocked+`
 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_member other JOIN v2_dispatch_investigation_group x ON x.id=other.group_id AND x.active
 WHERE other.user_id=m.user_id AND x.id<>$1 AND (x.manual_only OR x.policy<>'smart' OR EXISTS(SELECT 1 FROM v2_dispatch_monitor_state st WHERE st.monitor_id=x.monitor_id AND NOT st.success)))
 ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.NormalObservedAt), required)
@@ -434,6 +443,16 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 	}
 	ids, _ := investigationPullPartition(investigationGroupIDs(g), eligible)
 	if len(ids) == 0 {
+		if g.PromotionBlockedCount > 0 {
+			held, err := investigationPromotionHeld(ctx, tx, g.ID)
+			if err != nil {
+				return err
+			}
+			if held {
+				return finish("独立复核中，确认故障并完成细分前不参与晋级")
+			}
+			return finish("候选分支追查中，暂停个人晋级计时；继续监控和故障处理")
+		}
 		return finish(lifecycleNormalReason(g, time.Now().Unix()))
 	}
 	// A stage shares one concrete roster and entrance. Each member retains

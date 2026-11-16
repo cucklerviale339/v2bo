@@ -59,12 +59,17 @@ type InvestigationGroup struct {
 	NormalCheckpoints        json.RawMessage `json:"-"`
 	NormalHistoryImported    bool            `json:"-"`
 	ObservationRepairPending bool            `json:"observation_repair_pending"`
+	PromotionBlockedCount    int64           `json:"promotion_blocked_count"`
+	PromotionBlockedUserIDs  []string        `json:"-"`
+	PromotionHoldCount       int64           `json:"promotion_hold_count"`
+	PromotionHoldUserIDs     []string        `json:"-"`
+	ConfirmationProof        json.RawMessage `json:"confirmation_proof"`
 }
 
-// A non-recipient is an observer even when alone. Only this ordinary business
-// group is exempt from singleton manual handling; candidates/stages are not.
+// Only an evidenced confirmed group is locked. A one-person partition still
+// needs a new healthy round; group size alone never disables automation.
 func investigationSingleManual(g InvestigationGroup) bool {
-	return len(g.UserIDs) <= 1 && !(len(g.UserIDs) == 1 && g.Kind == "observation" && g.LifecycleRole == "ordinary" && g.RouteScope == "business")
+	return len(g.UserIDs) == 0 || g.Kind == "confirmed"
 }
 
 type InvestigationEvent struct {
@@ -180,7 +185,9 @@ SELECT m.group_id,jsonb_agg(m.user_id::text ORDER BY m.user_id) AS ids
 FROM selected g JOIN (SELECT m.group_id,m.user_id FROM v2_dispatch_investigation_member m JOIN selected sg ON sg.id=m.group_id AND sg.route_scope='business'
 UNION SELECT w.group_id,w.user_id FROM v2_dispatch_global_member w) m ON m.group_id=g.id JOIN v2_user u ON u.id=m.user_id GROUP BY m.group_id)
 SELECT g.id,g.root_id,g.parent_id,g.legacy_root_id,g.name,g.kind,g.host,g.monitor_id,g.active,g.manual_only,g.revision,g.generation,g.epoch_at,g.ready_at,g.config_key,g.reason,g.no_pull_count,COALESCE(c.confirmed_at,0),COALESCE(r.ids,'[]'::jsonb),g.route_scope,g.lifecycle_role,g.policy,g.normal_since,g.normal_checkpoints,
-(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen,g.normal_history_imported,g.observation_repair_pending
+(SELECT COALESCE(jsonb_agg(DISTINCT d.user_id::text),'[]'::jsonb) FROM v2_dispatch_investigation_delivery d JOIN v2_user u ON u.id=d.user_id WHERE d.group_id=g.id AND d.generation=g.generation),g.roster_frozen,g.normal_history_imported,g.observation_repair_pending,g.confirmation_proof,
+(SELECT COALESCE(jsonb_agg(DISTINCT m.user_id::text),'[]') FROM v2_dispatch_investigation_member m WHERE m.group_id=g.id AND `+investigationRiskBlocked+`),
+(SELECT COALESCE(jsonb_agg(DISTINCT m.user_id::text),'[]') FROM v2_dispatch_investigation_member m WHERE m.group_id=g.id AND `+investigationPromotionHold+`)
 FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_investigation_confirmation c ON c.group_id=g.id AND c.generation=g.generation ORDER BY g.id`, args...)
 	if err != nil {
 		return nil, err
@@ -191,7 +198,9 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 		var g InvestigationGroup
 		var ids []byte
 		var pulls []byte
-		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen, &g.NormalHistoryImported, &g.ObservationRepairPending); err != nil {
+		var blocked []byte
+		var held []byte
+		if err = rows.Scan(&g.ID, &g.RootID, &g.ParentID, &g.LegacyRootID, &g.Name, &g.Kind, &g.Host, &g.MonitorID, &g.Active, &g.ManualOnly, &g.Revision, &g.Generation, &g.EpochAt, &g.ReadyAt, &g.ConfigKey, &g.Reason, &g.NoPullCount, &g.ConfirmedAt, &ids, &g.RouteScope, &g.LifecycleRole, &g.Policy, &g.NormalSince, &g.NormalCheckpoints, &pulls, &g.RosterFrozen, &g.NormalHistoryImported, &g.ObservationRepairPending, &g.ConfirmationProof, &blocked, &held); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(ids, &g.UserIDs); err != nil {
@@ -201,6 +210,14 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 			return nil, err
 		}
 		g.PulledCount = int64(len(g.PulledUserIDs))
+		if err = json.Unmarshal(blocked, &g.PromotionBlockedUserIDs); err != nil {
+			return nil, err
+		}
+		g.PromotionBlockedCount = int64(len(g.PromotionBlockedUserIDs))
+		if err = json.Unmarshal(held, &g.PromotionHoldUserIDs); err != nil {
+			return nil, err
+		}
+		g.PromotionHoldCount = int64(len(g.PromotionHoldUserIDs))
 		checkpoints := map[int64]normalCheckpoint{}
 		if err = json.Unmarshal(g.NormalCheckpoints, &checkpoints); err != nil {
 			return nil, err
@@ -215,9 +232,16 @@ FROM selected g LEFT JOIN roster r ON r.group_id=g.id LEFT JOIN v2_dispatch_inve
 	return out, rows.Err()
 }
 func (s *DBService) GetInvestigation(ctx context.Context, page int64) (InvestigationView, error) {
+	return s.GetInvestigationCategory(ctx, page, "all")
+}
+
+func (s *DBService) GetInvestigationCategory(ctx context.Context, page int64, category string) (InvestigationView, error) {
 	out := InvestigationView{Groups: []InvestigationGroup{}, Events: []InvestigationEvent{}, Page: page}
 	if page < 1 || page > 100000 {
 		return out, splitEditInvalid("页码无效")
+	}
+	if category != "all" && category != "screening" && category != "lifecycle" && category != "management" {
+		return out, splitEditInvalid("历史分类无效")
 	}
 	if err := s.ensureInvestigation(ctx); err != nil {
 		return out, err
@@ -236,7 +260,17 @@ func (s *DBService) GetInvestigation(ctx context.Context, page int64) (Investiga
 		return out, err
 	}
 	out.Groups = currentInvestigationGroups(out.Groups, members)
-	const visibleEvents = ` FROM v2_dispatch_investigation_event e WHERE NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_monitor m ON m.id=g.monitor_id WHERE g.id=e.group_id AND m.deleted)`
+	visibleEvents := ` FROM v2_dispatch_investigation_event e WHERE NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_monitor m ON m.id=g.monitor_id WHERE g.id=e.group_id AND m.deleted)`
+	const lifecycleEvents = `(e.kind IN('stable_promoted','whitelist_promoted','whitelist_failed_over','whitelist_bisected','whitelist_returned','observation_imported','stage_corrected') OR (e.kind IN('recovered','no_pulls','filtered','bisected','branch_fault') AND COALESCE(e.payload->'before'->>'lifecycle_role','') IN('stable','whitelist','review')))`
+	const screeningEvents = `(e.kind IN('filtered','bisected','no_pulls','branch_fault','recovered','observation_corrected','observation_repaired','confirmation_corrected') AND NOT ` + lifecycleEvents + `)`
+	switch category {
+	case "screening":
+		visibleEvents += ` AND ` + screeningEvents
+	case "lifecycle":
+		visibleEvents += ` AND ` + lifecycleEvents
+	case "management":
+		visibleEvents += ` AND NOT ` + lifecycleEvents + ` AND NOT ` + screeningEvents
+	}
 	if err = s.db.QueryRowContext(ctx, `SELECT count(*)`+visibleEvents).Scan(&out.Total); err != nil {
 		return out, err
 	}
@@ -281,9 +315,25 @@ func currentInvestigationGroups(groups []InvestigationGroup, members map[int64]u
 			pulled[id] = true
 		}
 		g.PulledCount = 0
+		blocked := map[string]bool{}
+		for _, id := range g.PromotionBlockedUserIDs {
+			blocked[id] = true
+		}
+		g.PromotionBlockedCount = 0
+		held := map[string]bool{}
+		for _, id := range g.PromotionHoldUserIDs {
+			held[id] = true
+		}
+		g.PromotionHoldCount = 0
 		for _, id := range ids {
 			if pulled[id] {
 				g.PulledCount++
+			}
+			if blocked[id] {
+				g.PromotionBlockedCount++
+			}
+			if held[id] {
+				g.PromotionHoldCount++
 			}
 		}
 		if len(ids) > 0 {
@@ -350,8 +400,12 @@ func investigationAudit(ctx context.Context, tx *sql.Tx, root, group int64, kind
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,first_failure_at,created_at,payload) VALUES($1,$2,$3,$4,$5,$6)`, root, group, kind, first, time.Now().Unix(), string(raw))
-	return err
+	var id int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,first_failure_at,created_at,payload) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, root, group, kind, first, time.Now().Unix(), string(raw)).Scan(&id)
+	if err != nil {
+		return err
+	}
+	return recordInvestigationRisk(ctx, tx, id, kind, string(raw))
 }
 func (s *DBService) invalidateDispatchCatalog() {
 	s.dispatchCacheMu.Lock()
@@ -549,10 +603,7 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 		var root int64
 		name := investigationGroupName("candidate")
 		reason := "等待入口正常后开始观察"
-		if len(ids) == 1 {
-			reason = "单人组，仅人工操作"
-		}
-		if err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(name,kind,host,monitor_id,legacy_root_id,manual_only,epoch_at,created_at,reason) VALUES($1,'candidate',$2,$3,$4,$5,$6,$6,$7) RETURNING id`, name, o.host, o.id, o.legacy, len(ids) == 1, now, reason).Scan(&root); err != nil {
+		if err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_group(name,kind,host,monitor_id,legacy_root_id,manual_only,epoch_at,created_at,reason) VALUES($1,'candidate',$2,$3,$4,$5,$6,$6,$7) RETURNING id`, name, o.host, o.id, o.legacy, false, now, reason).Scan(&root); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE v2_dispatch_investigation_group SET root_id=id WHERE id=$1`, root); err != nil {
@@ -667,7 +718,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 		return splitEditInvalid("自动策略无效")
 	}
 	if v.UserIDs == nil && investigationSingleManual(g) && !v.ManualOnly {
-		return splitEditInvalid("单人组只能人工操作")
+		return splitEditInvalid("已确认实锤组只能人工操作")
 	}
 	if err = lockInvestigationAddresses(ctx, tx); err != nil {
 		return err
@@ -682,7 +733,7 @@ func (s *DBService) EditInvestigation(ctx context.Context, v InvestigationEdit) 
 	}
 	g = current[0]
 	if v.UserIDs == nil && investigationSingleManual(g) && !v.ManualOnly {
-		return splitEditInvalid("单人组只能人工操作")
+		return splitEditInvalid("已确认实锤组只能人工操作")
 	}
 	now := time.Now().Unix()
 	monitor := g.MonitorID

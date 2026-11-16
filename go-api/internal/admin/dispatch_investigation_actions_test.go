@@ -190,7 +190,7 @@ func TestPostgresInvestigationManualTriggerShortOutageAndIdempotency(t *testing.
 }
 
 func TestPostgresInvestigationManualTriggerRetainsGuards(t *testing.T) {
-	for _, kind := range []string{"pool", "disabled", "single", "revision", "deleted", "scope"} {
+	for _, kind := range []string{"pool", "disabled", "confirmed", "revision", "deleted", "scope"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newInvestigationIntegration(t)
 			f.pool("192.0.2.211", "192.0.2.212")
@@ -202,8 +202,8 @@ func TestPostgresInvestigationManualTriggerRetainsGuards(t *testing.T) {
 				f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
 			case "disabled":
 				f.exec(`UPDATE v2_dispatch_investigation_settings SET enabled=FALSE`)
-			case "single":
-				f.exec(`DELETE FROM v2_dispatch_investigation_member WHERE group_id=$1 AND user_id<>11`, g.ID)
+			case "confirmed":
+				f.exec(`UPDATE v2_dispatch_investigation_group SET kind='confirmed',manual_only=TRUE WHERE id=$1`, g.ID)
 			case "revision":
 				g.Revision--
 			case "deleted":
@@ -242,15 +242,15 @@ func TestPostgresInvestigationConfirmationNewRoundAndGuards(t *testing.T) {
 	}
 	// Empty new-round receipts are handled by the separate manual snapshot path;
 	// they never borrow the previous generation's deliveries.
-	for _, kind := range []string{"single", "manual", "disabled", "deleted", "offline", "scope"} {
+	for _, kind := range []string{"confirmed", "manual", "disabled", "deleted", "offline", "scope"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newInvestigationIntegration(t)
 			g := f.group("range.example")
 			f.outage(g, nil)
 			g = f.group(g.Host)
 			switch kind {
-			case "single":
-				f.exec(`DELETE FROM v2_dispatch_investigation_member WHERE group_id=$1 AND user_id<>11`, g.ID)
+			case "confirmed":
+				f.exec(`UPDATE v2_dispatch_investigation_group SET kind='confirmed',manual_only=TRUE WHERE id=$1`, g.ID)
 			case "manual":
 				f.exec(`UPDATE v2_dispatch_investigation_group SET manual_only=TRUE WHERE id=$1`, g.ID)
 			case "disabled":

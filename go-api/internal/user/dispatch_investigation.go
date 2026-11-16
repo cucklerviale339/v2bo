@@ -194,7 +194,8 @@ SELECT DISTINCT m.origin_host,$2::bigint,g.host,$3::bigint,$3::bigint FROM eligi
 JOIN v2_dispatch_investigation_group g ON g.id=e.id
 JOIN v2_dispatch_investigation_member m ON m.group_id=g.id AND m.user_id=$2
 ON CONFLICT(origin_host,user_id) DO UPDATE SET host=EXCLUDED.host,
-first_at=CASE WHEN v2_dispatch_stability_receipt.host=EXCLUDED.host THEN LEAST(v2_dispatch_stability_receipt.first_at,EXCLUDED.first_at) ELSE EXCLUDED.first_at END,
+first_at=CASE WHEN v2_dispatch_stability_receipt.host=EXCLUDED.host THEN GREATEST(LEAST(v2_dispatch_stability_receipt.first_at,EXCLUDED.first_at),
+COALESCE((SELECT max(CASE WHEN rm.cleared_event_id>0 THEN rm.cleared_at ELSE rc.resolved_at END) FROM v2_dispatch_risk_member rm JOIN v2_dispatch_risk_case rc ON rc.event_id=rm.event_id WHERE rm.user_id=$2),0)) ELSE EXCLUDED.first_at END,
 last_at=EXCLUDED.last_at WHERE EXCLUDED.last_at>=v2_dispatch_stability_receipt.last_at)
 INSERT INTO v2_dispatch_host_exposure(host,user_id,first_at,last_at)
 SELECT DISTINCT host,$2::bigint,$3::bigint,$3::bigint FROM jsonb_to_recordset($1::jsonb) e(group_id bigint,generation bigint,host text)

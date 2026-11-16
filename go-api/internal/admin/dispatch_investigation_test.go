@@ -549,7 +549,7 @@ func TestPostgresInvestigationDefaultOffAndOriginalSingleton(t *testing.T) {
 		t.Fatal(err)
 	}
 	groups, _ = readInvestigationGroups(f.ctx, f.db, true)
-	if len(groups) != 1 || !groups[0].ManualOnly || groups[0].Name == "实锤内鬼" {
+	if len(groups) != 1 || groups[0].ManualOnly || groups[0].Name == "实锤内鬼" {
 		t.Fatal(groups)
 	}
 }

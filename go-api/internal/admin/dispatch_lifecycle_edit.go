@@ -51,7 +51,7 @@ func editInvestigationMembers(ctx context.Context, tx *sql.Tx, g InvestigationGr
 		normalized[i] = strconv.FormatInt(id, 10)
 	}
 	v.UserIDs = &normalized
-	if len(ids) == 1 {
+	if g.Kind == "confirmed" {
 		v.ManualOnly = true
 	}
 	rawIDs, _ := json.Marshal(ids)

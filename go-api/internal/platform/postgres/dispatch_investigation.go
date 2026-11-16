@@ -2,7 +2,7 @@ package postgres
 
 // Kept with the address schema so catalog reads and subscription dispatch never
 // depend on an administrator having opened the new page first.
-var DispatchInvestigationSchema = []string{
+var DispatchInvestigationSchema = append([]string{
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_investigation_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled BOOLEAN NOT NULL DEFAULT FALSE,armed_at BIGINT NOT NULL DEFAULT 0,revision BIGINT NOT NULL DEFAULT 1,entry_window_minutes INTEGER NOT NULL DEFAULT 20 CHECK(entry_window_minutes BETWEEN 1 AND 10080),global_window_minutes INTEGER NOT NULL DEFAULT 60 CHECK(global_window_minutes BETWEEN 1 AND 10080),global_max INTEGER NOT NULL DEFAULT 3 CHECK(global_max BETWEEN 1 AND 100))`,
 	`INSERT INTO v2_dispatch_investigation_settings(id) VALUES(1) ON CONFLICT DO NOTHING`,
 	`ALTER TABLE v2_dispatch_investigation_settings ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'all' CHECK(scope IN('all','multi_range'))`,
@@ -70,4 +70,4 @@ RETURNING g.id,g.root_id,g.parent_id,g.host)
 INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,created_at,payload)
 SELECT root_id,id,'observation_corrected',EXTRACT(EPOCH FROM clock_timestamp())::bigint,
 jsonb_build_object('host',host,'parent_group_id',parent_id,'reason','原筛选未拉取分支被单人规则误标，恢复观察并补发健康入口') FROM corrected; END IF; END $$`,
-}
+}, dispatchConfirmationSchema...)

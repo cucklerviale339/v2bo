@@ -169,13 +169,13 @@ func TestPostgresLifecycleEditWhitelistHostAndReturningMember(t *testing.T) {
 	if returned.MonitorID == white.MonitorID || returned.NormalSince != 0 {
 		t.Fatal("old endpoint evidence was resurrected", returned)
 	}
-	// Explicitly reducing to one member always enforces manual-only operation.
+	// A manually reduced roster is not evidence of a sole-recipient fault.
 	single := lifecycleEditRequest(returned, "11")
 	if err := f.s.EditInvestigation(f.ctx, single); err != nil {
 		t.Fatal(err)
 	}
-	if !f.group(back.Host).ManualOnly {
-		t.Fatal("singleton automation remained enabled")
+	if f.group(back.Host).ManualOnly {
+		t.Fatal("unproven singleton observation was disabled")
 	}
 	f.assertUserHosts(12, "range.example")
 }
