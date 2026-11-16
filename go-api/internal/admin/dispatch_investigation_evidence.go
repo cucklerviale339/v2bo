@@ -417,9 +417,17 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if !inScope {
 		return finish("不在当前生效范围，保留分组和地址，暂停自动处理")
 	}
+	correctionPending := ""
 	if !immediate && settings.LifecycleEnabled {
 		stage = "纠正历史阶段晋级"
-		if handled, e := s.correctInvestigationStage(ctx, tx, g, entries, finish); handled || e != nil {
+		// Waiting for a correction IP must not skip monitor reconciliation,
+		// healthy observation or fault handling. A completed correction commits
+		// its own transaction; a deferred correction leaves it open here.
+		handled, e := s.correctInvestigationStage(ctx, tx, g, entries, func(reason string) error {
+			correctionPending = reason
+			return nil
+		})
+		if e != nil || (handled && correctionPending == "") {
 			return e
 		}
 	}
@@ -521,6 +529,11 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 		}
 		if !settings.LifecycleEnabled || g.Policy != "smart" {
 			return finish("正常观察中")
+		}
+		if correctionPending != "" {
+			// Preserve the pending roster correction and do not promote the
+			// mixed stage while still advancing unaffected users' observation.
+			return finish(correctionPending)
 		}
 		required := stableObserveSeconds
 		if g.LifecycleRole == "stable" {

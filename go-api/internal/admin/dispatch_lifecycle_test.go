@@ -227,6 +227,72 @@ func TestPostgresLifecycleSharedStageAcrossBusinessOrigins(t *testing.T) {
 	}
 }
 
+func TestPostgresLifecycleAdmissionAcrossDetectionPorts(t *testing.T) {
+	for _, role := range []string{"stable", "whitelist"} {
+		t.Run(role, func(t *testing.T) {
+			f := newInvestigationIntegration(t)
+			f.enableLifecycle()
+			f.pool("192.0.2.211", "192.0.2.212")
+			root := f.readyToPromote(f.group("range.example"), []int64{11, 12, 13, 14})
+			f.execProcess(root.ID)
+			target := f.stageGroup("stable")
+			if role == "whitelist" {
+				target = f.readyToPromote(target, []int64{11, 12, 13, 14})
+				f.execProcess(target.ID)
+				target = f.stageGroup("whitelist")
+			}
+			f.exec(`UPDATE v2_dispatch_monitor SET check_port=23135,version=version+1 WHERE id=$1`, target.MonitorID)
+			target = f.readyToPromote(f.group(target.Host), []int64{11, 12})
+			before := f.group(target.Host)
+			source := f.group("base.example")
+			if role == "whitelist" {
+				f.exec(`UPDATE v2_dispatch_investigation_group SET lifecycle_role='stable' WHERE id=$1`, source.ID)
+			}
+			f.exec(`UPDATE v2_dispatch_monitor SET check_port=23130,version=version+1 WHERE id=$1`, source.MonitorID)
+			source = f.readyToPromote(f.group(source.Host), []int64{5, 150})
+			f.execProcess(source.ID)
+			after := f.group(target.Host)
+			if after.ID != before.ID || after.Generation != before.Generation || after.NormalSince != before.NormalSince || !reflect.DeepEqual(after.NormalCheckpoints, before.NormalCheckpoints) || !reflect.DeepEqual(after.UserIDs, []string{"5", "11", "12", "13", "14", "150"}) {
+				t.Fatal("cross-port admission changed target evidence or failed to move members", before, after, f.group(source.Host))
+			}
+			f.assertCheckPort(source.Host, 23130)
+			f.assertCheckPort(target.Host, 23135)
+			f.assertUserHosts(5, target.Host)
+			f.assertUserHosts(150, target.Host)
+			var receipts int
+			if err := f.db.QueryRow(`SELECT count(*) FROM v2_dispatch_stability_receipt WHERE user_id IN(5,150) AND host=$1`, target.Host).Scan(&receipts); err != nil || receipts != 0 {
+				t.Fatal("admission manufactured destination receipts", receipts, err)
+			}
+			nodes, err := usersvc.NewDBService(f.s.cfg, f.db).Servers(f.ctx, 5, "")
+			if err != nil || len(nodes) != 1 || fmt.Sprint(nodes[0]["port"]) != "443" {
+				t.Fatal("detection port overwrote business port", nodes, err)
+			}
+			f.execProcess(source.ID)
+			if !reflect.DeepEqual(f.group(target.Host).UserIDs, after.UserIDs) {
+				t.Fatal("repeated admission changed roster")
+			}
+		})
+	}
+}
+
+func TestPostgresLifecycleCrossPortUnhealthyStageStillBlocksAdmission(t *testing.T) {
+	f := newInvestigationIntegration(t)
+	f.enableLifecycle()
+	f.pool("192.0.2.211")
+	root := f.readyToPromote(f.group("range.example"), []int64{11, 12})
+	f.execProcess(root.ID)
+	target := f.stageGroup("stable")
+	f.exec(`UPDATE v2_dispatch_monitor SET check_port=23135,version=version+1 WHERE id=$1`, target.MonitorID)
+	f.readyToPromote(f.group(target.Host), []int64{11, 12})
+	source := f.readyToPromote(f.group("base.example"), []int64{5, 150})
+	f.timeout(target.Host)
+	before := f.snapshot("v2_dispatch_investigation_member")
+	f.execProcess(source.ID)
+	if !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member")) || f.group(source.Host).Reason != "阶段入口异常，暂停接收新成员" {
+		t.Fatal("unhealthy cross-port stage accepted recipients", f.groups())
+	}
+}
+
 func TestPostgresLifecycleSingleFixedAndDisabledNeverPromote(t *testing.T) {
 	for _, mode := range []string{"fixed", "single", "disabled"} {
 		t.Run(mode, func(t *testing.T) {

@@ -465,10 +465,6 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 	var target InvestigationGroup
 	sharedHost := ""
 	sharedMonitor := int64(0)
-	var port int64
-	if err = tx.QueryRowContext(ctx, `SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, g.MonitorID).Scan(&port); err != nil {
-		return err
-	}
 	for _, x := range targets {
 		if x.ManualOnly || x.Policy != "smart" || len(x.UserIDs) <= 1 {
 			continue
@@ -479,13 +475,8 @@ ORDER BY m.user_id`, g.ID, g.Host, g.NormalSince, min(time.Now().Unix(), g.Norma
 			continue
 		}
 		sharedHost, sharedMonitor = x.Host, x.MonitorID
-		var otherPort int64
-		if err = tx.QueryRowContext(ctx, `SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, x.MonitorID).Scan(&otherPort); err != nil {
-			return err
-		}
-		if otherPort != port {
-			return finish("阶段入口检测端口不同，等待人工确认兼容性")
-		}
+		// Admission adopts the existing stage's monitor, including its own
+		// detection port. The source and destination need not share a port.
 		key, probes, fresh, e := investigationProbeConfig(ctx, tx, x.MonitorID)
 		if e != nil {
 			return e

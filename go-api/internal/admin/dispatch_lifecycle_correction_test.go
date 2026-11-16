@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,53 @@ func TestPostgresLifecycleCorrectionPoolWaitAndRollback(t *testing.T) {
 	f.execProcess(stage.ID)
 	if !reflect.DeepEqual(f.group(stage.Host).UserIDs, []string{"13", "14"}) {
 		t.Fatal("refill/retry did not finish correction", f.groups())
+	}
+}
+
+func TestPostgresLifecycleCorrectionWaitKeepsRestartAndObservationLive(t *testing.T) {
+	f := newInvestigationIntegration(t)
+	_, stage := f.stageWithHistoricalRisk("stable")
+	f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
+	f.restartWithEvidence()
+	task := f.tasks(f.pid)[stage.Host]
+	f.report(f.pid, task, time.Now().UnixNano(), 1, 0)
+	beforeMembers := f.snapshot("v2_dispatch_investigation_member")
+	f.execProcess(stage.ID)
+	after := f.group(stage.Host)
+	var checkpoints map[int64]normalCheckpoint
+	if err := json.Unmarshal(after.NormalCheckpoints, &checkpoints); err != nil {
+		t.Fatal(err)
+	}
+	if after.ConfigKey == stage.ConfigKey || checkpoints[f.pid].RunID != task.RunID || after.Generation != stage.Generation || !strings.HasPrefix(after.Reason, "待纠正 2 名") {
+		t.Fatal("pending correction prevented restart reconciliation", stage, after, checkpoints)
+	}
+	if after.NormalSince < stage.NormalSince || after.NormalSince > stage.NormalSince+100 || !reflect.DeepEqual(beforeMembers, f.snapshot("v2_dispatch_investigation_member")) {
+		t.Fatal("waiting changed roster or erased healthy observation", stage, after)
+	}
+	var promoted int
+	f.db.QueryRow(`SELECT count(*) FROM v2_dispatch_investigation_event WHERE kind='whitelist_promoted'`).Scan(&promoted)
+	if promoted != 0 {
+		t.Fatal("stage bypassed pending correction")
+	}
+}
+
+func TestPostgresLifecycleCorrectionWaitStillConfirmsFault(t *testing.T) {
+	f := newInvestigationIntegration(t)
+	_, stage := f.stageWithHistoricalRisk("stable")
+	f.exec(`UPDATE v2_dispatch_check_target SET enabled=FALSE WHERE kind='pool'`)
+	// Start a new continuous fixture span after the synthetic seven-day
+	// promotion history, rather than mixing its old timestamps into this fault.
+	f.exec(`DELETE FROM v2_dispatch_history WHERE source='entry' AND target_id=$1`, stage.MonitorID)
+	f.outage(stage, []int64{11, 12})
+	before := f.snapshot("v2_dispatch_investigation_member")
+	f.execProcess(stage.ID)
+	after := f.group(stage.Host)
+	var confirmed int
+	if err := f.db.QueryRow(`SELECT count(*) FROM v2_dispatch_investigation_event WHERE group_id=$1 AND kind='branch_fault'`, stage.ID).Scan(&confirmed); err != nil || confirmed != 1 {
+		t.Fatal("correction wait blocked confirmed fault handling", confirmed, err, after)
+	}
+	if after.NormalSince != 0 || !strings.HasPrefix(after.Reason, "等待 ") || !reflect.DeepEqual(before, f.snapshot("v2_dispatch_investigation_member")) {
+		t.Fatal("fault wait did not preserve routing and clear healthy observation", after)
 	}
 }
 
