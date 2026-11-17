@@ -120,7 +120,7 @@ func investigationControlSpan(samples []DispatchHistorySample, c dispatchSplitCa
 	}
 	previous := c.Reported
 	for i, x := range samples {
-		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || (i > 0 && (samples[i-1].RecordedRestartBefore || samples[i-1].UnverifiedRestartBefore || !dispatchEvidenceFollows(samples[i-1], x, c) || previous-x.ReportedAt > c.Interval+(c.Timeout+999)/1000+5)) || x.ReportedAt > previous || !dispatchPoolStateFresh(sql.NullInt64{Int64: x.ReportedAt, Valid: true}, previous, c.Interval, c.Timeout) {
+		if !x.Success || x.Version != c.Version || x.RunID != c.RunID || (i > 0 && (samples[i-1].RecordedRestartBefore || samples[i-1].UnverifiedRestartBefore || !investigationEvidenceFollows(samples[i-1], x, c))) || x.ReportedAt > previous {
 			return false
 		}
 		if x.ReportedAt <= first-max(int64(60), c.Interval) {

@@ -24,7 +24,6 @@ func investigationIncidentFrom(samples []DispatchHistorySample, c dispatchSplitC
 		}
 		return out
 	}
-	maxGap := c.Interval + (c.Timeout+999)/1000 + 5
 	// Human confirmation starts a receipt round; only a real successful probe
 	// observation establishes the baseline needed for automatic execution.
 	savedSeen := false
@@ -38,7 +37,7 @@ func investigationIncidentFrom(samples []DispatchHistorySample, c dispatchSplitC
 			out.Uncertain = true
 			continue
 		}
-		if x.UnverifiedRestartBefore || (i+1 < len(samples) && (!dispatchEvidenceFollows(x, samples[i+1], c) || x.ReportedAt-samples[i+1].ReportedAt > maxGap) && !x.RecordedRestartBefore) {
+		if x.UnverifiedRestartBefore || (i+1 < len(samples) && !investigationEvidenceFollows(x, samples[i+1], c) && !x.RecordedRestartBefore) {
 			out.Uncertain = true
 		}
 		if x.Success {
@@ -91,7 +90,7 @@ func investigationFailureWindow(samples []DispatchHistorySample, c dispatchSplit
 		if x.Version != c.Version || x.RunID != c.RunID || x.Success {
 			return false
 		}
-		if i > 0 && (samples[i-1].RecordedRestartBefore || samples[i-1].UnverifiedRestartBefore || !dispatchEvidenceFollows(samples[i-1], x, c) || samples[i-1].ReportedAt-x.ReportedAt > c.Interval+(c.Timeout+999)/1000+5) {
+		if i > 0 && (samples[i-1].RecordedRestartBefore || samples[i-1].UnverifiedRestartBefore || !investigationEvidenceFollows(samples[i-1], x, c)) {
 			return false
 		}
 		if i > 0 && c.Reported-x.ReportedAt >= duration {
