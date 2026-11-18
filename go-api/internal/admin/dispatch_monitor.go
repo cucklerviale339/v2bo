@@ -133,7 +133,7 @@ func (s *DBService) listDispatchMonitors(ctx context.Context, includeDeleted boo
 	if err := s.ensureDispatchMonitorSchema(ctx); err != nil {
 		return nil, err
 	}
-	entries, err := s.dispatchEntries(ctx)
+	entries, err := s.dispatchMonitorEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -667,10 +667,18 @@ func (s *DBService) dispatchTaskHosts(ctx context.Context) (map[string]bool, err
 	if err != nil {
 		return nil, err
 	}
+	monitored, err := s.dispatchEntriesWithRecipients(ctx, entries)
+	if err != nil {
+		return nil, err
+	}
 	hosts := map[string]bool{}
 	scopes := map[string]usersvc.DispatchEntry{}
-	for _, entry := range entries {
+	for _, entry := range monitored {
 		hosts[entry.Host] = true
+	}
+	// Pool/history snapshots retain configured ownership, including absent IDs.
+	// Only the continuous entry task set uses current account existence.
+	for _, entry := range entries {
 		scopes[entry.Host] = entry
 	}
 	s.dispatchCachedHosts = hosts

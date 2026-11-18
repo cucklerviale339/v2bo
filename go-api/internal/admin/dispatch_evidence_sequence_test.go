@@ -75,6 +75,7 @@ func (f *splitIntegration) timestampHistory() {
 
 func TestPostgresTimestampProbeTriggersFailover(t *testing.T) {
 	f := newSplitIntegration(t)
+	f.exec(`INSERT INTO v2_user(id,email,password,uuid,token,created_at,updated_at) VALUES(75,'timestamp-75@example.test','hash','00000000-0000-0000-0000-000000000075','00000000000000000000000000000075',1,1)`)
 	f.pool("192.0.2.211", "192.0.2.212")
 	f.enable()
 	f.timeout("range.example")

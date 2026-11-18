@@ -58,6 +58,7 @@ func TestDispatchMonitorSaveCustomPortAndBindingValidation(t *testing.T) {
 
 func TestDispatchTasksExcludeRemovedHostsAndUseSeparateNamespace(t *testing.T) {
 	s, mock := newDispatchTestService(t)
+	mock.ExpectQuery(`SELECT DISTINCT scope.host FROM jsonb_to_recordset`).WillReturnRows(sqlmock.NewRows([]string{"host"}).AddRow("entry.example"))
 	mock.ExpectQuery(`SELECT m.id,m.host,m.check_port`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "interval", "timeout", "version", "run"}).AddRow(3, "entry.example", 18443, 10, 500, 9, 4).AddRow(4, "removed.example", 443, 30, 3000, 1, 1))
 	tasks, err := s.ListDispatchProbeTasks(context.Background(), 7)
 	if err != nil || len(tasks) != 1 || tasks[0].TargetID != -3 || tasks[0].CheckPort != 18443 || tasks[0].TargetVersion != 9 {
@@ -118,6 +119,7 @@ func TestDispatchReportsRequireFreshHeartbeatAndNegativeVersionedTargets(t *test
 
 func TestDispatchMonitorListShowsOwnershipAndMasksExpiredResults(t *testing.T) {
 	s, mock := newDispatchTestService(t)
+	mock.ExpectQuery(`SELECT DISTINCT scope.host FROM jsonb_to_recordset`).WillReturnRows(sqlmock.NewRows([]string{"host"}).AddRow("entry.example"))
 	mock.ExpectQuery(`SELECT id,host,check_port`).WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "enabled", "interval", "timeout", "deleted"}).AddRow(3, "entry.example", 18443, true, 10, 500, false).AddRow(4, "removed.example", 443, true, 10, 500, false))
 	now := time.Now().Unix()
 	mock.ExpectQuery(`SELECT b.monitor_id,p.id,p.name`).WillReturnRows(sqlmock.NewRows([]string{"monitor", "probe", "name", "enabled", "heartbeat", "success", "latency", "error", "ip", "reported"}).AddRow(3, 7, "fresh", 1, now, true, 12, "", "192.0.2.1", now).AddRow(3, 8, "stale", 1, now, true, 12, "", "192.0.2.2", now-100))

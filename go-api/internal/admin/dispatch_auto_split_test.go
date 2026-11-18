@@ -184,6 +184,8 @@ func (f *splitIntegration) successes() int {
 
 func TestPostgresDispatchAutoSplitAtomicityAndStableFamily(t *testing.T) {
 	f := newSplitIntegration(t)
+	// Both halves need a real recipient to remain probe targets after splitting.
+	f.exec(`INSERT INTO v2_user(id,email,password,uuid,token,created_at,updated_at) VALUES(75,'split-75@example.test','hash','00000000-0000-0000-0000-000000000075','00000000000000000000000000000075',1,1)`)
 	f.pool("192.0.2.101", "192.0.2.102", "192.0.2.103", "192.0.2.104", "192.0.2.105", "192.0.2.106")
 	c := f.timeout("range.example")
 	if f.process(c) {

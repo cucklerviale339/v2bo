@@ -95,7 +95,9 @@ func TestPostgresDispatchPoolAndRunLifecycle(t *testing.T) {
 	if err = postgres.EnsureNodeAddressSchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	// Disabled and conditional references count as config reservations; no users table.
+	// Disabled and conditional references count as config reservations, while
+	// manual entry checks require an actual recipient.
+	exec(`CREATE TABLE v2_user(id BIGINT PRIMARY KEY); INSERT INTO v2_user(id) VALUES(42),(99)`)
 	exec(`INSERT INTO v2_server_vmess(id,host) VALUES(7,'192.0.2.7(plan=x),192.0.2.8');
  INSERT INTO v2_insider_rule(host,match_user_ids,enabled,created_at,updated_at) VALUES('192.0.2.9','["42"]',0,1,1)`)
 	s := NewDBService(config.Config{}, db)
@@ -298,7 +300,7 @@ func TestPostgresDispatchPoolAndRunLifecycle(t *testing.T) {
 	}
 	// Manual run never wrote continuous monitor health.
 	current, err := s.ListDispatchMonitors(ctx)
-	if err != nil || current[0].States[0].Success != nil {
+	if err != nil || len(current) != 1 || len(current[0].States) == 0 || current[0].States[0].Success != nil {
 		t.Fatal("manual check overwrote continuous state", current, err)
 	}
 	heartbeat(pid1)

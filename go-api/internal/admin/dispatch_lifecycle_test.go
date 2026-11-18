@@ -255,7 +255,15 @@ func TestPostgresLifecycleAdmissionAcrossDetectionPorts(t *testing.T) {
 			if after.ID != before.ID || after.Generation != before.Generation || after.NormalSince != before.NormalSince || !reflect.DeepEqual(after.NormalCheckpoints, before.NormalCheckpoints) || !reflect.DeepEqual(after.UserIDs, []string{"5", "11", "12", "13", "14", "150"}) {
 				t.Fatal("cross-port admission changed target evidence or failed to move members", before, after, f.group(source.Host))
 			}
-			f.assertCheckPort(source.Host, 23130)
+			// All source recipients moved. Keep its saved port, but stop polling
+			// the unoccupied source while continuing to monitor the stage entry.
+			var sourcePort int64
+			if err := f.db.QueryRow(`SELECT check_port FROM v2_dispatch_monitor WHERE id=$1`, source.MonitorID).Scan(&sourcePort); err != nil || sourcePort != 23130 {
+				t.Fatal("admission changed saved source port", sourcePort, err)
+			}
+			if _, ok := f.tasks(f.pid)[source.Host]; ok {
+				t.Fatal("source without recipients still monitored", source.Host)
+			}
 			f.assertCheckPort(target.Host, 23135)
 			f.assertUserHosts(5, target.Host)
 			f.assertUserHosts(150, target.Host)
