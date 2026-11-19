@@ -151,7 +151,8 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 	all := investigationGroupIDs(g)
 	yes, no := investigationPullPartition(all, pulled)
 	recentIDs, olderIDs := investigationPullPartition(yes, recent)
-	proof, err := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled)
+	accounts := newInvestigationDispatchAccounts(tx)
+	proof, err := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled, accounts)
 	if err != nil {
 		return err
 	}
@@ -202,7 +203,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		if e != nil {
 			return e
 		}
-		outsideNow, e := hasOutsideDispatch(ctx, tx, g, before)
+		outsideNow, e := hasOutsideDispatch(ctx, tx, g, before, accounts)
 		if e != nil {
 			return e
 		}
@@ -272,7 +273,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			}
 		}
 	}
-	narrowing, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence)
+	narrowing, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence, accounts)
 	if err != nil {
 		return err
 	}
@@ -456,8 +457,10 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				return e
 			}
 		}
+		// Never reuse the planning phase's account snapshot for final checks.
+		latestAccounts := newInvestigationDispatchAccounts(tx)
 		if proof != nil {
-			latest, e := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled)
+			latest, e := s.investigationConfirmation(ctx, tx, g, evidence, before, pulled, latestAccounts)
 			if e != nil {
 				return e
 			}
@@ -466,7 +469,7 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 			}
 		}
 		if narrowing.Confirmed {
-			latest, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence)
+			latest, err := s.investigationRiskNarrowing(ctx, tx, g, groups, before, evidence, latestAccounts)
 			if err != nil {
 				return err
 			}

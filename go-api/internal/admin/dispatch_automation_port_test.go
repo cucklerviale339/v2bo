@@ -49,6 +49,14 @@ func (f *splitIntegration) assertCheckPort(host string, port int64) {
 	}
 }
 
+func (f *splitIntegration) addUpperHalfAccount() {
+	f.t.Helper()
+	// The range is 10-100, but the base fixture only has accounts below 55.
+	// Probe tasks are emitted only for entries actually dispatched to an account.
+	f.exec(`INSERT INTO v2_user(id,email,password,uuid,token,group_id,plan_id,transfer_enable,created_at,updated_at)
+VALUES(75,'upper-half@example.test','hash','00000000-0000-0000-0000-000000000075',lpad('75',32,'0'),1,1,1000000,1,1)`)
+}
+
 // Exercise allocation, actual subscription dispatch and the next generation,
 // using ports different from both 443 and the fixture's original 18443.
 func TestPostgresInvestigationPortAcrossAllocationPaths(t *testing.T) {
@@ -133,6 +141,9 @@ func TestPostgresAutomationRejectsHealthyPoolOnWrongPort(t *testing.T) {
 	for _, investigate := range []bool{false, true} {
 		t.Run(fmt.Sprint(investigate), func(t *testing.T) {
 			f := newInvestigationIntegration(t)
+			if !investigate {
+				f.addUpperHalfAccount()
+			}
 			g := f.group("range.example")
 			f.setCheckPort(g.Host, 24443)
 			f.healthyPoolPort(443, "192.0.2.221", "192.0.2.222")
@@ -199,6 +210,7 @@ func TestPostgresInvestigationNewEntryNeverHealthyDoesNotReallocate(t *testing.T
 
 func TestPostgresAutoSplitDescendantPortAndInitialFailureGuard(t *testing.T) {
 	f := newSplitIntegration(t)
+	f.addUpperHalfAccount()
 	f.setCheckPort("range.example", 24443)
 	f.healthyPoolPort(24443, "192.0.2.241", "192.0.2.242")
 	f.enable()

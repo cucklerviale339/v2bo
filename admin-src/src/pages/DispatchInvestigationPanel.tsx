@@ -84,6 +84,7 @@ function processState(g: Group, enabled?: boolean) {
  if (g.policy === 'fixed') return { label: '固定下发', tone: 'paused', detail: '仅监控，不自动更换入口或分组' };
  if (enabled === undefined) return { label: '—', tone: 'paused', detail: '等待设置加载' };
  if (!enabled) return { label: '已关闭', tone: 'paused', detail: '总开关已关闭，暂停自动处理' };
+ if (g.reason === '自动处理超时，等待重试') return { label: '超时待重试', tone: 'error', detail: g.reason };
  if ((g.promotion_hold_count || 0) > 0) return { label: '待复核·不晋级', tone: 'paused', detail: '本组确认故障并完成细分前不参与晋级，监控与故障处理继续执行' };
  if (g.observation_repair_pending) return { label: '待补入口', tone: 'waiting', detail: g.reason || '历史误标组等待补发健康观察入口' };
  if (g.reason.startsWith('待纠正 ')) return { label: '待纠正·缺 IP', tone: 'waiting', detail: g.reason };

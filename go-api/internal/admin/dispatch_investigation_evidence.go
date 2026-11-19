@@ -355,7 +355,17 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	var failureGroup InvestigationGroup
+	defer func() {
+		// The action's transaction and context are unusable after a deadline.
+		// Record retry status only after rollback, guarded by the saved round.
+		_ = tx.Rollback()
+		if !immediate && failureGroup.ID > 0 && errors.Is(err, context.DeadlineExceeded) {
+			if statusErr := s.recordInvestigationTimeout(ctx, failureGroup); statusErr != nil {
+				err = errors.Join(err, fmt.Errorf("记录超时重试状态: %w", statusErr))
+			}
+		}
+	}()
 	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout='500ms'; SET LOCAL statement_timeout='5s'`); err != nil {
 		return err
 	}
@@ -395,6 +405,7 @@ func (s *DBService) processInvestigationAction(ctx context.Context, id, revision
 	if immediate && g.Revision != revision {
 		return splitEditInvalid("分组已变化，请刷新后重试")
 	}
+	failureGroup = g
 	host = g.Host
 	stage = "核对监控配置"
 	now := time.Now().Unix()

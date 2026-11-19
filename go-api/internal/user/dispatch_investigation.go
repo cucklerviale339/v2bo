@@ -229,7 +229,11 @@ func DispatchAccountIDs(ctx context.Context, q DispatchQueryer, e DispatchEntry)
 		}
 	}
 	raw, _ := json.Marshal(spans)
-	rows, err := q.QueryContext(ctx, `SELECT u.id FROM v2_user u WHERE EXISTS(SELECT 1 FROM jsonb_to_recordset($1::jsonb) x(a bigint,b bigint) WHERE u.id BETWEEN x.a AND x.b) ORDER BY u.id`, string(raw))
+	// Start with the selected spans so PostgreSQL can use the account primary
+	// key for each range. A correlated EXISTS instead scans every account
+	// against every span on fragmented rosters. DISTINCT preserves membership
+	// semantics when exact IDs and ranges overlap.
+	rows, err := q.QueryContext(ctx, `SELECT DISTINCT u.id FROM jsonb_to_recordset($1::jsonb) x(a bigint,b bigint) JOIN v2_user u ON u.id BETWEEN x.a AND x.b ORDER BY u.id`, string(raw))
 	if err != nil {
 		return nil, err
 	}

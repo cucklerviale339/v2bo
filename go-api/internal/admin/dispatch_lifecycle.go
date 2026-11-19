@@ -312,7 +312,10 @@ func hasOutsideExposure(ctx context.Context, tx *sql.Tx, g InvestigationGroup) (
 	return outside, err
 }
 
-func hasOutsideDispatch(ctx context.Context, tx *sql.Tx, g InvestigationGroup, entries []usersvc.DispatchEntry) (bool, error) {
+func hasOutsideDispatch(ctx context.Context, tx *sql.Tx, g InvestigationGroup, entries []usersvc.DispatchEntry, accounts *investigationDispatchAccounts) (bool, error) {
+	if accounts == nil {
+		accounts = newInvestigationDispatchAccounts(tx)
+	}
 	inside := map[int64]bool{}
 	for _, id := range investigationGroupIDs(g) {
 		inside[id] = true
@@ -321,7 +324,7 @@ func hasOutsideDispatch(ctx context.Context, tx *sql.Tx, g InvestigationGroup, e
 		if entry.Host != g.Host {
 			continue
 		}
-		ids, err := usersvc.DispatchAccountIDs(ctx, tx, entry)
+		ids, err := accounts.load(ctx, entry)
 		if err != nil {
 			return false, err
 		}

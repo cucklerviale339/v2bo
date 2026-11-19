@@ -70,6 +70,8 @@ func TestPostgresAIUpgradeAndOperationalFlow(t *testing.T) {
 	}
 	exec(`INSERT INTO v2_user(id,email,password,uuid,token,is_admin,is_staff,created_at,updated_at) VALUES
  (1,'admin@example.test','hash','u1','t1',1,0,1,1),(2,'staff@example.test','hash','u2','t2',0,1,1,1),(3,'user@example.test','hash','u3','t3',0,0,1,1);
+ INSERT INTO v2_user(id,email,password,uuid,token,created_at,updated_at) VALUES
+ (15,'range@example.test','hash','u15','t15',1,1),(42,'inside@example.test','hash','u42','t42',1,1);
  INSERT INTO v2_server_group(id,name,created_at,updated_at) VALUES(1,'legacy',1,1);
  INSERT INTO v2_server_vmess(id,group_id,name,host,port,server_port,rate,network,"show",created_at,updated_at) VALUES(7,'[1]','legacy','base.example','443',443,'1','tcp',1,1,1);
  INSERT INTO v2_node_address_group(id,name,created_at,updated_at) VALUES(1,'addresses',1,1);

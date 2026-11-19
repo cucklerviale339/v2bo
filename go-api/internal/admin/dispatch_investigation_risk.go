@@ -19,7 +19,10 @@ func recordInvestigationRisk(ctx context.Context, tx *sql.Tx, eventID int64, kin
 
 // Manual execution alone never means a confirmed fault. Persist the healthy
 // independent sibling groups while actual dispatch and probe evidence exist.
-func (s *DBService) investigationRiskNarrowing(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup, entries []usersvc.DispatchEntry, evidence investigationEvidence) (*postgres.DispatchRiskNarrowing, error) {
+func (s *DBService) investigationRiskNarrowing(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup, entries []usersvc.DispatchEntry, evidence investigationEvidence, accounts *investigationDispatchAccounts) (*postgres.DispatchRiskNarrowing, error) {
+	if accounts == nil {
+		accounts = newInvestigationDispatchAccounts(tx)
+	}
 	out := &postgres.DispatchRiskNarrowing{HealthyGroups: []int64{}}
 	_, probes, fresh, err := investigationProbeConfig(ctx, tx, g.MonitorID)
 	if err != nil || !fresh {
@@ -38,7 +41,7 @@ func (s *DBService) investigationRiskNarrowing(ctx context.Context, tx *sql.Tx, 
 		if other.ID == g.ID || other.Host == g.Host || !actual[other.Host] || len(other.UserIDs) == 0 {
 			continue
 		}
-		outside, e := hasOutsideDispatch(ctx, tx, other, entries)
+		outside, e := hasOutsideDispatch(ctx, tx, other, entries, accounts)
 		if e != nil {
 			return nil, e
 		}

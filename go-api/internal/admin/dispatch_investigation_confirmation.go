@@ -28,7 +28,7 @@ type investigationConfirmationProof struct {
 	Evidence       investigationEvidence `json:"evidence"`
 }
 
-func (s *DBService) investigationConfirmation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, evidence investigationEvidence, entries []usersvc.DispatchEntry, pulled map[int64]bool) (*investigationConfirmationProof, error) {
+func (s *DBService) investigationConfirmation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, evidence investigationEvidence, entries []usersvc.DispatchEntry, pulled map[int64]bool, accounts *investigationDispatchAccounts) (*investigationConfirmationProof, error) {
 	if g.Policy != "smart" || g.ReadyAt == 0 || evidence.First <= g.ReadyAt || evidence.ReceiptsIncomplete || len(pulled) != 1 || evidence.Mode == "observation_repair" {
 		return nil, nil
 	}
@@ -60,7 +60,7 @@ UNION ALL SELECT user_id,delivered_at FROM v2_dispatch_investigation_delivery_re
 	if err != nil || outside {
 		return nil, err
 	}
-	outside, err = hasOutsideDispatch(ctx, tx, g, entries)
+	outside, err = hasOutsideDispatch(ctx, tx, g, entries, accounts)
 	if err != nil || outside {
 		return nil, err
 	}
