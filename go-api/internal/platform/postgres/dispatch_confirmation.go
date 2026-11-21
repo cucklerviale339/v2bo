@@ -1,6 +1,7 @@
 package postgres
 
 var dispatchConfirmationSchema = []string{
+	`CREATE TABLE IF NOT EXISTS v2_dispatch_risk_history_issue(id INTEGER PRIMARY KEY CHECK(id=1),event_id BIGINT NOT NULL,root_id BIGINT NOT NULL,group_id BIGINT NOT NULL,kind TEXT NOT NULL)`,
 	`ALTER TABLE v2_dispatch_investigation_group ADD COLUMN IF NOT EXISTS confirmation_proof JSONB NOT NULL DEFAULT '{}'`,
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_risk_case(event_id BIGINT PRIMARY KEY REFERENCES v2_dispatch_investigation_event(id),created_at BIGINT NOT NULL,resolved_event_id BIGINT NOT NULL DEFAULT 0,resolved_at BIGINT NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_risk_member(event_id BIGINT NOT NULL REFERENCES v2_dispatch_risk_case(event_id),user_id BIGINT NOT NULL,PRIMARY KEY(event_id,user_id))`,
@@ -15,12 +16,12 @@ var dispatchConfirmationSchema = []string{
 	`DO $$ BEGIN IF to_regclass('v2_dispatch_monitor') IS NOT NULL THEN WITH birth AS (
 SELECT DISTINCT ON(g.id) g.id,p,e.payload
 FROM v2_dispatch_investigation_group g JOIN v2_dispatch_investigation_event e ON e.group_id=g.parent_id
-CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'partitions','[]')) p
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload->'partitions')='array' THEN e.payload->'partitions' ELSE '[]'::jsonb END) p
 WHERE e.kind IN('filtered','bisected','whitelist_bisected') AND p->>'group_id'=g.id::text
 AND e.created_at BETWEEN g.created_at-1 AND g.created_at+1 ORDER BY g.id,e.id DESC), eligible AS (
 SELECT b.*,(g.active AND g.manual_only AND g.revision=1 AND g.generation=1 AND g.policy='smart'
 AND g.route_scope='business' AND g.lifecycle_role='ordinary' AND g.host=b.p->>'host'
-AND jsonb_array_length(COALESCE(b.p->'user_ids','[]'))=1
+AND jsonb_array_length(CASE WHEN jsonb_typeof(b.p->'user_ids')='array' THEN b.p->'user_ids' ELSE '[]'::jsonb END)=1
 AND EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.id=g.monitor_id AND m.host=g.host AND NOT COALESCE((to_jsonb(m)->>'deleted')::boolean,FALSE))
 AND EXISTS(SELECT 1 FROM v2_dispatch_investigation_member a JOIN v2_user u ON u.id=a.user_id WHERE a.group_id=g.id AND a.user_id::text=b.p->'user_ids'->>0)
 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_member a WHERE a.group_id=g.id AND a.user_id::text<>b.p->'user_ids'->>0)

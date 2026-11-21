@@ -23,6 +23,7 @@ var DispatchInvestigationSchema = append([]string{
 	// round once, preserving all memberships, assignments, switches and limits.
 	`WITH upgraded AS (UPDATE v2_dispatch_investigation_settings SET recent_receipts_started_at=EXTRACT(EPOCH FROM clock_timestamp())::bigint WHERE id=1 AND recent_receipts_started_at=0 RETURNING recent_receipts_started_at) UPDATE v2_dispatch_investigation_group SET generation=generation+1,epoch_at=upgraded.recent_receipts_started_at,ready_at=0,revision=revision+1,reason='开始记录120分钟拉取证据，等待入口确认正常' FROM upgraded WHERE active AND NOT manual_only`,
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_investigation_event(id BIGSERIAL PRIMARY KEY,root_id BIGINT NOT NULL,group_id BIGINT NOT NULL,kind TEXT NOT NULL,first_failure_at BIGINT NOT NULL DEFAULT 0,created_at BIGINT NOT NULL,payload JSONB NOT NULL)`,
+	`ALTER TABLE v2_dispatch_investigation_event ADD COLUMN IF NOT EXISTS risk_payload JSONB`,
 	`CREATE INDEX IF NOT EXISTS idx_dispatch_investigation_event_time ON v2_dispatch_investigation_event(created_at DESC,id DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_dispatch_investigation_event_family ON v2_dispatch_investigation_event(root_id,created_at DESC)`,
 	`CREATE TABLE IF NOT EXISTS v2_dispatch_investigation_health(id INTEGER PRIMARY KEY CHECK(id=1),delivery_failure_at BIGINT NOT NULL DEFAULT 0)`,
@@ -57,10 +58,10 @@ WHERE g.active AND g.kind='confirmed' AND g.name='实锤内鬼' AND g.manual_onl
 AND g.route_scope='business' AND g.lifecycle_role='ordinary' AND g.policy='smart'
 AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_event x WHERE x.group_id=g.id AND x.kind IN('edited','confirmed_entry','members_moved','members_admitted'))
 AND EXISTS(SELECT 1 FROM v2_dispatch_monitor m WHERE m.id=g.monitor_id AND NOT COALESCE((to_jsonb(m)->>'deleted')::boolean,FALSE))
-AND EXISTS(SELECT 1 FROM v2_dispatch_investigation_event e CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'partitions','[]'::jsonb)) p
+AND EXISTS(SELECT 1 FROM v2_dispatch_investigation_event e CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload->'partitions')='array' THEN e.payload->'partitions' ELSE '[]'::jsonb END) p
 WHERE e.group_id=g.parent_id AND e.root_id=g.root_id AND e.kind='filtered' AND e.created_at BETWEEN g.created_at-1 AND g.created_at+1
 AND p->>'group_id'=g.id::text AND p->>'host'=g.host AND p->>'kind'='confirmed'
-AND jsonb_array_length(COALESCE(p->'user_ids','[]'::jsonb))=1
+AND jsonb_array_length(CASE WHEN jsonb_typeof(p->'user_ids')='array' THEN p->'user_ids' ELSE '[]'::jsonb END)=1
 AND e.payload->'before'->>'host'=g.host
 AND COALESCE(e.payload->'unpulled_ids','[]'::jsonb) @> (p->'user_ids')
 AND NOT (COALESCE(e.payload->'pulled_ids','[]'::jsonb) @> (p->'user_ids'))

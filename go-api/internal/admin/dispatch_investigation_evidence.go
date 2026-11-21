@@ -336,11 +336,24 @@ func (s *DBService) processInvestigation(ctx context.Context, id int64) error {
 	return err
 }
 
+type investigationActionFailure struct {
+	groupID int64
+	host    string
+	stage   string
+	cause   error
+}
+
+func (e *investigationActionFailure) Error() string {
+	return fmt.Sprintf("入口分组 #%d (%s)，阶段 %s: %v", e.groupID, e.host, e.stage, e.cause)
+}
+
+func (e *investigationActionFailure) Unwrap() error { return e.cause }
+
 func (s *DBService) processInvestigationAction(ctx context.Context, id, revision int64, immediate bool) (err error) {
 	stage, host := "获取处理锁", ""
 	defer func() {
 		if err != nil && !errors.Is(err, ErrInvestigationBusy) && !errors.Is(err, ErrDNSProbeInvalidRequest) {
-			err = fmt.Errorf("入口分组 #%d (%s)，阶段 %s: %w", id, host, stage, err)
+			err = &investigationActionFailure{groupID: id, host: host, stage: stage, cause: err}
 		}
 	}()
 	if !immediate {

@@ -8,15 +8,6 @@ import (
 	"time"
 )
 
-// Replay the per-user branch history on screening and explicit member moves.
-func recordInvestigationRisk(ctx context.Context, tx *sql.Tx, eventID int64, kind string, raw string) error {
-	switch kind {
-	case "filtered", "bisected", "whitelist_bisected", "no_pulls", "stable_promoted", "whitelist_promoted", "members_moved", "stage_corrected", "members_admitted", "started", "recovered", "observation_repaired", "whitelist_failed_over", "branch_fault":
-		return postgres.RefreshDispatchRisk(ctx, tx)
-	}
-	return nil
-}
-
 // Manual execution alone never means a confirmed fault. Persist the healthy
 // independent sibling groups while actual dispatch and probe evidence exist.
 func (s *DBService) investigationRiskNarrowing(ctx context.Context, tx *sql.Tx, g InvestigationGroup, groups []InvestigationGroup, entries []usersvc.DispatchEntry, evidence investigationEvidence, accounts *investigationDispatchAccounts) (*postgres.DispatchRiskNarrowing, error) {

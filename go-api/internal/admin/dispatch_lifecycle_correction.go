@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"forest/go-api/internal/platform/postgres"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -19,7 +20,8 @@ func investigationStageCorrectionIDs(ctx context.Context, tx *sql.Tx, g Investig
 	rows, err := tx.QueryContext(ctx, `WITH admissions AS MATERIALIZED (
 SELECT value::bigint AS user_id,max(e.id) FILTER(WHERE e.kind<>'edited') AS automatic,max(e.id) FILTER(WHERE e.kind='edited') AS manual
 FROM v2_dispatch_investigation_event e
-CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(NULLIF(CASE WHEN e.kind='edited' THEN e.payload->'added_ids' ELSE e.payload->'user_ids' END,'null'::jsonb),'[]')) u(value)
+CROSS JOIN LATERAL (SELECT CASE WHEN e.kind='edited' THEN e.payload->'added_ids' ELSE e.payload->'user_ids' END AS ids) source
+CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(source.ids)='array' THEN source.ids ELSE '[]'::jsonb END) u(value)
 WHERE ((e.kind IN('stable_promoted','whitelist_promoted') AND e.payload->>'target_group_id'=$1::bigint::text) OR (e.kind='edited' AND e.group_id=$1::bigint)) AND value ~ '^[1-9][0-9]*$'
 GROUP BY value::bigint)
 SELECT DISTINCT m.user_id FROM v2_dispatch_investigation_member m JOIN v2_user u ON u.id=m.user_id JOIN admissions a ON a.user_id=m.user_id
@@ -55,6 +57,10 @@ ORDER BY m.user_id`, g.ID, func() int64 {
 func (s *DBService) correctInvestigationStage(ctx context.Context, tx *sql.Tx, g InvestigationGroup, before []usersvc.DispatchEntry, finish func(string) error) (bool, error) {
 	if g.RouteScope != "business" || (g.LifecycleRole != "stable" && g.LifecycleRole != "whitelist") || g.Policy != "smart" || g.ManualOnly {
 		return false, nil
+	}
+	issue, err := postgres.ReadDispatchRiskHistoryIssue(ctx, tx)
+	if err != nil || issue != nil {
+		return false, err
 	}
 	ids, err := investigationStageCorrectionIDs(ctx, tx, g)
 	if err != nil || len(ids) == 0 {

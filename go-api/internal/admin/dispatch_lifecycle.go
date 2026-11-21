@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"forest/go-api/internal/platform/postgres"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -305,13 +306,6 @@ func (s *DBService) lifecycleStagePool(ctx context.Context, tx *sql.Tx, refs map
 	return s.dispatchPoolLimitAtPort(ctx, tx, refs, 0, lock, selected, 1)
 }
 
-func hasOutsideExposure(ctx context.Context, tx *sql.Tx, g InvestigationGroup) (bool, error) {
-	raw, _ := json.Marshal(investigationGroupIDs(g))
-	var outside bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_host_exposure WHERE host=$1 AND user_id NOT IN(SELECT value::bigint FROM jsonb_array_elements_text($2::jsonb)))`, g.Host, string(raw)).Scan(&outside)
-	return outside, err
-}
-
 func hasOutsideDispatch(ctx context.Context, tx *sql.Tx, g InvestigationGroup, entries []usersvc.DispatchEntry, accounts *investigationDispatchAccounts) (bool, error) {
 	if accounts == nil {
 		accounts = newInvestigationDispatchAccounts(tx)
@@ -406,6 +400,13 @@ func compareGlobalProjection(before, after []usersvc.DispatchEntry, moves map[in
 func (s *DBService) promoteInvestigation(ctx context.Context, tx *sql.Tx, g InvestigationGroup, before []usersvc.DispatchEntry, finish func(string) error) error {
 	if g.RouteScope != "business" {
 		return finish("旧全站分组仅保留原策略，不自动迁移")
+	}
+	issue, err := postgres.ReadDispatchRiskHistoryIssue(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if issue != nil {
+		return finish(fmt.Sprintf("筛选历史事件 #%d 待修复，暂缓自动晋级", issue.EventID))
 	}
 	if err := lockInvestigationAddresses(ctx, tx); err != nil {
 		return err

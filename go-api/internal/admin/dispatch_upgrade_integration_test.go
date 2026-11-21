@@ -138,8 +138,14 @@ INSERT INTO v2_runtime_kv(k,v,expire_at,created_at,updated_at) VALUES('legacy-co
 		t.Fatal(err)
 	}
 	var newTables int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE 'v2_dispatch_%'`).Scan(&newTables); err != nil || newTables != 22 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE 'v2_dispatch_%'`).Scan(&newTables); err != nil || newTables != 23 {
 		t.Fatalf("auxiliary tables: %d %v", newTables, err)
+	}
+	var versionedEvent, historyStatus bool
+	if err := db.QueryRowContext(ctx, `SELECT
+EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='v2_dispatch_investigation_event' AND column_name='risk_payload' AND data_type='jsonb'),
+to_regclass('v2_dispatch_risk_history_issue') IS NOT NULL`).Scan(&versionedEvent, &historyStatus); err != nil || !versionedEvent || !historyStatus {
+		t.Fatalf("investigation history upgrade: payload=%v status=%v error=%v", versionedEvent, historyStatus, err)
 	}
 	if _, err := upgraded.ListDispatchMonitors(ctx); err != nil {
 		t.Fatal(err)

@@ -190,27 +190,30 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 		role = "ordinary"
 	}
 	whole := false
-	if g.Policy == "failover" {
+	failoverReason := ""
+	switch {
+	case g.Policy == "failover":
 		whole = true
 		kind = "recovered"
-	}
-	if evidence.ReceiptsIncomplete {
+		failoverReason = "分组设置为仅故障转移，已整组切换备用入口"
+	case evidence.ReceiptsIncomplete:
 		whole = true
 		kind = "recovered"
+		failoverReason = "本轮拉取证据不完整，已整组切换备用入口"
 	}
 	if settings.LifecycleEnabled || g.RouteScope == "global" {
-		outside, e := hasOutsideExposure(ctx, tx, g)
-		if e != nil {
-			return e
-		}
-		outsideNow, e := hasOutsideDispatch(ctx, tx, g, before, accounts)
-		if e != nil {
-			return e
-		}
-		outside = outside || outsideNow
-		if outside && g.LifecycleRole != "whitelist" && evidence.Mode != "manual" {
-			whole = true
-			kind = "recovered"
+		// Split by the current dispatch roster. Historical IP exposure is
+		// relevant to sole-recipient proof, not to transferring this group.
+		if !whole && g.LifecycleRole != "whitelist" && evidence.Mode != "manual" {
+			shared, err := hasOutsideDispatch(ctx, tx, g, before, accounts)
+			if err != nil {
+				return err
+			}
+			if shared {
+				whole = true
+				kind = "recovered"
+				failoverReason = "当前入口实际仍下发给组外用户，已整组切换备用入口"
+			}
 		}
 		if g.LifecycleRole == "whitelist" && g.Policy == "smart" {
 			var count int64
@@ -483,7 +486,16 @@ SELECT group_id,generation,user_id,delivered_at FROM v2_dispatch_investigation_d
 				narrowing.HealthyGroups = []int64{}
 			}
 		}
-		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "risk_narrowing": narrowing, "confirmation": proof, "reason": map[string]string{"filtered": "按首次失败前120分钟及本轮实际拉取记录筛选；实锤另核验入口本轮唯一拉取证据", "bisected": "全部拉取过且属于同一时间类别，按实际人数二分", "no_pulls": "无人拉取，成员不变", "recovered": "保留成员并切换健康观察入口", "observation_repaired": "补完历史误标单人组的健康观察入口分配"}[kind]})
+		reason := map[string]string{
+			"filtered":              "按首次失败前120分钟及本轮实际拉取记录筛选；实锤另核验入口本轮唯一拉取证据",
+			"bisected":              "全部拉取过且属于同一时间类别，按实际人数二分",
+			"no_pulls":              "无人拉取，成员不变",
+			"recovered":             failoverReason,
+			"observation_repaired":  "补完历史误标单人组的健康观察入口分配",
+			"whitelist_failed_over": "按老实人组故障转移策略保留成员并切换备用入口",
+			"whitelist_bisected":    "老实人组24小时内再次确认故障，按成员二分",
+		}[kind]
+		return investigationAudit(ctx, tx, g.RootID, g.ID, kind, evidence.First, map[string]any{"before": g, "pulled_ids": yes, "recent_ids": recentIDs, "older_ids": olderIDs, "recent_window_minutes": 120, "unpulled_ids": no, "partitions": parts, "evidence": evidence, "risk_narrowing": narrowing, "confirmation": proof, "reason": reason})
 	}
 	if err = attempt(); err != nil {
 		if _, e := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT investigation_apply`); e != nil {

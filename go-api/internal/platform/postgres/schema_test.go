@@ -130,7 +130,8 @@ func TestEnsureNodeAddressSchemaAddsRuleColumns(t *testing.T) {
 		mock.ExpectExec(regexp.QuoteMeta(stmt)).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	mock.ExpectQuery("SELECT id,root_id,group_id,kind,created_at,payload FROM v2_dispatch_investigation_event").WillReturnRows(sqlmock.NewRows([]string{"id", "root_id", "group_id", "kind", "created_at", "payload"}))
+	mock.ExpectQuery("SELECT id,root_id,group_id,kind,created_at,COALESCE.* FROM v2_dispatch_investigation_event").WillReturnRows(sqlmock.NewRows([]string{"id", "root_id", "group_id", "kind", "created_at", "payload"}))
+	mock.ExpectExec("DELETE FROM v2_dispatch_risk_history_issue WHERE id=1").WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, tableName := range []string{"v2_node_address_group", "v2_node_address_rule"} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(tableName, "enabled").

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/platform/addrutil"
+	"forest/go-api/internal/platform/postgres"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -82,12 +83,13 @@ type InvestigationEvent struct {
 	Payload        json.RawMessage `json:"payload"`
 }
 type InvestigationView struct {
-	Settings    InvestigationSettings `json:"settings"`
-	Groups      []InvestigationGroup  `json:"groups"`
-	Events      []InvestigationEvent  `json:"events"`
-	Total       int64                 `json:"total"`
-	Page        int64                 `json:"page"`
-	WorkerError string                `json:"worker_error,omitempty"`
+	Settings         InvestigationSettings              `json:"settings"`
+	Groups           []InvestigationGroup               `json:"groups"`
+	Events           []InvestigationEvent               `json:"events"`
+	Total            int64                              `json:"total"`
+	Page             int64                              `json:"page"`
+	WorkerError      string                             `json:"worker_error,omitempty"`
+	RiskHistoryIssue *postgres.DispatchRiskHistoryIssue `json:"risk_history_issue,omitempty"`
 }
 
 func (s *DBService) ensureInvestigation(ctx context.Context) error {
@@ -251,6 +253,10 @@ func (s *DBService) GetInvestigationCategory(ctx context.Context, page int64, ca
 	if err != nil {
 		return out, err
 	}
+	out.RiskHistoryIssue, err = postgres.ReadDispatchRiskHistoryIssue(ctx, s.db)
+	if err != nil {
+		return out, err
+	}
 	out.Groups, err = readInvestigationGroups(ctx, s.db, true)
 	if err != nil {
 		return out, err
@@ -400,12 +406,19 @@ func investigationAudit(ctx context.Context, tx *sql.Tx, root, group int64, kind
 	if err != nil {
 		return err
 	}
-	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,first_failure_at,created_at,payload) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, root, group, kind, first, time.Now().Unix(), string(raw)).Scan(&id)
+	risk, err := postgres.EncodeDispatchRiskTransition(kind, raw)
+	if err != nil {
+		return fmt.Errorf("invalid investigation transition %s: %w", kind, err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_dispatch_investigation_event(root_id,group_id,kind,first_failure_at,created_at,payload,risk_payload)
+VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::jsonb)`, root, group, kind, first, time.Now().Unix(), string(raw), risk)
 	if err != nil {
 		return err
 	}
-	return recordInvestigationRisk(ctx, tx, id, kind, string(raw))
+	if risk != "" {
+		return postgres.RefreshDispatchRisk(ctx, tx)
+	}
+	return nil
 }
 func (s *DBService) invalidateDispatchCatalog() {
 	s.dispatchCacheMu.Lock()
@@ -430,7 +443,12 @@ func (s *DBService) runInvestigationCycle(ctx context.Context) error {
 	s.dispatchAutoSplitMu.Lock()
 	s.investigationLastError = ""
 	if err != nil {
-		s.investigationLastError = "入口筛选存在执行错误，未完成的分组将在后续轮次重试；请检查服务日志"
+		var groupFailure *investigationActionFailure
+		if errors.As(err, &groupFailure) {
+			s.investigationLastError = fmt.Sprintf("分组 #%d 在「%s」失败，等待重试。详情见服务日志。", groupFailure.groupID, groupFailure.stage)
+		} else {
+			s.investigationLastError = "入口筛选任务暂不可用，等待重试。详情见服务日志。"
+		}
 	}
 	s.dispatchAutoSplitMu.Unlock()
 	return err
@@ -443,14 +461,19 @@ func (s *DBService) investigationCycle(ctx context.Context) error {
 	if err != nil || !settings.Enabled {
 		return err
 	}
-	if err = s.bootstrapInvestigation(ctx); err != nil {
-		return fmt.Errorf("初始化入口分组: %w", err)
+	// Discovery can fail independently of processing already known groups.
+	// Give it one action budget so a slow discovery does not consume the cycle.
+	bootstrapCtx, cancel := context.WithTimeout(ctx, investigationActionBudget)
+	bootstrapErr := s.bootstrapInvestigation(bootstrapCtx)
+	cancel()
+	if bootstrapErr != nil {
+		bootstrapErr = fmt.Errorf("初始化入口分组: %w", bootstrapErr)
 	}
 	// Scheduling needs only IDs; each action loads its current group again under
 	// the shared lock. Do not materialize all rosters for this inventory pass.
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM v2_dispatch_investigation_group WHERE active AND NOT manual_only ORDER BY id`)
 	if err != nil {
-		return err
+		return errors.Join(bootstrapErr, err)
 	}
 	ids := []int64{}
 	for rows.Next() {
@@ -465,7 +488,7 @@ func (s *DBService) investigationCycle(ctx context.Context) error {
 	}
 	rows.Close()
 	if err != nil {
-		return err
+		return errors.Join(bootstrapErr, err)
 	}
 	s.dispatchAutoSplitMu.Lock()
 	cursor := s.investigationCursor
@@ -476,7 +499,7 @@ func (s *DBService) investigationCycle(ctx context.Context) error {
 	s.dispatchAutoSplitMu.Lock()
 	s.investigationCursor = cursor
 	s.dispatchAutoSplitMu.Unlock()
-	return err
+	return errors.Join(bootstrapErr, err)
 }
 
 const investigationActionBudget = 8 * time.Second
@@ -537,6 +560,15 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 	if err != nil || !settings.Enabled {
 		return err
 	}
+	issue, err := postgres.ReadDispatchRiskHistoryIssue(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if issue != nil {
+		if err := postgres.RefreshDispatchRisk(ctx, tx); err != nil {
+			return err
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.host,COALESCE(g.root_group_id,0) FROM v2_dispatch_monitor m LEFT JOIN v2_dispatch_auto_split_group g ON g.monitor_id=m.id WHERE m.enabled AND NOT m.deleted AND EXISTS(SELECT 1 FROM v2_dispatch_monitor_probe b WHERE b.monitor_id=m.id) AND NOT EXISTS(SELECT 1 FROM v2_dispatch_investigation_group i WHERE i.monitor_id=m.id) ORDER BY m.id`)
 	if err != nil {
 		return err
@@ -562,7 +594,7 @@ func (s *DBService) bootstrapInvestigation(ctx context.Context) error {
 		return err
 	}
 	if len(originals) == 0 && !settings.LifecycleEnabled {
-		return nil
+		return tx.Commit()
 	}
 	entries, err := usersvc.DispatchEntriesFrom(ctx, tx)
 	if err != nil {

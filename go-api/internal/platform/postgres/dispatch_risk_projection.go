@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"sort"
 )
 
@@ -40,18 +39,16 @@ type DispatchRiskMember struct {
 }
 
 type dispatchRiskPayload struct {
-	Pulled        []int64 `json:"pulled_ids"`
-	Unpulled      []int64 `json:"unpulled_ids"`
-	Users         []int64 `json:"user_ids"`
-	Host          string  `json:"host"`
-	Target        int64   `json:"target_group_id"`
-	Sources       []int64 `json:"source_group_ids"`
-	Merged        []int64 `json:"merged_group_ids"`
-	PromotionHold bool    `json:"promotion_hold"`
-	Before        struct {
-		Host string `json:"host"`
-	} `json:"before"`
-	Parts []struct {
+	Pulled        []int64         `json:"pulled_ids"`
+	Unpulled      []int64         `json:"unpulled_ids"`
+	Users         []int64         `json:"user_ids"`
+	Host          string          `json:"host"`
+	Target        int64           `json:"target_group_id"`
+	Sources       []int64         `json:"source_group_ids"`
+	Merged        []int64         `json:"merged_group_ids"`
+	PromotionHold bool            `json:"promotion_hold"`
+	Before        json.RawMessage `json:"before"`
+	Parts         []struct {
 		Group int64   `json:"group_id"`
 		Users []int64 `json:"user_ids"`
 		Host  string  `json:"host"`
@@ -89,12 +86,12 @@ func ProjectDispatchRisk(events []DispatchRiskEvent) ([]*DispatchRiskCase, []*Di
 		}
 	}
 	for _, e := range ordered {
-		var p dispatchRiskPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return nil, nil, fmt.Errorf("risk event %d: %w", e.ID, err)
+		p, err := decodeDispatchRiskPayload(e.Kind, e.Payload)
+		if err != nil {
+			return nil, nil, &DispatchRiskHistoryIssue{EventID: e.ID, RootID: e.RootID, GroupID: e.GroupID, Kind: e.Kind, cause: err}
 		}
-		if p.Before.Host != "" {
-			hosts[e.GroupID] = p.Before.Host
+		if host := dispatchAuditHost(p.Before); host != "" {
+			hosts[e.GroupID] = host
 		}
 		if p.Host != "" {
 			target := e.GroupID
@@ -354,7 +351,7 @@ func DispatchRiskUsers(cases []*DispatchRiskCase, members []*DispatchRiskMember)
 // Called while holding the same transaction advisory lock as dispatch edits.
 // Historical backfill and live writes deliberately share this one reducer.
 func RefreshDispatchRisk(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,root_id,group_id,kind,created_at,payload FROM v2_dispatch_investigation_event ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, `SELECT id,root_id,group_id,kind,created_at,COALESCE(risk_payload,payload) FROM v2_dispatch_investigation_event ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -374,6 +371,15 @@ func RefreshDispatchRisk(ctx context.Context, tx *sql.Tx) error {
 	}
 	cases, members, err := ProjectDispatchRisk(events)
 	if err != nil {
+		issue, ok := err.(*DispatchRiskHistoryIssue)
+		if !ok {
+			return err
+		}
+		// Keep the complete prior projection. A missing transition could
+		// invalidate later clearances, even in another branch.
+		return saveDispatchRiskHistoryIssue(ctx, tx, issue)
+	}
+	if err = saveDispatchRiskHistoryIssue(ctx, tx, nil); err != nil {
 		return err
 	}
 	if len(events) == 0 {

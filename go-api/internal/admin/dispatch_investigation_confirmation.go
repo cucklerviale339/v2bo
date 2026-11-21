@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"forest/go-api/internal/platform/postgres"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -32,6 +33,10 @@ func (s *DBService) investigationConfirmation(ctx context.Context, tx *sql.Tx, g
 	if g.Policy != "smart" || g.ReadyAt == 0 || evidence.First <= g.ReadyAt || evidence.ReceiptsIncomplete || len(pulled) != 1 || evidence.Mode == "observation_repair" {
 		return nil, nil
 	}
+	issue, err := postgres.ReadDispatchRiskHistoryIssue(ctx, tx)
+	if err != nil || issue != nil {
+		return nil, err
+	}
 	var id int64
 	for user := range pulled {
 		id = user
@@ -56,7 +61,7 @@ UNION ALL SELECT user_id,delivered_at FROM v2_dispatch_investigation_delivery_re
 	// Aggregated exposure cannot prove when an outside user pulled relative to
 	// the cutoff. Never turn that uncertainty (including deleted users) into a
 	// sole-recipient accusation. A shared host is not an isolated group round.
-	outside, err := hasOutsideExposure(ctx, tx, g)
+	outside, err := hasOutsideExposureForConfirmation(ctx, tx, g)
 	if err != nil || outside {
 		return nil, err
 	}
@@ -118,4 +123,11 @@ UNION ALL SELECT user_id,delivered_at FROM v2_dispatch_investigation_delivery_re
 		return nil, err
 	}
 	return &investigationConfirmationProof{Version: 1, UserID: id, GroupID: g.ID, Generation: g.Generation, Host: g.Host, MonitorID: g.MonitorID, ConfigKey: g.ConfigKey, FirstPullAt: firstPull, HealthyAt: healthyAt, EpochAt: g.EpochAt, FirstFailureAt: verified.First, VerifiedAt: time.Now().Unix(), RelatedRoots: roots, Evidence: verified}, nil
+}
+
+func hasOutsideExposureForConfirmation(ctx context.Context, tx *sql.Tx, g InvestigationGroup) (bool, error) {
+	raw, _ := json.Marshal(investigationGroupIDs(g))
+	var outside bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_dispatch_host_exposure WHERE host=$1 AND user_id NOT IN(SELECT value::bigint FROM jsonb_array_elements_text($2::jsonb)))`, g.Host, string(raw)).Scan(&outside)
+	return outside, err
 }

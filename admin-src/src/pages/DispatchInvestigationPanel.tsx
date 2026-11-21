@@ -101,6 +101,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
  const editingMemberIDs = Form.useWatch('member_ids', editForm);
  const [settings, setSettings] = useState<Settings>(), [groups, setGroups] = useState<Group[]>([]), [events, setEvents] = useState<Event[]>([]);
  const [monitors, setMonitors] = useState<Monitor[]>([]), [error, setError] = useState(''), [workerError, setWorkerError] = useState('');
+ const [historyIssue, setHistoryIssue] = useState<{ event_id: number; group_id: number }>();
  const [saving, setSaving] = useState(false), [editing, setEditing] = useState<Group>(), [page, setPage] = useState(1), [total, setTotal] = useState(0);
  const [action, setAction] = useState<{ group: Group; kind: 'confirm' | 'trigger' }>(), [actionBusy, setActionBusy] = useState(false), [actionError, setActionError] = useState('');
  const [filter, setFilter] = useState('all'), [releasing, setReleasing] = useState<Group>(), [releaseIDs, setReleaseIDs] = useState('');
@@ -122,7 +123,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
    // Reject a stale group if ownership changed between the two responses.
    const currentMonitorKeys = new Set(nextMonitors.filter(m => !m.deleted).map(m => `${m.id}:${m.host}`));
    const isCurrent = (g: Group) => currentMonitorKeys.has(`${g.monitor_id}:${g.host}`);
-   setSettings(data.settings); setGroups((data.groups || []).filter(isCurrent)); setEvents(data.events || []); setTotal(data.total || 0); setMonitors(nextMonitors); setError(''); setWorkerError(data.worker_error || '');
+   setSettings(data.settings); setGroups((data.groups || []).filter(isCurrent)); setEvents(data.events || []); setTotal(data.total || 0); setMonitors(nextMonitors); setError(''); setWorkerError(data.worker_error || ''); setHistoryIssue(data.risk_history_issue);
    setEditing(current => current && !isCurrent(current) ? undefined : current);
    if (!initialized.current) { form.setFieldsValue(data.settings); revision.current = data.settings.revision; initialized.current = true; }
   } catch (e: any) { if (seq === generation.current) setError(e.message || '读取失败'); }
@@ -180,6 +181,7 @@ export default function DispatchInvestigationPanel({ active = true }: { active?:
   <div className="investigation-heading"><Space size={10}><Typography.Text strong>谁是卧底</Typography.Text><span className={`investigation-switch-state${settings?.enabled ? ' is-on' : ''}`}>{settings?.enabled ? '运行中' : '已关闭'}</span></Space><span className="investigation-caption">{groups.length} 个分组</span></div>
   {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
   {workerError && <Alert type="error" showIcon message={workerError} style={{ marginBottom: 12 }} />}
+  {historyIssue && <Alert type="warning" showIcon message={`分组 #${historyIssue.group_id} 的筛选历史事件 #${historyIssue.event_id} 待核对。自动晋级和单人确认已暂停，故障筛选继续运行。`} style={{ marginBottom: 12 }} />}
   <Form form={form} layout="vertical" disabled={!settings || saving} className="investigation-settings">
    <Form.Item name="enabled" label="总开关" valuePropName="checked"><Switch aria-label="谁是卧底总开关" /></Form.Item>
    <Form.Item name="lifecycle_enabled" label="稳定与老实人" valuePropName="checked" tooltip="成功拉取原入口并观察3天后，进入稳定组、领取入口A；成功拉取A后再观察7天，进入老实人、领取入口B。按具体用户晋级，保留原节点下发范围。"><Switch aria-label="稳定与老实人" /></Form.Item>
