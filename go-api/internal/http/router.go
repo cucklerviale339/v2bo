@@ -4554,6 +4554,10 @@ func handleAdminConfigSave(w http.ResponseWriter, r *http.Request, sessionServic
 	}
 
 	saved, err := adminService.SaveConfig(r.Context(), payload)
+	if errors.Is(err, admin.ErrInvalidOrderCompletionAction) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
 	if err != nil {
 		return handleAdminError(w, err)
 	}

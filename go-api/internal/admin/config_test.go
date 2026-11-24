@@ -517,6 +517,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	ok, err := service.SaveConfig(context.Background(), map[string]any{
 		"allow_new_period":              1,
 		"reset_traffic_method":          4,
+		"new_order_event_id":            1,
+		"renew_order_event_id":          1,
+		"change_order_event_id":         1,
 		"commission_auto_check_minutes": 90,
 		"order_keep_days":               45,
 		"mail_log_keep_days":            15,
@@ -566,6 +569,16 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().FailedJobsKeepDays != 15 {
 		t.Fatalf("expected failed_jobs_keep_days=15 after save, got %d", runtimeState.Current().FailedJobsKeepDays)
+	}
+	updated := runtimeState.CurrentConfig()
+	if updated.NewOrderEventID != 1 || updated.RenewOrderEventID != 1 || updated.ChangeOrderEventID != 1 {
+		t.Fatalf("order completion actions not reloaded: %d %d %d", updated.NewOrderEventID, updated.RenewOrderEventID, updated.ChangeOrderEventID)
+	}
+	if _, err := service.SaveConfig(context.Background(), map[string]any{"renew_order_event_id": 2}); !errors.Is(err, ErrInvalidOrderCompletionAction) {
+		t.Fatalf("expected invalid order completion action error, got %v", err)
+	}
+	if runtimeState.CurrentConfig().RenewOrderEventID != 1 {
+		t.Fatal("invalid input changed the saved action")
 	}
 }
 

@@ -37,6 +37,9 @@ type Config struct {
 	WithdrawCloseEnable                bool
 	TicketStatus                       int64
 	CommissionFirstTime                bool
+	NewOrderEventID                    int64
+	RenewOrderEventID                  int64
+	ChangeOrderEventID                 int64
 	OrderCancelRecoverTTL              int64
 	NewcomerCouponID                   int64
 	OrderKeepDays                      int64
@@ -180,6 +183,9 @@ func Load() Config {
 		WithdrawCloseEnable:                managedBool("WITHDRAW_CLOSE_ENABLE", "withdraw_close_enable", false),
 		TicketStatus:                       managedInt64("TICKET_STATUS", "ticket_status", 0),
 		CommissionFirstTime:                managedBool("COMMISSION_FIRST_TIME_ENABLE", "commission_first_time_enable", true),
+		NewOrderEventID:                    managedInt64("NEW_ORDER_EVENT_ID", "new_order_event_id", 0),
+		RenewOrderEventID:                  managedInt64("RENEW_ORDER_EVENT_ID", "renew_order_event_id", 0),
+		ChangeOrderEventID:                 managedInt64("CHANGE_ORDER_EVENT_ID", "change_order_event_id", 0),
 		OrderCancelRecoverTTL:              managedInt64("ORDER_CANCEL_RECOVER_TTL", "order_cancel_recover_ttl", 1800),
 		NewcomerCouponID:                   getEnvInt64("NEWCOMER_COUPON_ID", 0),
 		OrderKeepDays:                      managedInt64("ORDER_KEEP_DAYS", "order_keep_days", 0),

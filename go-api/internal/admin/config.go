@@ -30,6 +30,8 @@ import (
 	"forest/go-api/internal/platform/smtpcompat"
 )
 
+var ErrInvalidOrderCompletionAction = errors.New("订单完成后的动作只支持不执行任何动作或重置用户流量")
+
 var (
 	configKeyPattern     = regexp.MustCompile(`^'((?:\\.|[^'])*)'\s*=>\s*(.*)$`)
 	configArrayItemRegex = regexp.MustCompile(`^\d+\s*=>\s*(.*),$`)
@@ -82,6 +84,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 }
 
 func (s *DBService) fetchConfigFromStore(cfg *phpConfigFile, key string) map[string]any {
+	runtimeCfg := s.currentConfig()
 	data := map[string]any{
 		"ticket": map[string]any{
 			"ticket_status": cfg.int64Value("ticket_status", 0),
@@ -142,9 +145,9 @@ func (s *DBService) fetchConfigFromStore(cfg *phpConfigFile, key string) map[str
 			"auth_session_keep_days":     cfg.int64Value("auth_session_keep_days", 0),
 			"runtime_kv_keep_days":       cfg.int64Value("runtime_kv_keep_days", 0),
 			"failed_jobs_keep_days":      cfg.int64Value("failed_jobs_keep_days", 0),
-			"new_order_event_id":         cfg.int64Value("new_order_event_id", 0),
-			"renew_order_event_id":       cfg.int64Value("renew_order_event_id", 0),
-			"change_order_event_id":      cfg.int64Value("change_order_event_id", 0),
+			"new_order_event_id":         cfg.int64Value("new_order_event_id", runtimeCfg.NewOrderEventID),
+			"renew_order_event_id":       cfg.int64Value("renew_order_event_id", runtimeCfg.RenewOrderEventID),
+			"change_order_event_id":      cfg.int64Value("change_order_event_id", runtimeCfg.ChangeOrderEventID),
 			"show_info_to_server_enable": cfg.int64Value("show_info_to_server_enable", 0),
 			"show_subscribe_method":      cfg.int64Value("show_subscribe_method", 0),
 			"show_subscribe_expire":      cfg.int64Value("show_subscribe_expire", 5),
@@ -1047,6 +1050,11 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || parsed < 0 {
 			return errors.New("失败任务保留天数必须为大于等于0的整数")
+		}
+	case "new_order_event_id", "renew_order_event_id", "change_order_event_id":
+		parsed, err := strconv.ParseInt(strings.TrimSpace(valueToString(value)), 10, 64)
+		if err != nil || (parsed != 0 && parsed != 1) {
+			return ErrInvalidOrderCompletionAction
 		}
 	}
 	return nil

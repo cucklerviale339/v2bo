@@ -12,6 +12,11 @@ const resetOptions = [
   { label: '每年1月1日', value: 3 }, { label: '按年重置', value: 4 }
 ];
 
+const orderEventOptions = [
+  { label: '不执行任何动作', value: 0 },
+  { label: '重置用户流量', value: 1 }
+];
+
 const subscribeMethodOptions = [
   { label: '永久有效', value: 0 }, { label: '一次性有效', value: 1 }, { label: '限时有效', value: 2 }
 ];
@@ -51,9 +56,9 @@ const fieldOrders: Record<string, string[]> = {
   ],
   subscribe: [
     'plan_change_enable', 'reset_traffic_method', 'surplus_enable', 'allow_new_period',
+    'new_order_event_id', 'renew_order_event_id', 'change_order_event_id',
     'order_keep_days', 'mail_log_keep_days', 'log_keep_days', 'stat_user_keep_days', 'stat_server_keep_days',
     'auth_session_keep_days', 'runtime_kv_keep_days', 'failed_jobs_keep_days',
-    'new_order_event_id', 'renew_order_event_id', 'change_order_event_id',
     'show_info_to_server_enable', 'show_subscribe_method', 'subscribe_cache_enable',
     'subscribe_cache_expire', 'show_subscribe_expire', 'subscribe_lifetime'
   ],
@@ -173,9 +178,9 @@ const configLabels: Record<string, ConfigMeta> = {
   auth_session_keep_days: { title: '登录会话保留天数', description: '超过该天数的登录会话将会被清理。' },
   runtime_kv_keep_days: { title: '运行时缓存保留天数', description: '超过该天数的运行时缓存将会被清理。' },
   failed_jobs_keep_days: { title: '失败任务保留天数', description: '超过该天数的失败任务将会被清理。' },
-  new_order_event_id: { title: '当订阅新购时触发事件', description: '新购订阅完成时将触发该任务。' },
-  renew_order_event_id: { title: '当订阅续费时触发事件', description: '续费订阅完成时将触发该任务。' },
-  change_order_event_id: { title: '当订阅变更时触发事件', description: '变更订阅完成时将触发该任务。' },
+  new_order_event_id: { title: '新购完成后的动作', description: '新购订阅支付并开通后追加执行的动作。', options: orderEventOptions },
+  renew_order_event_id: { title: '续费完成后的动作', description: '续费订阅支付并开通后追加执行的动作。', options: orderEventOptions },
+  change_order_event_id: { title: '变更订阅完成后的动作', description: '更换订阅支付并开通后追加执行的动作。', options: orderEventOptions },
   show_info_to_server_enable: { title: '在订阅中展示订阅信息', description: '开启后会在订阅中展示套餐、流量、到期时间等信息。' },
   show_subscribe_method: { title: '订阅链接生效模式', description: '用户获取订阅链接后的有效期。', options: subscribeMethodOptions },
   subscribe_cache_enable: { title: '订阅缓存', description: '开启后订阅内容会使用缓存。' },

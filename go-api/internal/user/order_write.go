@@ -824,6 +824,10 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	default:
 		applyOrderPeriod(&userRow, *order, plan)
 	}
+	completionReset := s.orderCompletionResetsTraffic(order.Type)
+	if completionReset {
+		userRow.U, userRow.D = 0, 0
+	}
 	if plan.SpeedLimit.Valid {
 		userRow.SpeedLimit = plan.SpeedLimit
 	} else {
@@ -832,7 +836,8 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	if err := s.updateUserSubscriptionTx(ctx, tx, userRow); err != nil {
 		return err
 	}
-	if err := s.syncOrderTrafficResetStateTx(ctx, tx, userRow.ID, *order, previousExpiredAt, nowTime); err != nil {
+	resetTraffic := completionReset || orderResetsTraffic(*order, previousExpiredAt, nowTime)
+	if err := s.syncOrderTrafficResetStateTx(ctx, tx, userRow.ID, *order, resetTraffic, nowTime); err != nil {
 		return err
 	}
 	if order.InviteCampaignID.Valid {
@@ -844,6 +849,20 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	order.Status = 3
 	order.UpdatedAt = now
 	return s.updateOrderPaymentStateTx(ctx, tx, *order)
+}
+
+func (s *DBService) orderCompletionResetsTraffic(orderType int64) bool {
+	cfg := s.currentConfig()
+	switch orderType {
+	case 1:
+		return cfg.NewOrderEventID == 1
+	case 2:
+		return cfg.RenewOrderEventID == 1
+	case 3:
+		return cfg.ChangeOrderEventID == 1
+	default:
+		return false
+	}
 }
 
 func applyOrderPeriod(userRow *userRecord, order orderRecord, plan planRecord) {
@@ -1386,7 +1405,7 @@ WHERE id = $1`,
 	return nil
 }
 
-func (s *DBService) syncOrderTrafficResetStateTx(ctx context.Context, tx *sql.Tx, userID int64, order orderRecord, previousExpiredAt sql.NullInt64, now time.Time) error {
+func (s *DBService) syncOrderTrafficResetStateTx(ctx context.Context, tx *sql.Tx, userID int64, order orderRecord, resetTraffic bool, now time.Time) error {
 	anchorAt := sql.NullInt64{}
 	switch order.Period {
 	case "onetime_price":
@@ -1398,7 +1417,6 @@ func (s *DBService) syncOrderTrafficResetStateTx(ctx context.Context, tx *sql.Tx
 		}
 	}
 
-	resetTraffic := orderResetsTraffic(order, previousExpiredAt, now)
 	return s.updateUserTrafficResetStateTx(ctx, tx, userID, anchorAt, order.PlanID, resetTraffic, now)
 }
 
