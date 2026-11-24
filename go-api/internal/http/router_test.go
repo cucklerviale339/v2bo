@@ -706,6 +706,11 @@ func (f *fakeUserService) CheckCoupon(_ context.Context, userID int64, code stri
 	return f.coupon, f.err
 }
 
+func (f *fakeUserService) CheckNewcomerCoupon(_ context.Context, userID int64) (map[string]any, error) {
+	f.lastUserID = userID
+	return f.coupon, f.err
+}
+
 func (f *fakeUserService) KnowledgeDetail(_ context.Context, userID, id int64) (map[string]any, error) {
 	f.lastUserID = userID
 	f.lastKnowledgeID = id

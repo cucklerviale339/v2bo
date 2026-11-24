@@ -208,6 +208,7 @@ type Service interface {
 	CommConfig(ctx context.Context) (map[string]any, error)
 	StripePublicKey(ctx context.Context, paymentID int64) (string, error)
 	CheckCoupon(ctx context.Context, userID int64, code string, planID *int64) (map[string]any, error)
+	CheckNewcomerCoupon(ctx context.Context, userID int64) (map[string]any, error)
 	KnowledgeDetail(ctx context.Context, userID, id int64) (map[string]any, error)
 	Knowledges(ctx context.Context, language, keyword string) (map[string][]map[string]any, error)
 	KnowledgeCategories(ctx context.Context, language string) ([]string, error)

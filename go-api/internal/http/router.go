@@ -2897,6 +2897,14 @@ func handleUserCouponCheck(w http.ResponseWriter, r *http.Request, sessionServic
 	}
 
 	code := strings.TrimSpace(inputs["code"])
+	if code == "" && inputs["campaign"] == "newcomer" {
+		data, err := userService.CheckNewcomerCoupon(r.Context(), identity.ID)
+		if err != nil {
+			return handleUserError(w, err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": data})
+		return true
+	}
 	if code == "" {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Coupon cannot be empty"})
 		return true

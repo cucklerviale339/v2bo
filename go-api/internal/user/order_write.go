@@ -924,15 +924,8 @@ func periodMonths(period string) (int, bool) {
 
 func (s *DBService) applyCouponTx(ctx context.Context, tx *sql.Tx, coupon couponRecord, order *orderDraft) error {
 	now := time.Now().Unix()
-	switch {
-	case coupon.Show == 0:
-		return ErrCouponInvalid
-	case coupon.LimitUse.Valid && coupon.LimitUse.Int64 <= 0:
-		return ErrCouponUnavailable
-	case now < coupon.StartedAt:
-		return ErrCouponNotStarted
-	case now > coupon.EndedAt:
-		return ErrCouponExpired
+	if _, err := s.checkCouponWindow(ctx, tx, coupon, order.UserID, now); err != nil {
+		return err
 	}
 
 	if coupon.LimitPlanIDs.Valid && coupon.LimitPlanIDs.String != "" {
